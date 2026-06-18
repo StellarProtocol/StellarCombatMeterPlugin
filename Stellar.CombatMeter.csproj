@@ -16,4 +16,8 @@
     <PackageReference Include="Stellar.PluginContracts" Version="1.1.1" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="1.1.1" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+    <InternalsVisibleTo Include="Stellar.CombatMeter.Tests" />
+  </ItemGroup>
 </Project>

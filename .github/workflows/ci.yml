@@ -12,3 +12,4 @@ jobs:
         with:
           dotnet-version: "8.0.x"
       - run: dotnet build -c Release --nologo
+      - run: dotnet test tests/Stellar.CombatMeter.Tests -c Release --nologo
