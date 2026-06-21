@@ -376,12 +376,18 @@ public sealed partial class Plugin
             var id = rows[i].Key; var s = rows[i].Value;
             long value = MetricValueOf(s, metric);
             var pct = metricTotal > 0 ? (float)value / metricTotal : 0f;
+            // Archived rows read identity/class from the FROZEN per-player snapshot — re-resolving live here gave
+            // "Player#<uid>" and a blank class once the players left AOI / the scene changed. Fall back to live
+            // resolution only when the session predates the snapshot (legacy entries) or a source wasn't frozen.
+            var frozen = h.Entities.TryGetValue(id, out var es) ? es : null;
             _sessionRows.Add(new SourceRow
             {
                 Id = id,
                 Rank = $"#{i + 1}",
-                Name = EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
-                Class = GetClassLine(id),
+                Name = !string.IsNullOrEmpty(frozen?.Name)
+                    ? frozen!.Name!
+                    : EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
+                Class = frozen != null && ResolveSnapProfession(frozen) is { Length: > 0 } fc ? fc : GetClassLine(id),
                 Dmg = FormatAmount(value),                                              // primary = metric value
                 Dps = FormatAmount(ComputeArchivedDps(value, h.CombatDurationMs)),       // rate = metric / sec
                 Pct = FormatPercent(pct),
