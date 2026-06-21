@@ -113,7 +113,7 @@ public sealed partial class Plugin
     // spec-defining skill ids as events flow, so every consumer (this meter + EntityInspector) agrees. The
     // meter no longer infers spec from the AOI loadout (that carries both specs' signature skills →
     // mislabelled players, e.g. Falconry shown as Wildpack). Returns 0 until a spec-defining skill is cast.
-    private int ResolveSpec(EntityId id) => _services.CombatSpec.GetSubProfession(id);
+    private int ResolveSpec(EntityId id) => StickySpec(id, _services.CombatSpec.GetSubProfession(id));
 
     // Feed the inferred-others cooldown tracker when a Battle-Imagine cast is seen (all players incl.
     // self — harmless, self display uses LocalCooldowns). GetImagineForSkill is null for non-imagine

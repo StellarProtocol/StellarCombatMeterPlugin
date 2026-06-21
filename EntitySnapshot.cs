@@ -44,15 +44,19 @@ internal sealed class EntitySnapshot
 
 public sealed partial class Plugin
 {
-    // Archive-time (cold) capture: snapshot every archived PLAYER source from the live services. Allocation is
-    // fine here — it mirrors DeepCopyStats/FreezeTimelines and fires only on a scene change or the Archive button.
+    // Archive-time capture: hand each archived PLAYER source its sticky last-known-good snapshot (frozen while
+    // the player was live in AOI — see Plugin.EntitySnapshotSticky). Reading the live services HERE is wrong:
+    // on a scene change the framework tears down the AOI caches before ManualArchive runs, so a live capture
+    // returns empty for everyone but self. Fall back to a live capture only for a source we somehow never stuck
+    // (best effort). Ownership transfers to the history entry — ManualArchive() calls Clear() immediately after,
+    // dropping the live refs, so there's no aliasing.
     private Dictionary<EntityId, EntitySnapshot> SnapshotEntities()
     {
         var snaps = new Dictionary<EntityId, EntitySnapshot>();
         foreach (var id in _stats.Keys)
         {
             if (!id.IsPlayer) continue;
-            snaps[id] = CaptureEntity(id);
+            snaps[id] = _entitySnaps.TryGetValue(id, out var sticky) ? sticky : CaptureEntity(id);
         }
         return snaps;
     }

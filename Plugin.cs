@@ -232,6 +232,7 @@ public sealed partial class Plugin : IStellarPlugin
     private void OnUpdate(float deltaTime)
     {
         PumpClassIcons();
+        TickEntitySnapshots(deltaTime);   // freeze each combatant's entity detail WHILE live (survives AOI-exit / scene teardown)
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
@@ -270,6 +271,10 @@ public sealed partial class Plugin : IStellarPlugin
         // Spec cache now lives in the framework (ICombatSpec, cleared on its scene Reset) — nothing meter-local
         // to clear here anymore.
         _resTracker.Clear();
+        // Drop the sticky entity snapshots with the rest of the encounter. ManualArchive() transfers the frozen
+        // copies into the history entry just before calling Clear(), so this only releases the live refs.
+        _entitySnaps.Clear();
+        _entitySnapAccum = 0f;
         _combatActive  = false;
         _combatStartMs = 0;
         _lastDamageMs  = 0;

@@ -102,6 +102,16 @@ public sealed partial class Plugin
         double dur = elapsed >= 1d ? elapsed : 1d;
         long perSec = (long)(row.Value / dur);
         var label = EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members);
+        if (id != self)
+        {
+            // Remember every real name; when live resolution degrades to "Player#<uid>" (AOI exit, or a scene
+            // change cleared the roster / combat cache), fall back to the per-encounter sticky name, then to the
+            // session-persistent cache — so a party member you've fought keeps their name across areas.
+            if (!IsSynthesizedName(label)) RememberName(id, label);
+            else if ((StickyName(id) ?? LastKnownName(id)) is { } held) label = held;
+        }
+        // Our own row degrades to "Self" in social areas where PlayerState.Name is blank — use the cached name.
+        else if (label == "Self" && SelfNameFallback() is { } selfName) label = selfName;
         var (imagine0, imagine1) = ResolveImagines(id, id == self);
         return new MeterRowData
         {
