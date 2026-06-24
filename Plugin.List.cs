@@ -113,6 +113,8 @@ public sealed partial class Plugin
         // Our own row degrades to "Self" in social areas where PlayerState.Name is blank — use the cached name.
         else if (label == "Self" && SelfNameFallback() is { } selfName) label = selfName;
         var (imagine0, imagine1) = ResolveImagines(id, id == self);
+        var roleColor = RoleColorFor(id);
+        var hpColor   = HpColor();
         return new MeterRowData
         {
             Id               = id,
@@ -121,15 +123,19 @@ public sealed partial class Plugin
             ClassName        = vis.ClassName ? GetClassLine(id) : "",
             Spec             = vis.Spec ? SpecLine(id) : "",
             AbilityScore     = vis.AbilityScore && _services.CombatLookup.GetFightPoint(id) is var fp && fp > 0 ? fp.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "",
-            RoleColor        = RoleColorFor(id),
-            HpColor          = HpColor(),
+            RoleColor        = toggles.MainBarIsHp ? hpColor   : roleColor,
+            HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? roleColor : hpColor,
+            NameColor        = ReadyVoteColor(id),
+            VoiceIcon        = VoiceIconFor(id),
+            ShowVoiceIcon    = vis.VoiceIcon,
+            RowBorder        = TalkBorderFor(id),
             SelfAccent       = _selfAccentSlot.Value,
-            HpFraction       = frac,
+            HpFraction       = toggles.VerticalBar == VerticalBarMode.Dps ? cur : frac,
             CrestTexture     = crest,
             CrestUv          = crestUv,
             PrimaryValue     = FormatAmount(perSec),
             SecondaryValue   = FormatAmount(row.Value),
-            BarFraction      = cur,
+            BarFraction      = toggles.MainBarIsHp ? frac : cur,
             SharePercent     = $"{row.Share * 100d:F0}%",
             IsSelf           = id == self,
             IsLeader         = IsPartyLeader(id),
@@ -140,7 +146,8 @@ public sealed partial class Plugin
             ShowSpec         = vis.Spec,
             ShowClassName    = vis.ClassName,
             ShowAbilityScore = vis.AbilityScore,
-            ShowHpBar        = vis.HpBar,
+            ShowHpBar        = toggles.VerticalBar != VerticalBarMode.Off,
+            SpineWidth       = toggles.SpineWidth,
             ShowPrimary      = vis.Primary,
             ShowSecondary    = vis.Total,
             ShowShare        = vis.Share,

@@ -26,8 +26,7 @@ public sealed partial class Plugin : IStellarPlugin
     // dropdown push the grid past the window bottom → overlap. Grow the window by the open panel's height
     // instead of squeezing the grid. Heights measured from the rendered panels (main ≈69px); rounded up so
     // a worst case leaves a tiny bottom gap rather than overlapping. Menus are mutually exclusive.
-    private const float MainMenuPanelH   = 72f;   // Scope row + separator + Pause/Archive/History row + spacer
-    private const float MetricMenuPanelH = 96f;   // DPS/HPS/Taken stacked (3 rows) + spacer
+    private const float MainMenuPanelH   = 72f;   // Scope/party-size row + separator + Pause/Archive/History row + spacer
 
     private readonly IPluginServices _services;
 
@@ -91,7 +90,7 @@ public sealed partial class Plugin : IStellarPlugin
 
     // Per-mode window geometry (the framework persists one rect per window id, so the plugin remembers each
     // view's size+position separately and restores it on mode switch — like the IMGUI build's list/party rects).
-    private float _listW, _listH, _listX, _listY, _partyX, _partyY;
+    private float _listW, _listH, _listX, _listY, _partyX, _partyY, _partyW;
     // Current window width (captured each tick) — drives the List spec/secondary/share collapse breakpoints.
     private float _listWidthNow = ListWidth;
 
@@ -100,7 +99,10 @@ public sealed partial class Plugin : IStellarPlugin
         _services = services;
         _services.Log.Info("[CombatMeter] plugin constructed");
 
-        _inspectIconPng = BuildInspectMagnifierPng();   // procedural magnifier for the history Inspect button (main thread)
+        _inspectIconPng  = BuildInspectMagnifierPng();   // procedural magnifier for the history Inspect button (main thread)
+        _locationPinPng  = BuildLocationPinPng();        // flat-white location pin for the Marking header button
+        _checkmarkPng    = BuildCheckmarkPng();          // flat-white checkmark for the Ready Check header button
+        _megaphonePng    = BuildMegaphonePng();          // flat-white megaphone for the Convene header button
 
         _prefs = _services.Config.GetSection("combatmeter");
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
@@ -114,6 +116,7 @@ public sealed partial class Plugin : IStellarPlugin
 
         RegisterColours();
         BuildWindows();
+        RegisterTeamContextMenuItems();
 
         _services.PlayerStats.Subscribe(ImagineCdReductionAttr);   // cooldown reduction (~10%) + acceleration (gear/buffs)
         _services.PlayerStats.Subscribe(ImagineCdAccelAttr);
@@ -142,9 +145,10 @@ public sealed partial class Plugin : IStellarPlugin
         _listW = _prefs.Get("listW", ListWidth);   _listH = _prefs.Get("listH", ListHeight);
         _listX = _prefs.Get("listX", 2099f);       _listY = _prefs.Get("listY", 664f);
         _partyX = _prefs.Get("partyX", 2072f);     _partyY = _prefs.Get("partyY", 333f);
+        _partyW = _prefs.Get("partyW", PartyFocusW);
 
         var startRect = _viewMode == ViewMode.PartyFocus
-            ? new WindowRect(_partyX, _partyY, PartyFocusW, PartyFocusHeight())
+            ? new WindowRect(_partyX, _partyY, _partyW > 0 ? _partyW : PartyFocusW, PartyFocusHeight())
             : new WindowRect(_listX, _listY, _listW, _listH);
         _mainWindow = _services.Windows.Register(new WindowRegistration(
             new WindowSpec(
@@ -154,7 +158,8 @@ public sealed partial class Plugin : IStellarPlugin
                 Category:    WindowCategory.HUD,
                 Style:       WindowPanelStyle.Borderless)
             { AutoHideBehindGameMenus = true, HideUntilInWorld = true, Draggable = true, EditModeDragOnly = true,
-              Resizable = true, MinWidth = 240f, MinHeight = 160f, MaxWidth = 760f, MaxHeight = 1000f },
+              Resizable = true, MinWidth = 500f, MinHeight = 160f, MaxWidth = 760f, MaxHeight = 1000f,
+              ZOrder = -100 },   // background layer: every other Stellar window draws over the meter
             BuildMainRoot()));
 
         _historyWindow = RegisterHistoryWindow();
@@ -207,6 +212,11 @@ public sealed partial class Plugin : IStellarPlugin
         _hpSlot.Dispose();
         _selfAccentSlot.Dispose();
 
+        _transferLeaderReg.Dispose();
+        _kickMemberReg.Dispose();
+        _inviteToTeamReg.Dispose();
+        _createPartyReg.Dispose();
+        _leavePartyReg.Dispose();
         _partyFocusAction.Dispose();
         _modeAction.Dispose();
         _pauseAction.Dispose();
@@ -231,8 +241,13 @@ public sealed partial class Plugin : IStellarPlugin
 
     private void OnUpdate(float deltaTime)
     {
+        EnsureReadyCheckSubscribed();
+        TickRowMenuPlace();
         PumpClassIcons();
-        TickEntitySnapshots(deltaTime);   // freeze each combatant's entity detail WHILE live (survives AOI-exit / scene teardown)
+        TickEntitySnapshots(deltaTime);
+        TickReadyCheckCooldown(deltaTime);
+        TickReadyCheckResult(deltaTime);
+        TickReadyCheck(deltaTime);
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
@@ -294,7 +309,7 @@ public sealed partial class Plugin : IStellarPlugin
         _prefs.Set("mode",   (int)_viewMode);
         _prefs.Set("listW", _listW); _prefs.Set("listH", _listH);
         _prefs.Set("listX", _listX); _prefs.Set("listY", _listY);
-        _prefs.Set("partyX", _partyX); _prefs.Set("partyY", _partyY);
+        _prefs.Set("partyX", _partyX); _prefs.Set("partyY", _partyY); _prefs.Set("partyW", _partyW);
         _prefs.Save();
     }
 
@@ -305,7 +320,7 @@ public sealed partial class Plugin : IStellarPlugin
         var r = _mainWindow.Rect;
         if (r.Width <= 0f) return;
         _listWidthNow = r.Width;
-        if (_viewMode == ViewMode.PartyFocus) { _partyX = r.X; _partyY = r.Y; }
+        if (_viewMode == ViewMode.PartyFocus) { _partyX = r.X; _partyY = r.Y; _partyW = r.Width; }
         else { _listW = r.Width; _listH = r.Height; _listX = r.X; _listY = r.Y; }
     }
 
@@ -314,7 +329,7 @@ public sealed partial class Plugin : IStellarPlugin
     private void ApplyModeSize()
     {
         var rect = _viewMode == ViewMode.PartyFocus
-            ? new WindowRect(_partyX, _partyY, PartyFocusW, PartyFocusHeight())
+            ? new WindowRect(_partyX, _partyY, _partyW > 0 ? _partyW : PartyFocusW, PartyFocusHeight())
             : new WindowRect(_listX, _listY, _listW > 0 ? _listW : ListWidth, _listH > 0 ? _listH : ListHeight);
         _mainWindow.SetRect(rect);
     }
@@ -323,7 +338,7 @@ public sealed partial class Plugin : IStellarPlugin
     // menu (so the grid is never squeezed). Follows the live party size; RefreshPartyFocusHeight re-applies it.
     private float PartyFocusHeight()
         => (IsRaid20View ? PartyFocusH : PartyFocus5H)
-           + (_mainMenuOpen ? MainMenuPanelH : _metricMenuOpen ? MetricMenuPanelH : 0f);
+           + (_mainMenuOpen ? MainMenuPanelH : 0f);
 
     // Re-apply the party-focus window height in place (keep current pos + width) when a menu opens/closes.
     // Uses the LIVE rect, not the remembered _partyX/_partyY, so toggling a menu never teleports a

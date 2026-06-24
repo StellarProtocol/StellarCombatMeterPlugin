@@ -11,7 +11,6 @@ namespace Stellar.CombatMeter;
 /// </summary>
 public sealed partial class Plugin
 {
-    private bool _metricMenuOpen;
     private bool _mainMenuOpen;
 
     private static readonly string[] MetricDrop = { "DPS ▾", "HPS ▾", "Taken ▾" };
@@ -22,10 +21,9 @@ public sealed partial class Plugin
     private HudElement BuildMainRoot() => new ColumnElement(new HudElement[]
     {
         BuildHeaderBar(),
-        new ConditionalElement(() => _metricMenuOpen, BuildMetricMenu()),
         new ConditionalElement(() => _mainMenuOpen, BuildMainMenu()),
         // A little vertical margin (no divider line) between an open menu panel and the meter/group list below.
-        new ConditionalElement(() => _metricMenuOpen || _mainMenuOpen, new SpacerElement(Height: 6f)),
+        new ConditionalElement(() => _mainMenuOpen, new SpacerElement(Height: 6f)),
         new ConditionalElement(() => _viewMode == ViewMode.List, BuildListBody(), Fill: true),
         new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildPartyFocusBody()),
     }, Gap: 4f);
@@ -34,23 +32,22 @@ public sealed partial class Plugin
     {
         new TextElement(() => "Meter", Emphasis: true),
         new ButtonElement(() => "Reset", Clear),
+        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
+            new ButtonElement(() => "", TogglePunctuate, Icon: () => _locationPinPng)), Width: 28f),
+        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
+            new ConditionalElement(() => _readyCheckCooldown <= 0f,
+                new ButtonElement(() => "", LeaderReadyCheck, Icon: () => _checkmarkPng),
+                new ButtonElement(ReadyCheckLabel, static () => { }, Enabled: () => false))), Width: 28f),
+        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
+            new ButtonElement(() => "", LeaderConvene, Icon: () => _megaphonePng)), Width: 28f),
         new SpacerElement(),
-        new ButtonElement(() => MetricDrop[(int)_metric], ToggleMetricMenu, Active: () => _metricMenuOpen),
+        new ButtonElement(() => MetricDrop[(int)_metric], static () => { })
+            { OnClickWithRect = OpenMetricMenu },
         new ButtonElement(() => ModePill[(int)_viewMode], ToggleViewMode),
         // Expand/collapse caret for the inline menu below (▾ expand · ▴ collapse) — not a hamburger, since it
         // now toggles the inline Scope/Pause/Archive/History panel rather than opening a floating popover.
         new ButtonElement(() => _mainMenuOpen ? "▴" : "▾", ToggleMainMenu, Active: () => _mainMenuOpen, Width: 30f),
     }, Gap: 6f);
-
-    private HudElement BuildMetricMenu() => new ColumnElement(new HudElement[]
-    {
-        MetricItem("DPS", Metric.Dps),
-        MetricItem("HPS", Metric.Hps),
-        MetricItem("Taken", Metric.Taken),
-    }, Gap: 2f);
-
-    private HudElement MetricItem(string label, Metric m)
-        => new ButtonElement(() => label, () => SelectMetric(m), Active: () => _metric == m);
 
     private HudElement BuildMainMenu() => new ColumnElement(new HudElement[]
     {
@@ -96,8 +93,17 @@ public sealed partial class Plugin
 
     // ----- menu actions -----
 
-    private void ToggleMetricMenu() { _metricMenuOpen = !_metricMenuOpen; if (_metricMenuOpen) _mainMenuOpen = false; RefreshPartyFocusHeight(); }
-    private void ToggleMainMenu()   { _mainMenuOpen = !_mainMenuOpen;     if (_mainMenuOpen) _metricMenuOpen = false; RefreshPartyFocusHeight(); }
+    private void OpenMetricMenu(WindowRect anchor)
+    {
+        _rowMenuItems.Clear();
+        _rowMenuItems.Add(new EntityMenuItem("DPS",   () => SelectMetric(Metric.Dps)));
+        _rowMenuItems.Add(new EntityMenuItem("HPS",   () => SelectMetric(Metric.Hps)));
+        _rowMenuItems.Add(new EntityMenuItem("Taken", () => SelectMetric(Metric.Taken)));
+        _rowMenuName = "Metric";
+        ShowRowMenuBelow(anchor);
+    }
+
+    private void ToggleMainMenu() { _mainMenuOpen = !_mainMenuOpen; RefreshPartyFocusHeight(); }
 
     // Selecting an item does NOT collapse the panel — only the caret/metric button toggles it (clicking inside
     // an open dropdown shouldn't snap it shut).
