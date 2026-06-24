@@ -4,6 +4,17 @@ using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
 
+/// <summary>What the vertical HP spine shows (or whether it is hidden).</summary>
+public enum VerticalBarMode
+{
+    /// <summary>Spine hidden.</summary>
+    Off = 0,
+    /// <summary>Spine height driven by HP fraction (default look).</summary>
+    Hp  = 1,
+    /// <summary>Spine height driven by DPS bar fraction.</summary>
+    Dps = 2,
+}
+
 /// <summary>
 /// Per-mode element-visibility configuration for the meter row. One instance per mode (List, Party-focus).
 /// Unity-free so it is unit-testable. Resolve combines the user toggles with the existing width-driven
@@ -11,8 +22,11 @@ namespace Stellar.CombatMeter;
 /// </summary>
 public sealed class MeterElementToggles
 {
-    public bool Rank, Crest, Spec, HpBar, Primary, Total, Share, Imagine, ImagineCooldown, LeaderFlag;
-    public bool ClassName, AbilityScore;
+    public bool Rank, Crest, Spec, Primary, Total, Share, Imagine, ImagineCooldown, LeaderFlag;
+    public bool ClassName, AbilityScore, VoiceIcon;
+    public VerticalBarMode VerticalBar;
+    public bool MainBarIsHp;
+    public float SpineWidth;
     public ImagineSize ImagineSize;
     public ImaginePosition ImaginePosition;
 
@@ -21,9 +35,9 @@ public sealed class MeterElementToggles
 
     public static MeterElementToggles Defaults() => new()
     {
-        Rank = true, Crest = true, Spec = true, HpBar = true, Primary = true, Total = true,
-        Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
-        ClassName = false, AbilityScore = false,
+        Rank = true, Crest = true, Spec = true, VerticalBar = VerticalBarMode.Hp, MainBarIsHp = false, SpineWidth = 3f,
+        Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
+        ClassName = false, AbilityScore = false, VoiceIcon = true,
         ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight,
     };
 
@@ -38,13 +52,13 @@ public sealed class MeterElementToggles
 
     /// <summary>Resolved per-element visibility for one row.</summary>
     public readonly record struct Resolved(
-        bool Rank, bool Crest, bool Spec, bool ClassName, bool AbilityScore, bool HpBar,
+        bool Rank, bool Crest, bool Spec, bool ClassName, bool AbilityScore,
         bool Primary, bool Total, bool Share, bool Imagine, bool ImagineCooldown,
-        bool LeaderFlag);
+        bool LeaderFlag, bool VoiceIcon);
 
     /// <summary>Final visibility = user toggle AND (List only) the width-collapse guard.</summary>
-    // Note: ImagineSize/ImaginePosition are NOT in Resolved — they aren't width-gated, so callers read them
-    // directly off the toggle (e.g. BuildRowData sets MeterRowData.ImagineSize = toggles.ImagineSize).
+    // Note: VerticalBar/MainBarIsHp/ImagineSize/ImaginePosition are NOT in Resolved — callers read them
+    // directly off the toggle instance (e.g. AssembleRow reads toggles.VerticalBar).
     public Resolved Resolve(bool collapse, float widthNow)
     {
         bool wideEnoughSpec  = !collapse || widthNow >= SpecTotalMinW;
@@ -55,13 +69,13 @@ public sealed class MeterElementToggles
             Spec:            Spec  && wideEnoughSpec,
             ClassName:       ClassName && wideEnoughSpec,
             AbilityScore:    AbilityScore,
-            HpBar:           HpBar,
             Primary:         Primary,
             Total:           Total && wideEnoughSpec,
             Share:           Share && wideEnoughShare,
             Imagine:         Imagine,
             ImagineCooldown: Imagine && ImagineCooldown,
-            LeaderFlag:      LeaderFlag);
+            LeaderFlag:      LeaderFlag,
+            VoiceIcon:       VoiceIcon);
     }
 
     /// <summary>
@@ -75,7 +89,9 @@ public sealed class MeterElementToggles
         d.Rank            = cfg.Get($"{prefix}.show.rank",            defaults.Rank);
         d.Crest           = cfg.Get($"{prefix}.show.crest",           defaults.Crest);
         d.Spec            = cfg.Get($"{prefix}.show.spec",            defaults.Spec);
-        d.HpBar           = cfg.Get($"{prefix}.show.hp",              defaults.HpBar);
+        d.VerticalBar     = (VerticalBarMode)cfg.Get($"{prefix}.bar.vertical",  (int)defaults.VerticalBar);
+        d.MainBarIsHp     = cfg.Get($"{prefix}.bar.mainIsHp",                   defaults.MainBarIsHp);
+        d.SpineWidth      = cfg.Get($"{prefix}.bar.spineWidth",                 defaults.SpineWidth);
         d.Primary         = cfg.Get($"{prefix}.show.primary",         defaults.Primary);
         d.Total           = cfg.Get($"{prefix}.show.total",           defaults.Total);
         d.Share           = cfg.Get($"{prefix}.show.share",           defaults.Share);
@@ -84,7 +100,8 @@ public sealed class MeterElementToggles
         d.LeaderFlag      = cfg.Get($"{prefix}.show.leaderFlag",      defaults.LeaderFlag);
         d.ClassName       = cfg.Get($"{prefix}.show.className",       defaults.ClassName);
         d.AbilityScore    = cfg.Get($"{prefix}.show.abilityScore",    defaults.AbilityScore);
-        d.ImagineSize     = (ImagineSize)cfg.Get($"{prefix}.imagine.size", (int)defaults.ImagineSize);
+        d.VoiceIcon       = cfg.Get($"{prefix}.show.voiceIcon",       defaults.VoiceIcon);
+        d.ImagineSize     = (ImagineSize)cfg.Get($"{prefix}.imagine.size",     (int)defaults.ImagineSize);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
         return d;
     }
@@ -95,7 +112,9 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.rank",            Rank);
         cfg.Set($"{prefix}.show.crest",           Crest);
         cfg.Set($"{prefix}.show.spec",            Spec);
-        cfg.Set($"{prefix}.show.hp",              HpBar);
+        cfg.Set($"{prefix}.bar.vertical",         (int)VerticalBar);
+        cfg.Set($"{prefix}.bar.mainIsHp",         MainBarIsHp);
+        cfg.Set($"{prefix}.bar.spineWidth",       SpineWidth);
         cfg.Set($"{prefix}.show.primary",         Primary);
         cfg.Set($"{prefix}.show.total",           Total);
         cfg.Set($"{prefix}.show.share",           Share);
@@ -104,6 +123,7 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.leaderFlag",      LeaderFlag);
         cfg.Set($"{prefix}.show.className",       ClassName);
         cfg.Set($"{prefix}.show.abilityScore",    AbilityScore);
+        cfg.Set($"{prefix}.show.voiceIcon",       VoiceIcon);
         cfg.Set($"{prefix}.imagine.size",         (int)ImagineSize);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);
     }

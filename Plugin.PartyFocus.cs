@@ -52,7 +52,7 @@ public sealed partial class Plugin
         {
             var idx = group * MeterAggregator.SlotsPerGroup + slot;
             children[slot + 1] = new DragSlotElement(
-                new MeterRowElement(() => _gridRows[idx], OnRightClick: () => OpenRowMenu(_gridRows[idx].Id)),
+                new MeterRowElement(() => _gridRows[idx], OnRightClick: () => OnGridSlotRightClick(idx)),
                 Key: idx,
                 OnDrop: OnGridDrop,
                 // Leader-only, Raid20-only, and only an OCCUPIED slot is a drag source (an empty "—" slot
@@ -79,6 +79,18 @@ public sealed partial class Plugin
         HpFraction = 0f, BarFraction = 0f, CrestTexture = null, CrestUv = new UvRect(0f, 0f, 1f, 1f),
         IsSelf = false, Offline = false, ShowSpec = false, ShowSecondary = false, ShowShare = false,
     };
+
+    private void OnGridSlotRightClick(int idx)
+    {
+        var id = _gridRows[idx].Id;
+        // Self slot may have no valid EntityId when there's no combat data yet — fall back to the live local ID.
+        if (_gridRows[idx].IsSelf && !id.IsPlayer)
+            id = _services.CombatSnapshot.LocalEntityId;
+        if (id.IsPlayer)
+            OpenRowMenu(id);
+        else if (PartyExists && _services.PartySnapshot.IsLeader && !_gridRows[idx].IsSelf)
+            OpenInviteMenu();
+    }
 
     // Party-focus must ALWAYS show the local player — synthesise a self entry when the roster lacks us.
     private IReadOnlyList<PartyMember> PartyFocusRoster()
