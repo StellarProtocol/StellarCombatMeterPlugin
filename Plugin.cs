@@ -200,6 +200,7 @@ public sealed partial class Plugin : IStellarPlugin
     public void Dispose()
     {
         CaptureModeGeometry(); PersistPrefs();   // remember the active view's size/position across reloads
+        DisposeLogUpload();    // SP1: clear the event buffer
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;

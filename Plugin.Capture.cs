@@ -11,6 +11,9 @@ public sealed partial class Plugin
 {
     private void OnCombatEvent(CombatEvent evt)
     {
+        // SP1: capture every event into the log buffer (runs even when the meter display is paused).
+        MaybeCaptureForLog(evt);
+
         if (_paused) return;
         if (evt is CombatEvent.SkillUsed su) { LogSkillUsed(su); return; }   // TEMP capture (cast-time redesign)
         if (evt is not CombatEvent.DamageDealt d) return;

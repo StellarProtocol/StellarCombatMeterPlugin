@@ -73,6 +73,9 @@ public sealed partial class Plugin
         TrimToCapacity(_history);
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
+        // SP1: fire-and-forget upload of the full event log (opt-in; never blocks/crashes).
+        MaybeUploadLog(entry);
+
         Clear();
     }
 
