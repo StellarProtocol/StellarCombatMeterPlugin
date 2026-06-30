@@ -46,24 +46,27 @@ internal sealed class CombatLogAssembler
         var duration = endMs - startMs;
 
         // --- Encounter header ---
-        // TODO(SP1): wire level_uuid from the game's SceneData / DungeonManager once that API
-        //            is exposed via the framework. The scene name is a numeric scene id string
-        //            (IClientState.CurrentSceneName) which is NOT the same as level_uuid.
         var sceneName = entry.SceneName ?? "";
         if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
             sceneMapId = 0;
 
-        // TODO(SP1): wire dungeonGuid and passTime from DungeonSettlement.pass_time once that
-        //            game-object is accessible via the framework. Current placeholder: null / 0.
-        const string? dungeonGuid = null;
-        const int     passTime    = 0;
+        // IDungeonState: per-run unique id (DungeonSyncData.scene_uuid); 0 between runs.
+        var levelUuid = _services.Dungeon.CurrentRunId;
 
-        // TODO(SP1): wire bossId / bossName / difficulty / masterModeScore from SceneData row once
-        //            IGameDataWorld.GetScene returns them. Current placeholder: zeroes / nulls.
-        const int     bossId            = 0;
-        const string? bossName          = null;
-        const string? difficulty        = null;
-        const int     masterModeScore   = 0;
+        // IDungeonState: settlement is non-null once the run reaches the result screen.
+        var settlement = _services.Dungeon.LastSettlement;
+        var passTime        = settlement?.PassTimeSeconds ?? 0;
+        var masterModeScore = settlement?.MasterModeScore ?? 0;
+        var runResult       = settlement is not null ? "kill" : "partial";
+
+        // TODO(enrich-later): wire dungeonGuid from SceneData once IGameDataWorld.GetScene exposes it.
+        const string? dungeonGuid = null;
+
+        // TODO(enrich-later): wire bossId / bossName / difficulty from SceneData row once
+        //                     IGameDataWorld.GetScene returns them.
+        const int     bossId     = 0;
+        const string? bossName   = null;
+        const string? difficulty = null;
 
         // Encounter kind heuristic from party type.
         var encounterKind = entry.PartyType switch
@@ -74,16 +77,16 @@ internal sealed class CombatLogAssembler
 
         var encounter = new Encounter(
             Kind:            encounterKind,
-            LevelUuid:       0L,                   // TODO(SP1): real level_uuid from SceneData
+            LevelUuid:       levelUuid,
             DungeonGuid:     dungeonGuid,
             MapId:           sceneMapId,
-            LineId:          0,                    // TODO(SP1): lineId from server scene info
-            Name:            null,                 // TODO(SP1): GetScene(sceneMapId)?.Name
+            LineId:          0,                    // TODO(enrich-later): lineId from server scene info
+            Name:            null,                 // TODO(enrich-later): GetScene(sceneMapId)?.Name
             BossId:          bossId,
             BossName:        bossName,
             Difficulty:      difficulty,
             MasterModeScore: masterModeScore,
-            Result:          "partial",            // TODO(SP1): read from DungeonSettlement result field
+            Result:          runResult,
             StartMs:         startMs,
             EndMs:           endMs,
             DurationMs:      duration,
