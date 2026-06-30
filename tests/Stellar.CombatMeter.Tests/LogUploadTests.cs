@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter.LogUpload;
 using Xunit;
@@ -115,16 +116,120 @@ public sealed class LogUploadTests
     }
 
     [Fact]
-    public void Buffer_RingDropsOldestOnOverflow()
+    public void Buffer_DamageRingDropsOldestOnOverflow()
     {
-        // Use a small custom logic: add MaxEvents+1 events and check count stays at MaxEvents.
-        // This test adds MaxEvents+2 to force two evictions.
+        // dmg/skill ring caps at MaxDamageEvents; once full, oldest is overwritten (count stays at cap).
         var buf = new CombatEventBuffer();
-        var totalToAdd = CombatEventBuffer.MaxEvents + 2;
+        var totalToAdd = CombatEventBuffer.MaxDamageEvents + 2;
         for (var i = 0; i < totalToAdd; i++)
             buf.Add(new CombatEvent.SkillUsed(i, new EntityId((long)i), i, SkillEventPhase.Begin));
-        // After overflow-protection, count should be MaxEvents (not totalToAdd).
-        Assert.Equal(CombatEventBuffer.MaxEvents, buf.Count);
+        Assert.Equal(CombatEventBuffer.MaxDamageEvents, buf.Count);
+    }
+
+    private static CombatEvent.BuffChanged MakeBuff(int i) =>
+        new CombatEvent.BuffChanged(i, new EntityId(1), 1, 1, BuffChangeKind.Applied, 1, 0, 1000);
+
+    private static CombatEvent.DamageDealt MakeDamage(int i) =>
+        new CombatEvent.DamageDealt(i, new EntityId(1), new EntityId(2), 99,
+            100, 100, 0, false, false, false, false, DamageElement.Fire, DamageSourceKind.Skill);
+
+    [Fact]
+    public void Buff_volume_does_not_evict_damage_and_does_not_flag_truncation()
+    {
+        var buf = new CombatEventBuffer();
+        // Flood buffs past their cap, plus a modest number of damage events under the dmg cap.
+        for (int i = 0; i < CombatEventBuffer.MaxBuffEvents + 50_000; i++) buf.Add(MakeBuff(i));
+        for (int i = 0; i < 1000; i++) buf.Add(MakeDamage(i));
+        var events = buf.Flush();
+        Assert.Equal(1000, events.Count(e => e is DamageEvent));  // all damage retained despite buff flood
+        Assert.False(buf.Truncated);                              // buff overflow is NOT flagged (nothing renders buffs)
+    }
+
+    [Fact]
+    public void Damage_overflow_flags_truncation()
+    {
+        var buf = new CombatEventBuffer();
+        for (int i = 0; i < CombatEventBuffer.MaxDamageEvents + 100; i++) buf.Add(MakeDamage(i));
+        Assert.True(buf.Truncated);                               // dmg/skill forensic ring overflowed
+    }
+
+    [Fact]
+    public void Flush_merges_rings_in_chronological_order()
+    {
+        var buf = new CombatEventBuffer();
+        buf.Add(MakeDamage(5000));
+        buf.Add(MakeBuff(1000));
+        buf.Add(MakeDamage(3000));
+        var events = buf.Flush();
+        Assert.Equal(new long[] { 1000, 3000, 5000 }, events.Select(e => e.Ms).ToArray());
+    }
+
+    // -------------------------------------------------------------------------
+    // DerivedBuilder (B3): aggregates derived from the meter's uncapped stats/series/deaths.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Derived_perActor_totals_match_stats()
+    {
+        var id = new EntityId(123L << 16);
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            CombatDurationMs = 10_000,
+            Stats = new()
+            {
+                [id] = new SourceStats
+                {
+                    TotalDamage = 5000, TotalHealing = 200, TotalTaken = 300,
+                    Hits = 10, Crits = 4, Luckys = 1, Deaths = 1, TopHit = 900,
+                    FirstHitMs = 1000, LastHitMs = 9000,
+                    BySkill = new() { [1] = new SkillStats { Total = 5000, HealTotal = 200, Hits = 10, Crits = 4 } },
+                    IncomingBySkill = new() { [2] = new IncomingSkillStats { Total = 300, Hits = 3 } },
+                },
+            },
+            Series = new()
+            {
+                [id] = new SourceSeries { BucketMs = 1000, Dealt = new long[] { 2000, 3000 }, Healing = new long[] { 200, 0 }, Taken = new long[] { 100, 200 } },
+            },
+            DeathLog = new() { new DeathEntry(5000, id, 2) },
+        };
+        var d = DerivedBuilder.Build(entry, truncatedEvents: false);
+        var key = (123L << 16).ToString();
+        Assert.Equal(5000, d.PerActor[key].Damage);
+        Assert.Equal(1, d.PerActor[key].Deaths);
+        Assert.Equal(10_000, d.CombatDurationMs);
+        Assert.Equal(1000, d.Series.BucketMs);
+        Assert.Equal(new long[] { 2000, 3000 }, d.Series.PerActor[key].Dealt);
+        Assert.Single(d.PerActorSkills[key]);          // skill 1 (damage)
+        Assert.Single(d.PerActorHealSkills[key]);       // skill 1 had HealTotal>0
+        Assert.Single(d.PerActorTakenSkills[key]);      // skill 2 incoming
+        Assert.Single(d.Deaths);                        // one killing blow
+        Assert.Equal(key, d.Deaths[0].Victim);
+        Assert.Equal(2, d.Deaths[0].Skill);
+    }
+
+    // -------------------------------------------------------------------------
+    // BuildEncounter: run-identity comes from the archived entry, NOT live IDungeonState.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void BuildEncounter_uses_entry_identity_not_live_state()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 349535, CombatDurationMs = 169000,
+            PartyType = PartyType.Raid20, LevelUuid = 146960651154096128L,
+            PassTime = 169, MasterModeScore = 980, Result = "kill",
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(146960651154096128L, enc.LevelUuid);
+        Assert.Equal("raid", enc.Kind);          // Raid20 → raid
+        Assert.Equal(7151, enc.MapId);            // parsed from SceneName
+        Assert.Equal("kill", enc.Result);
+        Assert.Equal(169, enc.PassTime);
+        Assert.Equal(980, enc.MasterModeScore);
+        Assert.Equal(1000, enc.StartMs);
+        Assert.Equal(349535, enc.EndMs);
+        Assert.Equal(348535, enc.DurationMs);     // EndMs - StartMs
     }
 
     // -------------------------------------------------------------------------

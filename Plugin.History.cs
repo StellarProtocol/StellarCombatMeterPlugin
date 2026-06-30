@@ -12,6 +12,9 @@ internal struct SourceSeries
     public long[] Taken;
 }
 
+/// <summary>A single killing-blow record: when (epoch ms), who died, and the attacker skill id.</summary>
+internal readonly record struct DeathEntry(long Ms, EntityId Victim, int Skill);
+
 public sealed partial class Plugin
 {
     private const int HistoryCapacity = 50;
@@ -26,9 +29,14 @@ public sealed partial class Plugin
         public long     CombatDurationMs;
         public Dictionary<EntityId, SourceStats> Stats = new();
         public Dictionary<EntityId, SourceSeries> Series = new();   // NEW
+        public List<DeathEntry> DeathLog = new();   // NEW: complete killing-blow list (truncation-independent)
         public Dictionary<EntityId, EntitySnapshot> Entities = new();   // per-player frozen entity snapshot (issue #5)
         public PartyType PartyType;
         public int       MemberCount;
+        public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
+        public int       PassTime;         // settlement clear-time seconds at archive
+        public int       MasterModeScore;  // settlement master-mode score at archive
+        public string    Result = "partial"; // "kill" once settled, else "partial"
     }
 
     private void OnSceneChanged(string? newScene)
@@ -55,6 +63,10 @@ public sealed partial class Plugin
     {
         if (_stats.Count == 0) return;
 
+        // Snapshot run-identity from the live dungeon state AT ARCHIVE so a deferred
+        // (manual) upload of this entry uses the right levelUuid / settlement — not
+        // whatever run happens to be live when the user later clicks Upload.
+        var settlement = _services.Dungeon.LastSettlement;
         var entry = new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
@@ -63,11 +75,16 @@ public sealed partial class Plugin
             CombatDurationMs = ComputeDurationMs(),
             Stats            = DeepCopyStats(),
             Series           = FreezeTimelines(),
+            DeathLog         = new List<DeathEntry>(_deaths),
             Entities         = SnapshotEntities(),
             PartyType        = _services.PartySnapshot.PartyType,
             // Combatant count — every entity that participated, not just party.
             // Guarded by _stats.Count == 0 early-return above, so >= 1 here.
             MemberCount      = _stats.Count,
+            LevelUuid        = _services.Dungeon.CurrentRunId,
+            PassTime         = settlement?.PassTimeSeconds ?? 0,
+            MasterModeScore  = settlement?.MasterModeScore ?? 0,
+            Result           = settlement is not null ? "kill" : "partial",
         };
         _history.Add(entry);
         TrimToCapacity(_history);
@@ -105,6 +122,7 @@ public sealed partial class Plugin
                 Crits        = src.Crits,
                 Luckys       = src.Luckys,
                 Kills        = src.Kills,
+                Deaths       = src.Deaths,
                 FirstHitMs   = src.FirstHitMs,
                 LastHitMs    = src.LastHitMs,
                 BySkill      = new Dictionary<int, SkillStats>(src.BySkill.Count),

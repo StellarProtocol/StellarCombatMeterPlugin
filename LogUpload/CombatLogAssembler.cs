@@ -34,63 +34,22 @@ internal sealed class CombatLogAssembler
     /// Base64-PKCS#8 private key, or null/empty to produce an empty placeholder signature
     /// (upload will be rejected by the server if <c>UPLOAD_PUBKEY</c> is set).
     /// </param>
+    /// <param name="truncatedEvents">
+    /// True when the raw dmg/skill forensic ring overflowed during the encounter. Forensic
+    /// metadata only — every rendered number comes from the unsigned <c>derived</c> aggregates.
+    /// </param>
     internal CombatLog Assemble(
         Plugin.EncounterHistoryEntry entry,
         IReadOnlyList<CombatLogEvent> events,
-        string? signerKey)
+        string? signerKey,
+        bool truncatedEvents)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
-        var startMs  = entry.EnteredAtMs;
-        var endMs    = entry.ArchivedAtMs;
-        var duration = endMs - startMs;
 
-        // --- Encounter header ---
-        var sceneName = entry.SceneName ?? "";
-        if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
-            sceneMapId = 0;
-
-        // IDungeonState: per-run unique id (DungeonSyncData.scene_uuid); 0 between runs.
-        var levelUuid = _services.Dungeon.CurrentRunId;
-
-        // IDungeonState: settlement is non-null once the run reaches the result screen.
-        var settlement = _services.Dungeon.LastSettlement;
-        var passTime        = settlement?.PassTimeSeconds ?? 0;
-        var masterModeScore = settlement?.MasterModeScore ?? 0;
-        var runResult       = settlement is not null ? "kill" : "partial";
-
-        // TODO(enrich-later): wire dungeonGuid from SceneData once IGameDataWorld.GetScene exposes it.
-        const string? dungeonGuid = null;
-
-        // TODO(enrich-later): wire bossId / bossName / difficulty from SceneData row once
-        //                     IGameDataWorld.GetScene returns them.
-        const int     bossId     = 0;
-        const string? bossName   = null;
-        const string? difficulty = null;
-
-        // Encounter kind heuristic from party type.
-        var encounterKind = entry.PartyType switch
-        {
-            PartyType.Raid20 => "raid",
-            _                => "dungeon",
-        };
-
-        var encounter = new Encounter(
-            Kind:            encounterKind,
-            LevelUuid:       levelUuid,
-            DungeonGuid:     dungeonGuid,
-            MapId:           sceneMapId,
-            LineId:          0,                    // TODO(enrich-later): lineId from server scene info
-            Name:            null,                 // TODO(enrich-later): GetScene(sceneMapId)?.Name
-            BossId:          bossId,
-            BossName:        bossName,
-            Difficulty:      difficulty,
-            MasterModeScore: masterModeScore,
-            Result:          runResult,
-            StartMs:         startMs,
-            EndMs:           endMs,
-            DurationMs:      duration,
-            PassTime:        passTime);
+        // Encounter identity comes entirely from the entry (snapshotted at archive),
+        // so a deferred manual upload stamps the run's OWN levelUuid/settlement.
+        var encounter = BuildEncounter(entry);
 
         // --- Uploader ---
         var localUid = _services.CombatSnapshot.LocalEntityId.Value;
@@ -126,13 +85,53 @@ internal sealed class CombatLogAssembler
             Encounter:    encounter,
             Uploader:     uploaderUnsigned);
 
-        var logUnsigned = new CombatLog(1, header, actors, events);
+        // Plugin-authoritative aggregates (uncapped) ride alongside the (capped) raw event detail track.
+        var derived = DerivedBuilder.Build(entry, truncatedEvents);
+        var logUnsigned = new CombatLog(1, header, actors, events, derived);
 
         // --- Signature ---
         var sig = ComputeSig(logUnsigned, signerKey);
         var uploaderSigned = new Uploader(localUid, sig, nonce);
         var headerSigned   = header with { Uploader = uploaderSigned };
         return logUnsigned with { Header = headerSigned };
+    }
+
+    /// <summary>
+    /// Builds the <see cref="Encounter"/> header purely from the archived entry — no live
+    /// <see cref="IDungeonState"/> reads. This is what makes a deferred (manual) upload correct:
+    /// run-identity (<c>LevelUuid</c>/<c>PassTime</c>/<c>MasterModeScore</c>/<c>Result</c>) was
+    /// snapshotted onto the entry at archive time, so re-uploading an old run later cannot leak
+    /// the currently-live run's identity onto it.
+    /// </summary>
+    internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry)
+    {
+        var sceneName = entry.SceneName ?? "";
+        if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
+            sceneMapId = 0;
+
+        // Encounter kind heuristic from party type.
+        var encounterKind = entry.PartyType switch
+        {
+            PartyType.Raid20 => "raid",
+            _                => "dungeon",
+        };
+
+        return new Encounter(
+            Kind:            encounterKind,
+            LevelUuid:       entry.LevelUuid,
+            DungeonGuid:     null,                 // TODO(enrich-later): from SceneData via IGameDataWorld.GetScene
+            MapId:           sceneMapId,
+            LineId:          0,                    // TODO(enrich-later): lineId from server scene info
+            Name:            null,                 // TODO(enrich-later): GetScene(sceneMapId)?.Name
+            BossId:          0,                    // TODO(enrich-later): from SceneData row
+            BossName:        null,
+            Difficulty:      null,
+            MasterModeScore: entry.MasterModeScore,
+            Result:          entry.Result,
+            StartMs:         entry.EnteredAtMs,
+            EndMs:           entry.ArchivedAtMs,
+            DurationMs:      entry.ArchivedAtMs - entry.EnteredAtMs,
+            PassTime:        entry.PassTime);
     }
 
     private static string ComputeSig(CombatLog log, string? signerKey)
