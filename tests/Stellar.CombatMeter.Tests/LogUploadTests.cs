@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Services;
 using Stellar.CombatMeter.LogUpload;
 using Xunit;
 
@@ -12,6 +13,25 @@ namespace Stellar.CombatMeter.Tests;
 
 public sealed class LogUploadTests
 {
+    // Minimal in-memory IConfigSection used to pin pref defaults without constructing a full Plugin.
+    // Mirrors the framework contract: a missing key returns the caller-supplied default.
+    private sealed class FakeConfigSection : IConfigSection
+    {
+        private readonly Dictionary<string, object?> _store = new();
+        public T? Get<T>(string key, T? defaultValue)
+            => _store.TryGetValue(key, out var v) && v is T t ? t : defaultValue;
+        public void Set<T>(string key, T value) => _store[key] = value;
+        public void Save() { }
+        public void SaveQuiet() { }
+    }
+
+    [Fact]
+    public void AutoUpload_defaults_on()
+    {
+        var prefs = new FakeConfigSection();
+        Assert.True(prefs.Get("logUpload.autoUpload", true));   // default true when unset
+    }
+
     // -------------------------------------------------------------------------
     // CombatEventBuffer
     // -------------------------------------------------------------------------

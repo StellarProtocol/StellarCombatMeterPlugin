@@ -4,7 +4,7 @@
 // Feature boundary:
 //   - Capture: OnCombatEvent feeds _logBuffer during an encounter.
 //   - Serialize: ManualArchive triggers SerializeAndUpload() after the encounter is archived.
-//   - Upload: opt-in (EnableLogUpload setting); fire-and-forget; never blocks or crashes the game.
+//   - Upload: auto path gated on AutoUpload (default ON); fire-and-forget; never blocks or crashes the game.
 //
 // Wiring stubs clearly marked TODO(SP1) for items that require game-API access not yet in the framework.
 
@@ -27,8 +27,8 @@ public sealed partial class Plugin
     // Settings keys (read/written from the "combatmeter" config section)
     // -----------------------------------------------------------------------
 
-    private const string PrefEnableUpload = "logUpload.enabled";
-    private const string PrefSignerKey    = "logUpload.signerKey";
+    private const string PrefAutoUpload = "logUpload.autoUpload";
+    private const string PrefSignerKey  = "logUpload.signerKey";
 
     // -----------------------------------------------------------------------
     // Lazy initialisation (assembler is created once on first use)
@@ -41,10 +41,12 @@ public sealed partial class Plugin
     // Settings accessors (expose to Plugin.Settings.cs if a UI toggle is added)
     // -----------------------------------------------------------------------
 
-    internal bool EnableLogUpload
+    /// <summary>Auto-upload every archived run + capture raw forensic events. Default ON; toggle in settings.
+    /// Manual per-run upload from history works regardless of this flag.</summary>
+    internal bool AutoUpload
     {
-        get => _prefs.Get(PrefEnableUpload, false);
-        set { _prefs.Set(PrefEnableUpload, value); _prefs.Save(); }
+        get => _prefs.Get(PrefAutoUpload, true);
+        set { _prefs.Set(PrefAutoUpload, value); _prefs.Save(); }
     }
 
     /// <summary>
@@ -66,7 +68,7 @@ public sealed partial class Plugin
     /// </summary>
     internal void MaybeCaptureForLog(CombatEvent evt)
     {
-        if (!EnableLogUpload) return;
+        if (!AutoUpload) return;   // only buffer raw events when auto-uploading; manual uses entry aggregates
         _logBuffer.Add(evt);
     }
 
@@ -81,7 +83,7 @@ public sealed partial class Plugin
     /// </summary>
     internal void MaybeUploadLog(EncounterHistoryEntry entry)
     {
-        if (!EnableLogUpload)
+        if (!AutoUpload)
         {
             _logBuffer.Clear();
             return;
@@ -89,6 +91,7 @@ public sealed partial class Plugin
 
         try
         {
+            var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
             var events = _logBuffer.Flush();   // also clears the buffer
             if (events.Count == 0)
             {
@@ -96,7 +99,7 @@ public sealed partial class Plugin
                 return;
             }
 
-            var log = LogAssembler.Assemble(entry, events, SignerKey);
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
                 $"({events.Count} events, {entry.Entities.Count} actors).");
