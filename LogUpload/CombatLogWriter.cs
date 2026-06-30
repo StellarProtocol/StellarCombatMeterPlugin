@@ -43,7 +43,7 @@ internal static class CombatLogWriter
     {
         w.BeginObject();
         w.Name("kind").Str(e.Kind);
-        w.Name("levelUuid").Number(e.LevelUuid);
+        w.Name("levelUuid").Str(e.LevelUuid.ToString(CultureInfo.InvariantCulture));
         if (e.DungeonGuid != null) w.Name("dungeonGuid").Str(e.DungeonGuid);
         w.Name("mapId").Number(e.MapId);
         w.Name("lineId").Number(e.LineId);
