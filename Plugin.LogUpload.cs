@@ -9,6 +9,8 @@
 // Wiring stubs clearly marked TODO(SP1) for items that require game-API access not yet in the framework.
 
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using Stellar.CombatMeter.LogUpload;
 using Stellar.Abstractions.Domain;
 
@@ -22,6 +24,18 @@ public sealed partial class Plugin
 
     private readonly CombatEventBuffer _logBuffer = new();
     private CombatLogAssembler? _logAssembler;
+
+    // -----------------------------------------------------------------------
+    // Per-entry upload status (read by the history UI on the main thread; written
+    // by the fire-and-forget callback on a thread-pool thread). Backed by the
+    // services-free UploadStatusTable (immutable values → no torn cross-thread reads).
+    // -----------------------------------------------------------------------
+
+    private readonly UploadStatusTable _uploadStatus = new();
+
+    internal UploadPhase UploadStateFor(EncounterHistoryEntry e) => _uploadStatus.PhaseFor(e);
+
+    internal string? UploadUrlFor(EncounterHistoryEntry e) => _uploadStatus.UrlFor(e);
 
     // -----------------------------------------------------------------------
     // Settings keys (read/written from the "combatmeter" config section)
@@ -78,45 +92,59 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Serializes the captured event stream + actor snapshots into the StellarLogs DTO
-    /// and fires off a fire-and-forget upload. Called once per archive; never throws.
+    /// Auto path: serializes the captured raw event stream + actor snapshots and fires off a
+    /// fire-and-forget upload. Called once per archive when <see cref="AutoUpload"/> is on; never throws.
     /// </summary>
     internal void MaybeUploadLog(EncounterHistoryEntry entry)
     {
-        if (!AutoUpload)
+        if (!AutoUpload) { _logBuffer.Clear(); return; }
+
+        var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
+        var events = _logBuffer.Flush();         // also clears the buffer
+        if (events.Count == 0)
         {
-            _logBuffer.Clear();
+            _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
             return;
         }
 
+        AssembleAndUpload(entry, events, truncatedEvents: truncated);
+    }
+
+    /// <summary>Manual per-run upload from history. Uses the entry's stored aggregates; no raw events
+    /// (the buffer was flushed at archive) — every rendered number rides on <c>derived</c>.</summary>
+    internal void UploadHistoryEntry(EncounterHistoryEntry entry)
+    {
+        if (UploadStateFor(entry) == UploadPhase.InFlight) return;   // debounce double-click
+        AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true);
+    }
+
+    // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
+    // auto, empty for manual) and the truncation flag. Never throws into the (main-thread) caller.
+    private void AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent> events, bool truncatedEvents)
+    {
         try
         {
-            var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
-            var events = _logBuffer.Flush();   // also clears the buffer
-            if (events.Count == 0)
-            {
-                _services.Log.Info("[CombatMeter.SP1] No events captured — skipping upload.");
-                return;
-            }
-
-            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated);
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncatedEvents);
+            var url = "https://stellar-logs-web.boshido.workers.dev/run/" +
+                      log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
+            _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
                 $"({events.Count} events, {entry.Entities.Count} actors).");
 
             LogUploader.UploadFireAndForget(log, (ok, status, err) =>
             {
-                // Callback fires on a thread-pool thread; only call thread-safe log methods here.
-                if (ok)
-                    _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId}");
-                else
-                    _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
+                // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
+                // call thread-safe log methods here — never touch uGUI.
+                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+                if (ok) _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId}");
+                else    _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
             });
         }
         catch (Exception ex)
         {
-            // Any unhandled exception here must NOT propagate into ManualArchive (which runs on the
-            // main thread and cannot crash without destabilising the game session).
+            // Any unhandled exception here must NOT propagate into the main-thread caller.
+            _uploadStatus.Set(entry, UploadPhase.Failed, null);
             _logBuffer.Clear();
             _services.Log.Warning($"[CombatMeter.SP1] Log assembly/upload threw: {ex.Message}");
         }

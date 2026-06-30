@@ -33,6 +33,37 @@ public sealed class LogUploadTests
     }
 
     // -------------------------------------------------------------------------
+    // UploadStatusTable: per-entry upload-state machine (drives the history button).
+    // Tested directly (services-free) rather than via a heavy Plugin ctor.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Upload_status_defaults_idle_for_unknown_entry()
+    {
+        var table = new UploadStatusTable();
+        var entry = new Plugin.EncounterHistoryEntry { LevelUuid = 1 };
+        Assert.Equal(UploadPhase.Idle, table.PhaseFor(entry));
+        Assert.Null(table.UrlFor(entry));
+    }
+
+    [Fact]
+    public void Upload_status_tracks_phase_and_url_per_entry()
+    {
+        var table = new UploadStatusTable();
+        var a = new Plugin.EncounterHistoryEntry { LevelUuid = 1 };
+        var b = new Plugin.EncounterHistoryEntry { LevelUuid = 2 };
+
+        table.Set(a, UploadPhase.InFlight, "https://example/run/1");
+        Assert.Equal(UploadPhase.InFlight, table.PhaseFor(a));
+        Assert.Equal("https://example/run/1", table.UrlFor(a));
+        Assert.Equal(UploadPhase.Idle, table.PhaseFor(b));   // distinct entry untouched
+
+        table.Set(a, UploadPhase.Done, "https://example/run/1");
+        Assert.Equal(UploadPhase.Done, table.PhaseFor(a));
+        Assert.Equal("https://example/run/1", table.UrlFor(a));
+    }
+
+    // -------------------------------------------------------------------------
     // CombatEventBuffer
     // -------------------------------------------------------------------------
 
