@@ -87,7 +87,7 @@ public sealed partial class Plugin
             Result           = settlement is not null ? "kill" : "partial",
         };
         _history.Add(entry);
-        TrimToCapacity(_history);
+        foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
         // SP1: fire-and-forget upload of the full event log (opt-in; never blocks/crashes).

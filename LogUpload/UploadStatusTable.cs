@@ -30,4 +30,11 @@ internal sealed class UploadStatusTable
     /// <summary>Run URL for an entry, or <see langword="null"/> if none recorded.</summary>
     internal string? UrlFor(Plugin.EncounterHistoryEntry entry)
         => _store.TryGetValue(entry, out var s) ? s.Url : null;
+
+    /// <summary>Drops the status for an entry that has left history, so it (and its Stats/Series/Entities)
+    /// is no longer rooted by this table. Call when an entry is evicted or deleted.</summary>
+    internal void Forget(Plugin.EncounterHistoryEntry entry) => _store.TryRemove(entry, out _);
+
+    /// <summary>Drops all recorded statuses. Call when history is cleared wholesale.</summary>
+    internal void Clear() => _store.Clear();
 }

@@ -10,7 +10,29 @@ internal sealed record CombatLog(
     int V,
     LogHeader Header,
     IReadOnlyDictionary<string, Actor> Actors,
-    IReadOnlyList<CombatLogEvent> Events);
+    IReadOnlyList<CombatLogEvent> Events,
+    Derived? Derived = null);
+
+// Plugin-authoritative aggregates (uncapped totals/skills/series/deaths). Unsigned; optional.
+internal sealed record Derived(
+    long CombatDurationMs, bool TruncatedEvents,
+    IReadOnlyDictionary<string, ActorAgg> PerActor,
+    IReadOnlyDictionary<string, IReadOnlyList<SkillAgg>> PerActorSkills,
+    IReadOnlyDictionary<string, IReadOnlyList<SkillAgg>> PerActorHealSkills,
+    IReadOnlyDictionary<string, IReadOnlyList<TakenAgg>> PerActorTakenSkills,
+    IReadOnlyList<DeathRec> Deaths,
+    SeriesBlock Series);
+
+internal sealed record ActorAgg(
+    long Damage, long Healing, long DamageTaken,
+    int Hits, int Crits, int Luckys, int Deaths,
+    long TopHit, long FirstHitMs, long LastHitMs);
+
+internal sealed record SkillAgg(int SkillId, long Total, int Hits, int Crits);
+internal sealed record TakenAgg(int SkillId, long Total, int Hits);
+internal sealed record DeathRec(long Ms, string Victim, int Skill);
+internal sealed record SeriesBlock(int BucketMs, IReadOnlyDictionary<string, ActorSeries> PerActor);
+internal sealed record ActorSeries(IReadOnlyList<long> Dealt, IReadOnlyList<long> Healing, IReadOnlyList<long> Taken);
 
 internal sealed record LogHeader(
     string LogId, long CapturedAtMs, string GameVersion, string Region,

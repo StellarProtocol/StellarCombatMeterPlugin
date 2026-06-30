@@ -14,41 +14,52 @@ namespace Stellar.CombatMeter.LogUpload;
 /// StellarLogs <see cref="CombatLogEvent"/> wire format and clears the buffer.
 /// </summary>
 /// <remarks>
-/// Ring-bounded to <see cref="MaxEvents"/> to protect the heap in very long fights
-/// (cap ~120 k events ≈ ~30 min dungeon at typical event rates).
-/// All calls must originate on the Unity main thread (same thread as OnCombatEvent).
+/// Raw events are now a FORENSIC track only — totals/skills/series/deaths ride on the `derived`
+/// aggregates (uncapped), so these caps no longer affect any rendered number. Dmg/skill and buff
+/// events get SEPARATE budgets, each backed by an O(1) circular ring (no per-event O(n) shift),
+/// so a buff flood can never evict damage. All calls must originate on the Unity main thread
+/// (same thread as OnCombatEvent).
 /// </remarks>
 internal sealed class CombatEventBuffer
 {
-    // Safety ceiling: discard oldest events once exceeded (ring behaviour).
-    internal const int MaxEvents = 120_000;
+    // Kept SMALL to bound the upload blob: the ingest worker JSON.parse+ajv-validates the whole event
+    // array, and a 70k-event (~10MB) blob exceeded the Worker resource limit (HTTP 503 / error 1102) in
+    // real raids. Totals/skills/series/deaths ride on the uncapped `derived` aggregates, so raw events are
+    // a forensic tail sample only — ~10k events ≈ ~1.5MB stays well under the limit.
+    internal const int MaxDamageEvents = 8_000;    // dmg+skill forensic ring (tail sample)
+    internal const int MaxBuffEvents   = 2_000;    // buffs on their own budget (preserved for future buff features)
 
-    private readonly List<CombatEvent> _raw = new(4096);
+    private readonly Ring _dmg = new(MaxDamageEvents);
+    private readonly Ring _buff = new(MaxBuffEvents);
 
-    internal int Count => _raw.Count;
+    /// <summary>True once the dmg/skill forensic ring has overflowed (metadata only — nothing rendered depends on raw events).</summary>
+    internal bool Truncated { get; private set; }
+
+    internal int Count => _dmg.Count + _buff.Count;
 
     internal void Add(CombatEvent evt)
     {
-        if (_raw.Count >= MaxEvents)
-        {
-            // Evict the oldest event to keep memory bounded.
-            _raw.RemoveAt(0);
-        }
-        _raw.Add(evt);
+        if (evt is CombatEvent.BuffChanged) { _buff.Add(evt); return; }  // buff overflow is NOT flagged (nothing renders buffs)
+        if (_dmg.Count >= _dmg.Capacity) Truncated = true;               // dmg/skill forensic ring overflowed
+        _dmg.Add(evt);
     }
 
-    internal void Clear() => _raw.Clear();
+    internal void Clear() { _dmg.Clear(); _buff.Clear(); Truncated = false; }
 
     /// <summary>
-    /// Returns the captured events as StellarLogs DTOs and resets the buffer.
+    /// Returns the captured events as StellarLogs DTOs (chronologically merged) and resets the buffer.
     /// Entity ids are formatted as their raw long value (same as the rest of the plugin).
     /// </summary>
     internal IReadOnlyList<CombatLogEvent> Flush()
     {
-        var result = new List<CombatLogEvent>(_raw.Count);
-        foreach (var ev in _raw)
+        // Merge both rings, sort by timestamp so the uploaded stream is chronological.
+        var merged = new List<CombatEvent>(_dmg.Count + _buff.Count);
+        _dmg.CopyTo(merged); _buff.CopyTo(merged);
+        merged.Sort((a, b) => a.TimestampMs.CompareTo(b.TimestampMs));
+        var result = new List<CombatLogEvent>(merged.Count);
+        foreach (var ev in merged)
             result.Add(Convert(ev));
-        _raw.Clear();
+        Clear();
         return result;
     }
 
@@ -98,5 +109,23 @@ internal sealed class CombatEventBuffer
 
             _ => throw new InvalidOperationException($"Unexpected CombatEvent type: {ev.GetType().Name}"),
         };
+    }
+
+    // O(1) circular buffer: overwrites oldest when full.
+    private sealed class Ring
+    {
+        private readonly CombatEvent[] _buf;
+        private int _head;            // next write slot
+        public int Count { get; private set; }
+        public int Capacity => _buf.Length;
+        public Ring(int cap) => _buf = new CombatEvent[cap];
+        public void Add(CombatEvent e) { _buf[_head] = e; _head = (_head + 1) % _buf.Length; if (Count < _buf.Length) Count++; }
+        public void Clear() { _head = 0; Count = 0; Array.Clear(_buf, 0, _buf.Length); }
+        public void CopyTo(List<CombatEvent> dst)
+        {
+            // emit oldest-first
+            int start = Count < _buf.Length ? 0 : _head;
+            for (int i = 0; i < Count; i++) dst.Add(_buf[(start + i) % _buf.Length]);
+        }
     }
 }

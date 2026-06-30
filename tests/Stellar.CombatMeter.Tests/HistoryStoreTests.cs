@@ -270,12 +270,16 @@ public sealed class HistoryStoreTests
         for (var i = 0; i < 60; i++)
             history.Add(new Plugin.EncounterHistoryEntry { MemberCount = i });   // i = age marker (0 = oldest)
 
-        Plugin.TrimToCapacity(history);
+        var evicted = Plugin.TrimToCapacity(history);
 
         Assert.Equal(50, history.Count);
         // Oldest (0..9) evicted from the front; newest (10..59) retained in order.
         Assert.Equal(10, history[0].MemberCount);
         Assert.Equal(59, history[^1].MemberCount);
+        // The 10 evicted entries are returned oldest-first so the caller can drop their upload status.
+        Assert.Equal(10, evicted.Count);
+        Assert.Equal(0, evicted[0].MemberCount);
+        Assert.Equal(9, evicted[^1].MemberCount);
     }
 
     [Fact]
@@ -283,8 +287,9 @@ public sealed class HistoryStoreTests
     {
         var history = new List<Plugin.EncounterHistoryEntry>();
         for (var i = 0; i < 5; i++) history.Add(new Plugin.EncounterHistoryEntry());
-        Plugin.TrimToCapacity(history);
+        var evicted = Plugin.TrimToCapacity(history);
         Assert.Equal(5, history.Count);
+        Assert.Empty(evicted);   // nothing evicted under the cap
     }
 
     [Fact]

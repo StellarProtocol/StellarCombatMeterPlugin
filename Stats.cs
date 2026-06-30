@@ -17,6 +17,7 @@ internal sealed class SourceStats
     public int  Crits;
     public int  Luckys;              // NEW: lucky-hit count (DamageDealt.IsLucky) — for Luck% alongside Crit%
     public int  Kills;
+    public int  Deaths;              // NEW: times this entity died (killing-blow incoming hits) — for derived aggregates
     public long FirstHitMs;
     public long LastHitMs;
     public Dictionary<int, SkillStats> BySkill = new();

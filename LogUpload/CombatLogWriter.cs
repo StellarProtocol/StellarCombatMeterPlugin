@@ -20,9 +20,85 @@ internal static class CombatLogWriter
         w.Name("header"); WriteHeader(w, log.Header);
         w.Name("actors"); WriteActors(w, log.Actors);
         w.Name("events"); WriteEvents(w, log.Events);
+        if (log.Derived != null) { w.Name("derived"); WriteDerived(w, log.Derived); }
         w.EndObject();
         return w.ToString();
     }
+
+    private static void WriteDerived(JsonWriter w, Derived d)
+    {
+        w.BeginObject();
+        w.Name("combatDurationMs").Number(d.CombatDurationMs);
+        w.Name("truncatedEvents").Bool(d.TruncatedEvents);
+        w.Name("perActor"); WriteActorAggs(w, d.PerActor);
+        w.Name("perActorSkills"); WriteSkillMap(w, d.PerActorSkills);
+        w.Name("perActorHealSkills"); WriteSkillMap(w, d.PerActorHealSkills);
+        w.Name("perActorTakenSkills"); WriteTakenMap(w, d.PerActorTakenSkills);
+        w.Name("deaths"); WriteDeaths(w, d.Deaths);
+        w.Name("series"); WriteSeries(w, d.Series);
+        w.EndObject();
+    }
+
+    private static void WriteActorAggs(JsonWriter w, IReadOnlyDictionary<string, ActorAgg> m)
+    {
+        w.BeginObject();
+        foreach (var kv in m)
+        {
+            w.Name(kv.Key); var a = kv.Value; w.BeginObject();
+            w.Name("damage").Number(a.Damage); w.Name("healing").Number(a.Healing); w.Name("damageTaken").Number(a.DamageTaken);
+            w.Name("hits").Number(a.Hits); w.Name("crits").Number(a.Crits); w.Name("luckys").Number(a.Luckys); w.Name("deaths").Number(a.Deaths);
+            w.Name("topHit").Number(a.TopHit); w.Name("firstHitMs").Number(a.FirstHitMs); w.Name("lastHitMs").Number(a.LastHitMs);
+            w.EndObject();
+        }
+        w.EndObject();
+    }
+
+    private static void WriteSkillMap(JsonWriter w, IReadOnlyDictionary<string, IReadOnlyList<SkillAgg>> m)
+    {
+        w.BeginObject();
+        foreach (var kv in m)
+        {
+            w.Name(kv.Key); w.BeginArray();
+            foreach (var s in kv.Value) { w.BeginObject(); w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total); w.Name("hits").Number(s.Hits); w.Name("crits").Number(s.Crits); w.EndObject(); }
+            w.EndArray();
+        }
+        w.EndObject();
+    }
+
+    private static void WriteTakenMap(JsonWriter w, IReadOnlyDictionary<string, IReadOnlyList<TakenAgg>> m)
+    {
+        w.BeginObject();
+        foreach (var kv in m)
+        {
+            w.Name(kv.Key); w.BeginArray();
+            foreach (var s in kv.Value) { w.BeginObject(); w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total); w.Name("hits").Number(s.Hits); w.EndObject(); }
+            w.EndArray();
+        }
+        w.EndObject();
+    }
+
+    private static void WriteDeaths(JsonWriter w, IReadOnlyList<DeathRec> deaths)
+    {
+        w.BeginArray();
+        foreach (var x in deaths) { w.BeginObject(); w.Name("ms").Number(x.Ms); w.Name("victim").Str(x.Victim); w.Name("skill").Number(x.Skill); w.EndObject(); }
+        w.EndArray();
+    }
+
+    private static void WriteSeries(JsonWriter w, SeriesBlock s)
+    {
+        w.BeginObject();
+        w.Name("bucketMs").Number(s.BucketMs);
+        w.Name("perActor"); w.BeginObject();
+        foreach (var kv in s.PerActor)
+        {
+            w.Name(kv.Key); var a = kv.Value; w.BeginObject();
+            w.Name("dealt"); WriteLongArr(w, a.Dealt); w.Name("healing"); WriteLongArr(w, a.Healing); w.Name("taken"); WriteLongArr(w, a.Taken);
+            w.EndObject();
+        }
+        w.EndObject(); w.EndObject();
+    }
+
+    private static void WriteLongArr(JsonWriter w, IReadOnlyList<long> arr) { w.BeginArray(); foreach (var n in arr) w.Number(n); w.EndArray(); }
 
     private static void WriteHeader(JsonWriter w, LogHeader h)
     {

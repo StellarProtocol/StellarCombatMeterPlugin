@@ -37,11 +37,20 @@ public sealed partial class Plugin
     }
 
     // Cap the history to HistoryCapacity, evicting oldest-first (front of the list). Single source of truth for
-    // the cap so load and archive evict identically; testable without a live host.
-    internal static void TrimToCapacity(List<EncounterHistoryEntry> history)
+    // the cap so load and archive evict identically; testable without a live host. Returns the evicted entries
+    // (oldest-first) so the caller can drop their upload status — otherwise they'd be rooted by _uploadStatus.
+    internal static List<EncounterHistoryEntry> TrimToCapacity(List<EncounterHistoryEntry> history)
     {
-        while (history.Count > HistoryCapacity) history.RemoveAt(0);
+        List<EncounterHistoryEntry>? evicted = null;
+        while (history.Count > HistoryCapacity)
+        {
+            (evicted ??= new List<EncounterHistoryEntry>()).Add(history[0]);
+            history.RemoveAt(0);
+        }
+        return evicted ?? EmptyEntries;
     }
+
+    private static readonly List<EncounterHistoryEntry> EmptyEntries = new();
 
     // Serialize the whole _history list and persist it. Called after archive/eviction and after any clear.
     private void SaveHistory()
@@ -60,6 +69,7 @@ public sealed partial class Plugin
     internal void ClearAllHistory()
     {
         _history.Clear();
+        _uploadStatus.Clear();   // drop all per-entry upload status so evicted runs aren't rooted
         ResetHistorySelection();
         SaveHistory();
         RebuildHistorySnapshots();
@@ -75,6 +85,7 @@ public sealed partial class Plugin
         var wasSelected = _selectedSession;
         var deleted = _history[historyIndex];
         _history.RemoveAt(historyIndex);
+        _uploadStatus.Forget(deleted);   // drop this run's upload status so it isn't rooted after delete
 
         if (ReferenceEquals(wasSelected, deleted)) ResetHistorySelection();
         else if (wasSelected is not null)

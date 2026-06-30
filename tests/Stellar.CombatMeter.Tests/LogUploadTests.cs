@@ -63,6 +63,26 @@ public sealed class LogUploadTests
         Assert.Equal("https://example/run/1", table.UrlFor(a));
     }
 
+    [Fact]
+    public void Upload_status_Forget_drops_one_entry_and_Clear_empties_all()
+    {
+        var table = new UploadStatusTable();
+        var a = new Plugin.EncounterHistoryEntry { LevelUuid = 1 };
+        var b = new Plugin.EncounterHistoryEntry { LevelUuid = 2 };
+        table.Set(a, UploadPhase.Done, "https://example/run/1");
+        table.Set(b, UploadPhase.Done, "https://example/run/2");
+
+        table.Forget(a);
+        Assert.Equal(UploadPhase.Idle, table.PhaseFor(a));   // forgotten → back to default
+        Assert.Null(table.UrlFor(a));
+        Assert.Equal(UploadPhase.Done, table.PhaseFor(b));   // sibling untouched
+
+        table.Forget(a);                                     // forgetting an unknown entry is a no-op
+
+        table.Clear();
+        Assert.Equal(UploadPhase.Idle, table.PhaseFor(b));   // cleared wholesale
+    }
+
     // -------------------------------------------------------------------------
     // CombatEventBuffer
     // -------------------------------------------------------------------------

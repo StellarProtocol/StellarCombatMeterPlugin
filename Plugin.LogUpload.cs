@@ -55,13 +55,22 @@ public sealed partial class Plugin
     // Settings accessors (expose to Plugin.Settings.cs if a UI toggle is added)
     // -----------------------------------------------------------------------
 
+    // Cached copy of the auto-upload preference. Read on the per-combat-event hot path
+    // (MaybeCaptureForLog), so the getter MUST stay O(1) — never a lock + JSON deserialize.
+    // Loaded once at init via InitLogUpload(); the setter keeps it in sync with persisted prefs.
+    private bool _autoUpload = true;
+
     /// <summary>Auto-upload every archived run + capture raw forensic events. Default ON; toggle in settings.
     /// Manual per-run upload from history works regardless of this flag.</summary>
     internal bool AutoUpload
     {
-        get => _prefs.Get(PrefAutoUpload, true);
-        set { _prefs.Set(PrefAutoUpload, value); _prefs.Save(); }
+        get => _autoUpload;
+        set { _autoUpload = value; _prefs.Set(PrefAutoUpload, value); _prefs.Save(); }
     }
+
+    // Load the cached auto-upload pref once at plugin init (alongside the other settings loads in Plugin.cs).
+    // Reads from _prefs exactly once so the per-event getter never touches the config store.
+    private void InitLogUpload() => _autoUpload = _prefs.Get(PrefAutoUpload, true);
 
     /// <summary>
     /// Base64-PKCS#8 ECDSA P-256 private key used to sign uploads.

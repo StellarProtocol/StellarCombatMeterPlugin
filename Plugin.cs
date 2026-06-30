@@ -59,6 +59,10 @@ public sealed partial class Plugin : IStellarPlugin
     private readonly Dictionary<EntityId, SourceStats> _stats = new();
     private readonly MeterAggregator _agg = new();
 
+    // Complete killing-blow list for the active encounter (frozen into history at archive). Uncapped:
+    // it rides on the derived aggregates, not the truncation-bounded event ring.
+    private readonly List<DeathEntry> _deaths = new();
+
     // EntityId -> per-second time-series (dealt/healing/taken). Frozen into history at archive.
     internal const int TimelineBucketMs = 1000;
     internal const int TimelineMaxBuckets = 600;
@@ -108,6 +112,7 @@ public sealed partial class Plugin : IStellarPlugin
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
         _filter   = (FilterMode) _prefs.Get("scope",  (int)FilterMode.Party);
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
+        InitLogUpload();   // SP1: cache the auto-upload bool off the per-event hot path
 
         // Encounter history is persisted in its own config section (string[] of per-entry JSON). Load it before
         // the windows are built so the History window has its sessions on first show.
@@ -279,6 +284,7 @@ public sealed partial class Plugin : IStellarPlugin
     {
         _stats.Clear();
         _timelines.Clear();
+        _deaths.Clear();
         _agg.Reset();
         // Reset the per-entity bar-animation cache too — it's keyed by EntityId and would otherwise grow
         // unbounded across a session (one entry per entity ever ranked). Clear() is the encounter-reset hook
