@@ -98,7 +98,7 @@ public sealed partial class Plugin
 
             var log = LogAssembler.Assemble(entry, events, SignerKey);
             _services.Log.Info(
-                $"[CombatMeter.SP1] Uploading log {log.Header.LogId} " +
+                $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
                 $"({events.Count} events, {entry.Entities.Count} actors).");
 
             LogUploader.UploadFireAndForget(log, (ok, status, err) =>
