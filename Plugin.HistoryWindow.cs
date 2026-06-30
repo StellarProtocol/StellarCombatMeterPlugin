@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
+using Stellar.CombatMeter.LogUpload;   // UploadPhase
 
 namespace Stellar.CombatMeter;
 
@@ -116,6 +117,7 @@ public sealed partial class Plugin
         for (var i = 0; i < MaxSourceSlots; i++) slots[i] = BuildSourceRowSlot(i);
         var table = new ColumnElement(new HudElement[]
         {
+            BuildUploadRow(),
             BuildHistoryMetricRow(),
             BuildSessionSummaryRow(),
             BuildHistoryChart(),
@@ -134,6 +136,46 @@ public sealed partial class Plugin
             // be squished below the navigator's offset; this Fill routes the deficit to the scroll.
             new ConditionalElement(() => _selectedSession is not null, table, Fill: true),
         });
+    }
+
+    // ----- manual upload (detail-pane, acts on _selectedSession) -----
+
+    // Upload control row: the per-run upload button + status text + a Copy-link affordance once uploaded.
+    // State cycles per entry (UploadStateFor) so switching selection away and back shows the prior result.
+    private HudElement BuildUploadRow() => new RowElement(new HudElement[]
+    {
+        new ButtonElement(UploadButtonLabel, UploadSelectedClicked,
+            Active: () => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.InFlight),
+        new TextElement(UploadStatusText, MutedCol, NoWrap: true),
+        new SpacerElement(),
+        new ConditionalElement(() => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done,
+            new ButtonElement(() => "Copy link", CopyUploadLink)),
+    }, Gap: 8f);
+
+    private string UploadButtonLabel()
+    {
+        if (_selectedSession is not { } s) return "⤓ Upload this run";
+        return UploadStateFor(s) switch
+        {
+            UploadPhase.InFlight => "Uploading…",
+            UploadPhase.Done     => "✓ Uploaded",
+            UploadPhase.Failed   => "✗ Failed — Retry",
+            _                    => "⤓ Upload this run",
+        };
+    }
+
+    private string UploadStatusText()
+        => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? u : "";
+
+    private void UploadSelectedClicked()
+    {
+        if (_selectedSession is { } s && UploadStateFor(s) != UploadPhase.InFlight) UploadHistoryEntry(s);
+    }
+
+    private void CopyUploadLink()
+    {
+        if (_selectedSession is { } s && UploadUrlFor(s) is { } u)
+            UnityEngine.GUIUtility.systemCopyBuffer = u;   // plugins may reference UnityEngine; IL2CPP-safe clipboard
     }
 
     // The timeline chart: team-total (always) + a line per source toggled into _chartedSources. Axis scale +

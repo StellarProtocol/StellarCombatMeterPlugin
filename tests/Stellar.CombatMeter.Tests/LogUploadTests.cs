@@ -284,6 +284,72 @@ public sealed class LogUploadTests
     }
 
     // -------------------------------------------------------------------------
+    // Manual-upload offline serialize smoke: a CombatLog built from an entry's
+    // aggregates with EMPTY events serializes correctly — every rendered number
+    // rides on `derived`, `encounter.levelUuid` is the entry's snapshotted id, and
+    // events serialize as []. (Schema validation runs out-of-band via ajv on the
+    // emitted JSON — see the dev report's offline-smoke result.)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ManualUpload_emptyEvents_serializes_derived_from_entry()
+    {
+        var id = new EntityId(123L << 16);
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 11_000, CombatDurationMs = 10_000,
+            PartyType = PartyType.Raid20, LevelUuid = 146960651154096128L,
+            PassTime = 169, MasterModeScore = 980, Result = "kill",
+            Stats = new()
+            {
+                [id] = new SourceStats
+                {
+                    TotalDamage = 5000, TotalHealing = 200, TotalTaken = 300,
+                    Hits = 10, Crits = 4, Luckys = 1, Deaths = 1, TopHit = 900,
+                    FirstHitMs = 1000, LastHitMs = 9000,
+                    BySkill = new() { [1] = new SkillStats { Total = 5000, HealTotal = 200, Hits = 10, Crits = 4 } },
+                    IncomingBySkill = new() { [2] = new IncomingSkillStats { Total = 300, Hits = 3 } },
+                },
+            },
+            Series = new()
+            {
+                [id] = new SourceSeries { BucketMs = 1000, Dealt = new long[] { 2000, 3000 }, Healing = new long[] { 200, 0 }, Taken = new long[] { 100, 200 } },
+            },
+            DeathLog = new() { new DeathEntry(5000, id, 2) },
+        };
+
+        var key = (123L << 16).ToString();
+        var encounter = CombatLogAssembler.BuildEncounter(entry);
+        var derived   = DerivedBuilder.Build(entry, truncatedEvents: true);
+
+        // events == [] : the manual path uploads aggregates only.
+        var events = (IReadOnlyList<CombatLogEvent>)Array.Empty<CombatLogEvent>();
+
+        var actor = new Actor("Tester", "player", 1L, true, 123L, 1, 60, 0L, 100_000L,
+            Array.Empty<long[]>(), Array.Empty<int[]>(), Array.Empty<int[]>(), Array.Empty<Fashion>());
+        var header = new LogHeader("cm-smoke", 11_000L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            encounter, new Uploader(123L, "sig", "nonce"));
+        var log = new CombatLog(1, header, new Dictionary<string, Actor> { [key] = actor }, events, derived);
+
+        var json = CombatLogWriter.Write(log);
+
+        // events serialize as an empty array.
+        Assert.Contains("\"events\":[]", json);
+        // encounter.levelUuid == entry.LevelUuid (emitted as a string for int64 precision).
+        Assert.Contains("\"levelUuid\":\"146960651154096128\"", json);
+        // derived.perActor totals come straight off entry.Stats.
+        Assert.Equal(5000, derived.PerActor[key].Damage);
+        Assert.Equal(200,  derived.PerActor[key].Healing);
+        Assert.Equal(300,  derived.PerActor[key].DamageTaken);
+        Assert.Equal(1,    derived.PerActor[key].Deaths);
+        Assert.Contains("\"derived\":", json);
+
+        // Persist the artifact so the out-of-band ajv schema check can validate it.
+        System.IO.File.WriteAllText(
+            System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cm-manual-upload-smoke.json"), json);
+    }
+
+    // -------------------------------------------------------------------------
     // EventsJsonWriter / CombatLogWriter round-trip correctness
     // -------------------------------------------------------------------------
 
