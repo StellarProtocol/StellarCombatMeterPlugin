@@ -81,7 +81,7 @@ public sealed partial class Plugin
             // Combatant count — every entity that participated, not just party.
             // Guarded by _stats.Count == 0 early-return above, so >= 1 here.
             MemberCount      = _stats.Count,
-            LevelUuid        = _services.Dungeon.CurrentRunId,
+            LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
             PassTime         = settlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = settlement?.MasterModeScore ?? 0,
             Result           = settlement is not null ? "kill" : "partial",

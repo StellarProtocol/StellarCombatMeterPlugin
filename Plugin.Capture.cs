@@ -51,6 +51,10 @@ public sealed partial class Plugin
         if (_combatActive) return;
         _combatActive  = true;
         _combatStartMs = timestampMs;
+        // Latch the dungeon run-id mid-run (valid here) as a fallback: IDungeonState.CurrentRunId can reset
+        // to 0 on scene-leave, which may be exactly when the archive fires. ManualArchive uses this if the
+        // live id is already 0 at archive time.
+        _lastRunId     = _services.Dungeon.CurrentRunId;
     }
 
     // Get-or-create the per-source aggregate.

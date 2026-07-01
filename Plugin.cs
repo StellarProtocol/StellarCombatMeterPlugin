@@ -83,6 +83,7 @@ public sealed partial class Plugin : IStellarPlugin
     // Combat-timer state (unix ms).
     private long _combatStartMs;
     private long _lastDamageMs;
+    private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
     private bool _combatActive;
 
     // Persisted UI state.
@@ -300,6 +301,7 @@ public sealed partial class Plugin : IStellarPlugin
         _combatActive  = false;
         _combatStartMs = 0;
         _lastDamageMs  = 0;
+        _lastRunId     = 0;
     }
 
     private double EncounterElapsedSeconds()
