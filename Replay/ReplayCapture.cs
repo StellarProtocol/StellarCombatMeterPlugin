@@ -19,6 +19,11 @@ internal sealed class ReplayCapture
     private readonly Dictionary<EntityId, PositionTrack> _tracks = new();
     private readonly List<EntityId> _order = new();          // stable iteration; reused
     private float _accumMs;
+
+    // Per-encounter timestamps. _combatStartMs is stamped on the first Tick after Reset() and is
+    // INTENTIONALLY preserved across Active on/off toggles within one encounter (combat lulls) so
+    // the replay timeline is continuous. Reset() (called per-encounter at archive) re-arms the stamp.
+    // This is deliberate, NOT a bug.
     private int _combatStartMs;
     private bool _startStamped;
 
@@ -47,7 +52,10 @@ internal sealed class ReplayCapture
         if (!_startStamped) { _combatStartMs = nowMs; _startStamped = true; }
         _accumMs += dtMs;
         if (_accumMs < _sampleIntervalMs) return;
-        _accumMs = 0f;
+        _accumMs -= _sampleIntervalMs;
+        // If a very large stall built up more than one interval of backlog, drop it — we can't
+        // retroactively sample past positions, so carry only a sub-interval remainder forward.
+        if (_accumMs >= _sampleIntervalMs) _accumMs = 0f;
         SampleAllEntities(nowMs);
     }
 
