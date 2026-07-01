@@ -31,6 +31,7 @@ internal sealed class PositionTrack
 
     public PositionTrack(int maxSamples)
     {
+        if (maxSamples < 2) throw new System.ArgumentOutOfRangeException(nameof(maxSamples), "must be >= 2");
         _maxSamples = maxSamples;
         _buf = new PositionSample[maxSamples];
         StrideMs = 500;
@@ -58,8 +59,8 @@ internal sealed class PositionTrack
     /// <summary>Returns a snapshot of all currently retained samples in order.</summary>
     public PositionSample[] Snapshot()
     {
-        var out_ = new PositionSample[_count];
-        Array.Copy(_buf, out_, _count);
-        return out_;
+        var result = new PositionSample[_count];
+        Array.Copy(_buf, result, _count);
+        return result;
     }
 }
