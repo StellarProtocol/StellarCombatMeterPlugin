@@ -64,8 +64,11 @@ public sealed partial class Plugin : IStellarPlugin
     private readonly List<DeathEntry> _deaths = new();
 
     // EntityId -> per-second time-series (dealt/healing/taken). Frozen into history at archive.
+    // Bucket count is HARD-CAPPED at TimelineMaxBuckets: the timeline coalesces (doubles bucket width)
+    // past it, so the series stays bounded no matter how long the fight runs — a 1-hour encounter just
+    // gets coarser buckets, not a bigger payload. 1800 keeps 1s resolution up to 30 min and ~2s at 1 hr.
     internal const int TimelineBucketMs = 1000;
-    internal const int TimelineMaxBuckets = 600;
+    internal const int TimelineMaxBuckets = 1800;
     private readonly Dictionary<EntityId, SourceTimeline> _timelines = new();
 
     private SourceTimeline TimelineFor(EntityId id)

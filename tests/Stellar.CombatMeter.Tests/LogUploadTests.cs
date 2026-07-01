@@ -369,6 +369,67 @@ public sealed class LogUploadTests
             System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cm-manual-upload-smoke.json"), json);
     }
 
+    // Worst-case 1-hour, 20-player fight: series coalesced to the 1800-bucket cap (2s buckets), 40 skills/player.
+    // Proves the upload blob stays bounded (~1-2MB) and schema-valid regardless of fight length — the whole point
+    // of aggregates-on-the-wire. The worker failed at ~10MB/70k-events; this must stay far below.
+    [Fact]
+    public void Stress_oneHour_twentyPlayer_blob_stays_bounded_and_valid()
+    {
+        const int players = 20, buckets = 1800, skillsPer = 40;
+        var stats  = new Dictionary<EntityId, SourceStats>();
+        var series = new Dictionary<EntityId, SourceSeries>();
+        var actors = new Dictionary<string, Actor>();
+        var deaths = new List<DeathEntry>();
+
+        long[] Ramp() { var a = new long[buckets]; for (var i = 0; i < buckets; i++) a[i] = 100_000 + i; return a; }
+
+        for (var p = 0; p < players; p++)
+        {
+            var id = new EntityId(((long)(1000 + p)) << 16);
+            var key = id.Value.ToString();
+            var bySkill = new Dictionary<int, SkillStats>();
+            for (var s = 0; s < skillsPer; s++)
+                bySkill[100_000 + s] = new SkillStats { Total = 1_000_000 + s, HealTotal = 0, Hits = 500, Crits = 200, Luckys = 10, TopHit = 50_000 };
+            var inc = new Dictionary<int, IncomingSkillStats>();
+            for (var s = 0; s < 20; s++)
+                inc[900_000 + s] = new IncomingSkillStats { Total = 500_000, Hits = 100, TopHit = 20_000 };
+            stats[id] = new SourceStats
+            {
+                TotalDamage = 700_000_000L + p, TotalHealing = p % 3 == 0 ? 300_000_000L : 0, TotalTaken = 40_000_000L,
+                Hits = 20_000, Crits = 8_000, Luckys = 300, Deaths = 3, TopHit = 1_800_000,
+                FirstHitMs = 1_000, LastHitMs = 3_600_000, BySkill = bySkill, IncomingBySkill = inc,
+            };
+            series[id] = new SourceSeries { BucketMs = 2_000, Dealt = Ramp(), Healing = Ramp(), Taken = Ramp() };
+            actors[key] = new Actor("Player" + p, "player", 1L, p == 0, 1000L + p, (p % 13) + 1, 60, 180_000, 1_800_000,
+                Array.Empty<long[]>(), Array.Empty<int[]>(), Array.Empty<int[]>(), Array.Empty<Fashion>());
+            if (p < 15) deaths.Add(new DeathEntry(1_000 + p * 1_000, id, 900_000));
+        }
+
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "6333", EnteredAtMs = 1_000, ArchivedAtMs = 3_601_000, CombatDurationMs = 3_600_000,
+            PartyType = PartyType.Raid20, LevelUuid = 663181291675451392L, PassTime = 3_600, MasterModeScore = 0, Result = "kill",
+            Stats = stats, Series = series, DeathLog = deaths,
+        };
+
+        var derived = DerivedBuilder.Build(entry, truncatedEvents: true);
+        var header = new LogHeader("cm-stress-1hr", 3_601_000L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            CombatLogAssembler.BuildEncounter(entry), new Uploader(1000L, "sig", "nonce"));
+        var log = new CombatLog(1, header, actors, (IReadOnlyList<CombatLogEvent>)Array.Empty<CombatLogEvent>(), derived);
+
+        var json = CombatLogWriter.Write(log);
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(json);
+        var outPath = System.Environment.GetEnvironmentVariable("CM_STRESS_OUT")
+                      ?? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cm-stress-1hr.json");
+        System.IO.File.WriteAllText(outPath, json);
+
+        Assert.Equal(players, derived.PerActor.Count);
+        Assert.Equal(2_000, derived.Series.BucketMs);
+        Assert.Equal(buckets, derived.Series.PerActor[(1000L << 16).ToString()].Dealt.Count);
+        // Must stay far below the ~10MB point where the ingest worker 503'd.
+        Assert.True(bytes < 4_000_000, $"1-hour blob was {bytes} bytes (expected < 4MB)");
+    }
+
     // -------------------------------------------------------------------------
     // EventsJsonWriter / CombatLogWriter round-trip correctness
     // -------------------------------------------------------------------------
