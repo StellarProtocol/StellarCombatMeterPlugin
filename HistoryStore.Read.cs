@@ -45,6 +45,10 @@ internal static partial class HistoryStore
                 case "dur":     if (!ReadLong(r, out e.CombatDurationMs)) return false; break;
                 case "party":   if (!ReadLong(r, out var pt)) return false; e.PartyType = (PartyType)(int)pt; break;
                 case "members": if (!ReadLong(r, out var mc)) return false; e.MemberCount = (int)mc; break;
+                case "luid":    if (!ReadLong(r, out e.LevelUuid)) return false; break;
+                case "pass":    if (!ReadLong(r, out var pass)) return false; e.PassTime = (int)pass; break;
+                case "mms":     if (!ReadLong(r, out var mms)) return false; e.MasterModeScore = (int)mms; break;
+                case "res":     if (!ReadString(r, out var res)) return false; e.Result = res; break;
                 case "stats":   if (!ReadStats(r, e.Stats)) return false; break;
                 case "series":  if (!ReadSeries(r, e.Series)) return false; break;
                 case "entities": if (!ReadEntities(r, e.Entities)) return false; break;

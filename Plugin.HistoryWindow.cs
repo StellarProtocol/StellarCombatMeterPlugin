@@ -155,6 +155,7 @@ public sealed partial class Plugin
     private string UploadButtonLabel()
     {
         if (_selectedSession is not { } s) return "⤓ Upload this run";
+        if (s.LevelUuid == 0) return "⚠ No run id";   // pre-update archive: identity wasn't persisted
         return UploadStateFor(s) switch
         {
             UploadPhase.InFlight => "Uploading…",
@@ -165,7 +166,11 @@ public sealed partial class Plugin
     }
 
     private string UploadStatusText()
-        => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? u : "";
+    {
+        if (_selectedSession is not { } s) return "";
+        if (s.LevelUuid == 0) return "Archived before run-id was saved — re-run the fight to upload it.";
+        return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? u : "";
+    }
 
     private void UploadSelectedClicked()
     {

@@ -18,9 +18,11 @@ namespace Stellar.CombatMeter;
 /// </summary>
 internal static partial class HistoryStore
 {
-    // v1 = stats + series. v2 = + "entities" (per-player frozen snapshot, issue #5). The reader accepts v1 || v2
-    // (v1 entries load with an empty Entities map → backward compatible), so writing v2 never strands old files.
-    internal const int FormatVersion = 2;
+    // v1 = stats + series. v2 = + "entities" (per-player frozen snapshot, issue #5). v3 = + run identity
+    // (luid/pass/mms/res) so an archived run keeps the levelUuid a (deferred/manual) upload needs. The reader
+    // accepts v1..v3 — older entries just lack the newer keys and load with defaults (LevelUuid 0, etc.), so
+    // writing v3 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
+    internal const int FormatVersion = 3;
     internal const int MinSupportedVersion = 1;
 
     // ----- serialize -----
@@ -36,6 +38,10 @@ internal static partial class HistoryStore
         w.Name("dur").Value(e.CombatDurationMs);
         w.Name("party").Value((int)e.PartyType);
         w.Name("members").Value(e.MemberCount);
+        w.Name("luid").Value(e.LevelUuid);          // run identity — needed for (deferred) upload
+        w.Name("pass").Value(e.PassTime);
+        w.Name("mms").Value(e.MasterModeScore);
+        w.Name("res").Value(e.Result);
         w.Name("stats"); WriteStats(w, e.Stats);
         w.Name("series"); WriteSeries(w, e.Series);
         w.Name("entities"); WriteEntities(w, e.Entities);

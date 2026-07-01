@@ -124,6 +124,12 @@ public sealed partial class Plugin
     internal void UploadHistoryEntry(EncounterHistoryEntry entry)
     {
         if (UploadStateFor(entry) == UploadPhase.InFlight) return;   // debounce double-click
+        if (entry.LevelUuid == 0)   // pre-v3 archive (identity not persisted) — /run/0 would collide; refuse
+        {
+            _uploadStatus.Set(entry, UploadPhase.Failed);
+            _services.Log.Warning("[CombatMeter.SP1] Cannot upload: run has no levelUuid (archived before run-identity was persisted). Re-run the fight to upload it.");
+            return;
+        }
         AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true);
     }
 
