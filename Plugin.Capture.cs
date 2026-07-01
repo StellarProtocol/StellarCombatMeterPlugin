@@ -30,6 +30,10 @@ public sealed partial class Plugin
         // Damage taken: accrue onto the TARGET's stats (so Taken-mode can rank/aggregate victims).
         if (!d.IsHeal && d.TargetId.IsPlayer) CaptureTaken(d);
 
+        // Replay: note both source and target BEFORE the player-only early-out so boss/add target ids
+        // (e.g. a mob being hit by a player) also enter the entity set for position tracking.
+        NoteReplayEntity(d.SourceId, d.TargetId);
+
         // Per-source stats/timeline: PLAYERS ONLY — mirror the _agg guard above. Mob sources are never
         // shown (live rows come from _agg, which discards non-players; History/SkillBreakdown are
         // player-focused), so a SourceStats (2 dicts) + SourceTimeline (3 dicts) per mob was pure dead

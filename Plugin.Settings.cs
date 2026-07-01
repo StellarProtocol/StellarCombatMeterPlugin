@@ -60,6 +60,7 @@ public sealed partial class Plugin
             new SeparatorElement(),
             new TextElement(() => "Uploads", Emphasis: true),
             ToggleRow("Auto-upload runs", () => AutoUpload, v => AutoUpload = v),
+            ToggleRow("Upload replay position track (dungeon/raid)", () => UploadReplay, v => UploadReplay = v),
         }, Gap: 4f);
 
     private HudElement ToggleGroup(MeterElementToggles t)

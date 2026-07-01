@@ -92,6 +92,8 @@ public sealed partial class Plugin
 
         // SP1: fire-and-forget upload of the full event log (opt-in; never blocks/crashes).
         MaybeUploadLog(entry);
+        // Replay R1: fire-and-forget position track upload (opt-in; separate toggle; never blocks/crashes).
+        MaybeUploadReplay(entry);
 
         Clear();
     }

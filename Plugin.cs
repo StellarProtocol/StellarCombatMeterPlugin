@@ -117,6 +117,7 @@ public sealed partial class Plugin : IStellarPlugin
         _filter   = (FilterMode) _prefs.Get("scope",  (int)FilterMode.Party);
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
         InitLogUpload();   // SP1: cache the auto-upload bool off the per-event hot path
+        InitReplay();      // Replay R1: load pref + create capture instance
 
         // Encounter history is persisted in its own config section (string[] of per-entry JSON). Load it before
         // the windows are built so the History window has its sessions on first show.
@@ -258,6 +259,7 @@ public sealed partial class Plugin : IStellarPlugin
         TickReadyCheckCooldown(deltaTime);
         TickReadyCheckResult(deltaTime);
         TickReadyCheck(deltaTime);
+        TickReplayCapture(deltaTime);
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
@@ -305,6 +307,7 @@ public sealed partial class Plugin : IStellarPlugin
         _combatStartMs = 0;
         _lastDamageMs  = 0;
         _lastRunId     = 0;
+        ResetReplay();
     }
 
     private double EncounterElapsedSeconds()
