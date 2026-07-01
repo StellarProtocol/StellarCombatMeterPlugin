@@ -16,17 +16,33 @@ namespace Stellar.CombatMeter.Replay;
 internal static class PositionJsonWriter
 {
     /// <summary>
-    /// Writes the full document including <c>sig</c> and <c>nonce</c> fields (when present).
+    /// Writes the full upload document containing all header fields required by the worker schema
+    /// (<c>logId, levelUuid, localUid, startMs, endMs, nonce, sig</c>) followed by the body
+    /// fields (<c>hz, mapId, origin, scale, tracks, meta</c>).
+    /// Header fields are always emitted; <c>nonce</c> and <c>sig</c> emit <c>""</c> when null.
     /// </summary>
     internal static string Write(PositionUploadDoc doc)
     {
         var w = new PosWriter();
         w.BeginObject();
+        WriteHeaderFields(w, doc);
         WriteBodyFields(w, doc);
-        if (doc.Sig != null)   { w.Name("sig");   w.Str(doc.Sig); }
-        if (doc.Nonce != null) { w.Name("nonce"); w.Str(doc.Nonce); }
         w.EndObject();
         return w.ToString();
+    }
+
+    // ── header fields required by the worker schema ───────────────────────────
+
+    private static void WriteHeaderFields(PosWriter w, PositionUploadDoc doc)
+    {
+        w.Name("logId");     w.Str(doc.LogId);
+        w.Name("levelUuid"); w.Long(doc.LevelUuid);
+        w.Name("localUid");  w.Long(doc.LocalUid);
+        w.Name("startMs");   w.Long(doc.StartMs);
+        w.Name("endMs");     w.Long(doc.EndMs);
+        // nonce and sig are required by the worker schema; emit "" when absent.
+        w.Name("nonce"); w.Str(doc.Nonce ?? "");
+        w.Name("sig");   w.Str(doc.Sig   ?? "");
     }
 
     /// <summary>
@@ -43,13 +59,17 @@ internal static class PositionJsonWriter
     }
 
     // ── body fields in the required JS key order ──────────────────────────────
+    // IMPORTANT: key order must match JS JSON.stringify({hz,mapId,origin,scale,tracks,meta}).
 
     private static void WriteBodyFields(PosWriter w, PositionUploadDoc doc)
     {
         w.Name("hz");     w.Int(doc.Hz);
         w.Name("mapId");  w.Int(doc.MapId);
         w.Name("origin"); WriteOrigin(w, doc.Origin);
-        w.Name("scale");  w.ScalarFloat(doc.Scale);
+        // R1 grid resolution is the fixed 0.1 m; emit the canonical token to avoid
+        // runtime-dependent float formatting (float.ToString("R") is not shortest-form
+        // guaranteed under IL2CPP/Mono and could yield "0.100000001490116119").
+        w.Name("scale");  w.RawToken("0.1");
         w.Name("tracks"); WriteTracks(w, doc.Tracks);
         w.Name("meta");   WriteMeta(w, doc.Meta);
     }
@@ -65,6 +85,9 @@ internal static class PositionJsonWriter
 
     private static void WriteTracks(PosWriter w, IReadOnlyDictionary<string, PositionTrackDto> tracks)
     {
+        // Entity-key emission order relies on the dictionary preserving numeric-ascending
+        // insertion order set by PositionTrackAssembler. Do NOT switch to SortedDictionary:
+        // it sorts keys LEXICOGRAPHICALLY ("10" before "2"), silently breaking worker parity.
         w.BeginObject();
         foreach (var kv in tracks)
         {
@@ -94,6 +117,9 @@ internal static class PositionJsonWriter
 
     private static void WriteMeta(PosWriter w, IReadOnlyDictionary<string, PositionMetaDto> meta)
     {
+        // Entity-key emission order relies on the dictionary preserving numeric-ascending
+        // insertion order set by PositionTrackAssembler. Do NOT switch to SortedDictionary:
+        // it sorts keys LEXICOGRAPHICALLY ("10" before "2"), silently breaking worker parity.
         w.BeginObject();
         foreach (var kv in meta)
         {
@@ -125,9 +151,12 @@ internal static class PositionJsonWriter
         internal PosWriter BeginArray()  { Pre(); _sb.Append('['); _needComma = false; return this; }
         internal PosWriter EndArray()    { _sb.Append(']'); _needComma = true; return this; }
 
-        internal PosWriter Name(string key) { Pre(); WriteString(key); _sb.Append(':'); _needComma = false; return this; }
-        internal PosWriter Int(int v)       { Pre(); _sb.Append(v.ToString(CultureInfo.InvariantCulture)); _needComma = true; return this; }
-        internal PosWriter Str(string v)    { Pre(); WriteString(v); _needComma = true; return this; }
+        internal PosWriter Name(string key)   { Pre(); WriteString(key); _sb.Append(':'); _needComma = false; return this; }
+        internal PosWriter Int(int v)         { Pre(); _sb.Append(v.ToString(CultureInfo.InvariantCulture)); _needComma = true; return this; }
+        internal PosWriter Long(long v)       { Pre(); _sb.Append(v.ToString(CultureInfo.InvariantCulture)); _needComma = true; return this; }
+        internal PosWriter Str(string v)      { Pre(); WriteString(v); _needComma = true; return this; }
+        /// <summary>Emits a pre-formatted numeric token verbatim (no quoting, no escaping).</summary>
+        internal PosWriter RawToken(string t) { Pre(); _sb.Append(t); _needComma = true; return this; }
 
         /// <summary>
         /// Emits a float whose value is a whole number (no fractional part) as a plain integer.
@@ -137,18 +166,6 @@ internal static class PositionJsonWriter
         {
             Pre();
             _sb.Append(((int)v).ToString(CultureInfo.InvariantCulture));
-            _needComma = true;
-            return this;
-        }
-
-        /// <summary>
-        /// Emits a float using round-trip format, matching JS number serialization for values
-        /// like 0.1 that have a clean decimal representation.
-        /// </summary>
-        internal PosWriter ScalarFloat(float v)
-        {
-            Pre();
-            _sb.Append(v.ToString("R", CultureInfo.InvariantCulture));
             _needComma = true;
             return this;
         }

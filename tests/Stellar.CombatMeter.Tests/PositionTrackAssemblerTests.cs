@@ -184,4 +184,82 @@ public class PositionTrackAssemblerTests
         var idx200 = body.IndexOf("\"200\"", System.StringComparison.Ordinal);
         Assert.True(idx10 < idx50 && idx50 < idx200, $"Expected 10 < 50 < 200 in: {body}");
     }
+
+    // ── Test 6 (C1): scale is emitted as exact "0.1" token ───────────────────
+
+    [Fact]
+    public void WriteBodyOnly_ScaleEmittedAsExactToken()
+    {
+        var tracks = new Dictionary<EntityId, PositionTrack>
+        {
+            [new EntityId(1)] = MakeTrack((0, 0f, 0f, 0f, 0f))
+        };
+
+        var doc = PositionTrackAssembler.Assemble(
+            tracks: tracks,
+            hz: 2,
+            mapId: 1,
+            origin: (0f, 0f),
+            scale: 0.1f);
+
+        var body = PositionJsonWriter.WriteBodyOnly(doc);
+        // Must contain the exact canonical token — not "0.1000000015" or any other
+        // runtime-dependent float representation.
+        Assert.Contains("\"scale\":0.1,", body);
+    }
+
+    // ── Test 7 (I1): Write() full-doc includes all worker-schema header fields ─
+
+    [Fact]
+    public void Write_FullDoc_ContainsAllHeaderFields()
+    {
+        var tracks = new Dictionary<EntityId, PositionTrack>
+        {
+            [new EntityId(1)] = MakeTrack((0, 0f, 0f, 0f, 0f))
+        };
+
+        var assembled = PositionTrackAssembler.Assemble(
+            tracks: tracks,
+            hz: 2,
+            mapId: 1,
+            origin: (0f, 0f),
+            scale: 0.1f);
+
+        // Simulate the upload caller filling header fields via with-expression.
+        var doc = assembled with
+        {
+            LogId    = "log-abc-123",
+            LevelUuid = 9876543210L,
+            LocalUid  = 1111111111L,
+            StartMs   = 1000L,
+            EndMs     = 5000L,
+            Nonce     = "nonce-xyz",
+            Sig       = "sig-aaa",
+        };
+
+        var full = PositionJsonWriter.Write(doc);
+
+        // All worker-schema header fields must appear.
+        Assert.Contains("\"logId\":\"log-abc-123\"",   full);
+        Assert.Contains("\"levelUuid\":9876543210",    full);
+        Assert.Contains("\"localUid\":1111111111",     full);
+        Assert.Contains("\"startMs\":1000",            full);
+        Assert.Contains("\"endMs\":5000",              full);
+        Assert.Contains("\"nonce\":\"nonce-xyz\"",     full);
+        Assert.Contains("\"sig\":\"sig-aaa\"",         full);
+
+        // Body fields must also be present.
+        Assert.Contains("\"hz\":2",    full);
+        Assert.Contains("\"scale\":0.1", full);
+        Assert.Contains("\"tracks\":", full);
+        Assert.Contains("\"meta\":",   full);
+
+        // WriteBodyOnly must NOT include header fields (signed body is header-free).
+        var body = PositionJsonWriter.WriteBodyOnly(doc);
+        Assert.DoesNotContain("logId",    body);
+        Assert.DoesNotContain("levelUuid", body);
+        Assert.DoesNotContain("localUid", body);
+        Assert.DoesNotContain("startMs",  body);
+        Assert.DoesNotContain("endMs",    body);
+    }
 }
