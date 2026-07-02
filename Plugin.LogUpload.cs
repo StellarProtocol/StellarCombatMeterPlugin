@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1: Full combat-event capture + StellarLogs upload integration.
 //
 // Feature boundary:
@@ -108,15 +107,7 @@ public sealed partial class Plugin
     {
         if (!AutoUpload) { _logBuffer.Clear(); return; }
 
-        var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
-        var events = _logBuffer.Flush();         // also clears the buffer
-        if (events.Count == 0)
-        {
-            _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
-            return;
-        }
-
-        AssembleAndUpload(entry, events, truncatedEvents: truncated);
+        AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true);
     }
 
     /// <summary>Manual per-run upload from history. Uses the entry's stored aggregates; no raw events
@@ -130,24 +121,40 @@ public sealed partial class Plugin
             _services.Log.Warning("[CombatMeter.SP1] Cannot upload: run has no levelUuid (archived before run-identity was persisted). Re-run the fight to upload it.");
             return;
         }
-        AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true);
+        AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true, flushBuffer: false);
     }
 
     // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
     // auto, empty for manual) and the truncation flag. Never throws into the (main-thread) caller.
-    private void AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent> events, bool truncatedEvents)
+    // flushBuffer=true (auto path) flushes _logBuffer INSIDE this try so a throw from the conversion
+    // step can never escape uncaught; flushBuffer=false (manual path) uses the events/truncatedEvents
+    // passed in as-is.
+    private void AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents, bool flushBuffer)
     {
         try
         {
+            if (flushBuffer)
+            {
+                truncatedEvents = _logBuffer.Truncated;   // capture before Flush() clears it
+                events = _logBuffer.Flush();               // also clears the buffer
+                if (_logBuffer.SkippedUnknownEvents > 0)
+                    _services.Log.Warning($"[CombatMeter.SP1] Skipped {_logBuffer.SkippedUnknownEvents} unrecognized combat event(s) during log flush.");
+                if (events.Count == 0)
+                {
+                    _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
+                    return;
+                }
+            }
+
             // Pass the capture-time boss config id so the assembler doesn't re-resolve from
             // wiped entity caches (ResetEntities fires before archive on scene change).
-            var log = LogAssembler.Assemble(entry, events, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0);
+            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0);
             var url = "https://stellar-logs-web.boshido.workers.dev/run/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-                $"({events.Count} events, {entry.Entities.Count} actors).");
+                $"({events!.Count} events, {entry.Entities.Count} actors).");
 
             LogUploader.UploadFireAndForget(log, (ok, status, err) =>
             {

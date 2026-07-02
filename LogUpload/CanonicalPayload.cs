@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1: Builds the canonical signing payload matching the verify.ts canonicalPayload function.
 
 using System;

@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1: Minimal JSON serializer for the events array only (used by CanonicalPayload).
 // Mirrors exactly the event-array output of CombatLogWriter so SHA-256 hashes match.
 

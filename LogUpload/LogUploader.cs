@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1: Fire-and-forget HTTP upload of a gzip-compressed CombatLog JSON to StellarLogs.
 
 using System;

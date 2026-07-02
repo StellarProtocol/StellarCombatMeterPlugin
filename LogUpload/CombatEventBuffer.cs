@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1: Full combat-event capture buffer. Holds the raw CombatEvent stream for a single run,
 // then converts to the vendored StellarLogs wire format on flush.
 
@@ -46,6 +45,12 @@ internal sealed class CombatEventBuffer
 
     internal void Clear() { _dmg.Clear(); _buff.Clear(); Truncated = false; }
 
+    /// <summary>Count of events skipped during the most recent <see cref="Flush"/> because their
+    /// <see cref="CombatEvent"/> case had no wire-format mapping (forward-compat safety net for a
+    /// future framework event type — never throws). Callers should log a one-line warning when
+    /// this is nonzero; this class has no logger of its own.</summary>
+    internal int SkippedUnknownEvents { get; private set; }
+
     /// <summary>
     /// Returns the captured events as StellarLogs DTOs (chronologically merged) and resets the buffer.
     /// Entity ids are formatted as their raw long value (same as the rest of the plugin).
@@ -57,13 +62,19 @@ internal sealed class CombatEventBuffer
         _dmg.CopyTo(merged); _buff.CopyTo(merged);
         merged.Sort((a, b) => a.TimestampMs.CompareTo(b.TimestampMs));
         var result = new List<CombatLogEvent>(merged.Count);
+        var skipped = 0;
         foreach (var ev in merged)
-            result.Add(Convert(ev));
+        {
+            var converted = Convert(ev);
+            if (converted is null) { skipped++; continue; }   // unknown event type — skip, never throw
+            result.Add(converted);
+        }
         Clear();
+        SkippedUnknownEvents = skipped;   // set AFTER Clear() so callers can read it post-Flush()
         return result;
     }
 
-    private static CombatLogEvent Convert(CombatEvent ev)
+    private static CombatLogEvent? Convert(CombatEvent ev)
     {
         return ev switch
         {
@@ -107,7 +118,7 @@ internal sealed class CombatEventBuffer
                 b.Layer,
                 b.DurationMs),
 
-            _ => throw new InvalidOperationException($"Unexpected CombatEvent type: {ev.GetType().Name}"),
+            _ => null,   // unrecognized CombatEvent case — skip (never crash the game); caller logs the count
         };
     }
 

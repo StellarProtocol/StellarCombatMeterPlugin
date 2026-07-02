@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1: ECDSA P-256 signing of the canonical upload payload.
 // Uses System.Security.Cryptography (available in .NET 6 / netstandard2.1).
 

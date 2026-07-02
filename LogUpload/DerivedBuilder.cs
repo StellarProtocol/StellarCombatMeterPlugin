@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1 Part B: builds the unsigned `derived` aggregate block from the plugin's UNCAPPED
 // per-actor stats + per-second series + complete death list. These numbers are authoritative
 // (the event ring is only a forensic detail track), so the web run page renders from here.

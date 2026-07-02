@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // SP1: Assembles the full CombatLog DTO from the captured encounter state.
 // Encounter metadata stubs are clearly marked TODO(SP1) where game API access is needed.
 

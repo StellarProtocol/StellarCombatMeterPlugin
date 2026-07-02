@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // Builds the canonical signing payload matching the worker's canonicalPositionsPayload function.
 
 using System.Globalization;

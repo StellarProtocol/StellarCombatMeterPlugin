@@ -1,4 +1,4 @@
-// UNVERIFIED — tests for the SP1 log-upload components (CombatEventBuffer, EventsJsonWriter,
+// Tests for the SP1 log-upload components (CombatEventBuffer, EventsJsonWriter,
 // CombatLogWriter, CanonicalPayload). No IL2CPP or IPluginServices mock needed for these pure-data paths.
 
 using System;

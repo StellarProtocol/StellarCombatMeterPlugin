@@ -1,4 +1,3 @@
-// UNVERIFIED — this code has never been executed in-game.
 // Fire-and-forget HTTP upload of a gzip-compressed PositionUploadDoc JSON to the replay worker.
 
 using System;

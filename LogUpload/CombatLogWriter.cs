@@ -1,7 +1,6 @@
 // VENDORED from services/stellar-logs/dotnet/Stellar.LogFormat/ — DO NOT edit upstream here.
 // Namespace adjusted to Stellar.CombatMeter.LogUpload for plugin-local use.
 // Hand-rolled, reflection-free (IL2CPP-safe) JSON writer.
-// UNVERIFIED — this code has never been executed in-game.
 
 using System.Collections.Generic;
 using System.Globalization;
