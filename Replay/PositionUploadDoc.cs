@@ -15,6 +15,11 @@ namespace Stellar.CombatMeter.Replay;
 ///                  StartMs = ..., EndMs = ..., Nonce = ..., Sig = ... }
 /// </code>
 /// </para>
+/// <para>
+/// Boss fields: <see cref="BossEntityId"/> is non-empty when a boss entity was
+/// identified (entity id as decimal string). <see cref="BossHp"/> is non-null
+/// when boss vitals were sampled; absent in bossless runs.
+/// </para>
 /// </summary>
 internal sealed record PositionUploadDoc(
     int Hz,
@@ -29,7 +34,20 @@ internal sealed record PositionUploadDoc(
     long LevelUuid = 0,
     long LocalUid = 0,
     long StartMs = 0,
-    long EndMs = 0);
+    long EndMs = 0,
+    string BossEntityId = "",
+    BossHpTrack? BossHp = null);
+
+/// <summary>
+/// Boss HP% timeline sampled at the replay capture cadence (2 Hz).
+/// <para>
+/// <see cref="Ms0"/> is the encounter-relative timestamp (ms) of the first sample,
+/// matching the relative timestamps used by <see cref="PositionTrackDto.Ms0"/>.
+/// <see cref="Pct"/> is HP% per sample: <c>round(100 * hp / maxHp)</c>, clamped 0..100.
+/// Only emitted in the upload JSON when a boss exists.
+/// </para>
+/// </summary>
+internal sealed record BossHpTrack(long Ms0, IReadOnlyList<int> Pct);
 
 /// <summary>
 /// Per-entity delta-encoded track. Arrays are delta-encoded; ms0 is absolute start time.

@@ -59,7 +59,7 @@ internal static class PositionJsonWriter
     }
 
     // ── body fields in the required JS key order ──────────────────────────────
-    // IMPORTANT: key order must match JS JSON.stringify({hz,mapId,origin,scale,tracks,meta}).
+    // IMPORTANT: key order must match JS JSON.stringify({hz,mapId,origin,scale,tracks,meta,...}).
 
     private static void WriteBodyFields(PosWriter w, PositionUploadDoc doc)
     {
@@ -72,6 +72,13 @@ internal static class PositionJsonWriter
         w.Name("scale");  w.RawToken("0.1");
         w.Name("tracks"); WriteTracks(w, doc.Tracks);
         w.Name("meta");   WriteMeta(w, doc.Meta);
+        // Boss fields — emitted only when a boss was identified.
+        if (!string.IsNullOrEmpty(doc.BossEntityId))
+        {
+            w.Name("bossEntityId"); w.Str(doc.BossEntityId);
+            if (doc.BossHp != null)
+                WriteBossHp(w, doc.BossHp);
+        }
     }
 
     // origin: [X,Z] — emit as integers when whole numbers (matches JS integer literals).
@@ -136,6 +143,22 @@ internal static class PositionJsonWriter
         w.Name("name");         w.Str(dto.Name);
         w.Name("professionId"); w.Int(dto.ProfessionId);
         w.EndObject();
+    }
+
+    private static void WriteBossHp(PosWriter w, BossHpTrack track)
+    {
+        w.Name("bossHp");
+        w.BeginObject();
+        w.Name("ms0"); w.Long(track.Ms0);
+        w.Name("pct"); WriteIntArray(w, track.Pct);
+        w.EndObject();
+    }
+
+    private static void WriteIntArray(PosWriter w, IReadOnlyList<int> arr)
+    {
+        w.BeginArray();
+        foreach (var n in arr) w.Int(n);
+        w.EndArray();
     }
 
     // ── minimal JSON writer ───────────────────────────────────────────────────

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Security.Cryptography;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Domain.GameData;
 using Stellar.CombatMeter.LogUpload;
 using Stellar.CombatMeter.Replay;
 
@@ -34,6 +36,13 @@ public sealed partial class Plugin
     private ReplayCapture? _replay;
     private bool _uploadReplay = ReplayDefaults.UploadReplayDefault;
 
+    // Boss HP timeline — sampled in parallel with the position capture cadence.
+    private EntityId  _bossEntityId;          // set when boss is identified at assembly time; zero = none
+    private float     _bossHpAccumMs;         // mirrors ReplayCapture's accumulator for same-cadence sampling
+    private bool      _bossHpStartStamped;
+    private int       _bossHpMs0;
+    private readonly List<int> _bossHpPct = new();   // pct per sample: round(100*hp/maxHp), clamped 0..100
+
     /// <summary>
     /// Capture + upload the replay position track for dungeon/raid runs.
     /// Default ON; separate from AutoUpload.
@@ -65,7 +74,10 @@ public sealed partial class Plugin
         if (_replay is null || !_uploadReplay) return;
         _replay.Active = _combatActive && IsInstancedRun();
         if (!_replay.Active) return;
-        _replay.Tick((int)_services.CombatSnapshot.ServerNowMs, deltaTimeSec * 1000f);
+        var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
+        var dtMs  = deltaTimeSec * 1000f;
+        _replay.Tick(nowMs, dtMs);
+        TickBossHp(nowMs, dtMs);
     }
 
     // Called from OnCombatEvent BEFORE the player-only early-out so boss/add targets enter the set.
@@ -78,7 +90,77 @@ public sealed partial class Plugin
 
     private bool IsInstancedRun() => _services.Dungeon.CurrentRunId != 0;
 
-    private void ResetReplay() => _replay?.Reset();
+    private void ResetReplay()
+    {
+        _replay?.Reset();
+        _bossEntityId      = default;
+        _bossHpAccumMs     = 0f;
+        _bossHpStartStamped = false;
+        _bossHpMs0         = 0;
+        _bossHpPct.Clear();
+    }
+
+    // -----------------------------------------------------------------------
+    // Boss HP timeline sampling (parallel cadence with ReplayCapture)
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Samples the boss entity's HP% once per 500 ms, aligned to the same cadence as
+    /// <see cref="ReplayCapture.Tick"/> — both receive the same nowMs/dtMs per frame.
+    /// Only runs when <see cref="_bossEntityId"/> is non-zero (set after first Tick once boss
+    /// is identified from the captured entity set); the boss is identified lazily on first
+    /// sample opportunity to allow the entity set to fill during the opening seconds.
+    /// </summary>
+    private void TickBossHp(int nowMs, float dtMs)
+    {
+        // Lazy boss identification: resolve once when the entity set is non-empty.
+        if (_bossEntityId.Value == 0 && _replay is not null && _replay.Tracks.Count > 0)
+            _bossEntityId = ResolveBossEntity();
+
+        if (_bossEntityId.Value == 0) return;
+
+        _bossHpAccumMs += dtMs;
+        if (_bossHpAccumMs < ReplaySampleIntervalMs) return;
+        _bossHpAccumMs -= ReplaySampleIntervalMs;
+        if (_bossHpAccumMs >= ReplaySampleIntervalMs) _bossHpAccumMs = 0f;
+
+        if (!_bossHpStartStamped)
+        {
+            // Align ms0 to a replay-relative timestamp (matches ReplayCapture's _combatStartMs logic).
+            _bossHpMs0 = _replay is not null
+                ? nowMs - _replay.CombatStartMs
+                : 0;
+            if (_bossHpMs0 < 0) _bossHpMs0 = 0;
+            _bossHpStartStamped = true;
+        }
+
+        var vitals = _services.CombatLookup.GetVitals(_bossEntityId);
+        if (!vitals.IsKnown || vitals.MaxHp <= 0) return;
+
+        var pct = (int)Math.Round(100.0 * vitals.Hp / vitals.MaxHp);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        _bossHpPct.Add(pct);
+    }
+
+    /// <summary>
+    /// Resolves the boss entity from the current captured track set.
+    /// Returns <c>default</c> (zero) when no boss entity is found.
+    /// </summary>
+    private EntityId ResolveBossEntity()
+    {
+        var candidates = new List<(long id, bool isBoss, long maxHp)>(_replay!.Tracks.Count);
+        foreach (var id in _replay.Tracks.Keys)
+        {
+            if (id.IsPlayer) continue;
+            var info   = _services.GameData.World.GetMonsterByEntity(id);
+            var isBoss = info.HasValue && info.Value.IsBoss;
+            var maxHp  = _services.CombatLookup.GetVitals(id).MaxHp;
+            candidates.Add((id.Value, isBoss, maxHp));
+        }
+        var bossId = BossPicker.Pick(candidates);
+        return bossId.HasValue ? new EntityId(bossId.Value) : default;
+    }
 
     // -----------------------------------------------------------------------
     // Archive upload
@@ -89,11 +171,15 @@ public sealed partial class Plugin
     {
         try
         {
-            if (!_uploadReplay || _replay is null) { _replay?.Reset(); return; }
-            if (entry.LevelUuid == 0 || _replay.TotalSamples == 0) { _replay.Reset(); return; }
+            if (!_uploadReplay || _replay is null) { ResetReplay(); return; }
+            if (entry.LevelUuid == 0 || _replay.TotalSamples == 0) { ResetReplay(); return; }
 
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
+
+            // Resolve boss info for meta + upload fields (snapshot before Reset).
+            var (bossEntityIdStr, bossMonsterInfo) = ResolveBossUploadFields();
+            var bossHpTrack = BuildBossHpTrack();
 
             var doc = PositionTrackAssembler.Assemble(
                 tracks: _replay.Tracks,
@@ -101,21 +187,23 @@ public sealed partial class Plugin
                 mapId:  encounter.MapId,
                 origin: (0f, 0f),
                 scale:  0.1f,
-                meta:   BuildReplayMeta());
+                meta:   BuildReplayMeta(bossEntityIdStr, bossMonsterInfo));
 
             var nonce = GenerateReplayNonce();
             doc = doc with
             {
-                LogId     = GenerateReplayLogId(),
-                LevelUuid = entry.LevelUuid,
-                LocalUid  = localUid,
-                StartMs   = encounter.StartMs,
-                EndMs     = encounter.EndMs,
-                Nonce     = nonce,
+                LogId        = GenerateReplayLogId(),
+                LevelUuid    = entry.LevelUuid,
+                LocalUid     = localUid,
+                StartMs      = encounter.StartMs,
+                EndMs        = encounter.EndMs,
+                Nonce        = nonce,
+                BossEntityId = bossEntityIdStr,
+                BossHp       = bossHpTrack,
             };
             doc = doc with { Sig = SignReplay(doc) };
 
-            _replay.Reset();
+            ResetReplay();
 
             PositionUploader.UploadFireAndForget(doc, (ok, status, err) =>
             {
@@ -127,20 +215,65 @@ public sealed partial class Plugin
         }
         catch (Exception ex)
         {
-            _replay?.Reset();
+            ResetReplay();
             _services.Log.Warning($"[CombatMeter.Replay] threw: {ex.Message}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Boss upload-field assembly helpers
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Resolves the boss entity and its MonsterInfo from the captured track set.
+    /// Returns (empty, null) when no boss is present.
+    /// </summary>
+    private (string bossEntityIdStr, MonsterInfo? info) ResolveBossUploadFields()
+    {
+        if (_replay is null) return ("", null);
+
+        var candidates = new List<(long id, bool isBoss, long maxHp)>(_replay.Tracks.Count);
+        foreach (var id in _replay.Tracks.Keys)
+        {
+            if (id.IsPlayer) continue;
+            var info   = _services.GameData.World.GetMonsterByEntity(id);
+            var isBoss = info.HasValue && info.Value.IsBoss;
+            var maxHp  = _services.CombatLookup.GetVitals(id).MaxHp;
+            candidates.Add((id.Value, isBoss, maxHp));
+        }
+
+        var bossId = BossPicker.Pick(candidates);
+        if (!bossId.HasValue) return ("", null);
+
+        var bossEntityId  = new EntityId(bossId.Value);
+        var bossInfo      = _services.GameData.World.GetMonsterByEntity(bossEntityId);
+        var bossIdStr     = bossId.Value.ToString(CultureInfo.InvariantCulture);
+        return (bossIdStr, bossInfo);
+    }
+
+    private BossHpTrack? BuildBossHpTrack()
+    {
+        if (_bossHpPct.Count == 0) return null;
+        return new BossHpTrack(_bossHpMs0, _bossHpPct.ToArray());
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    private Dictionary<EntityId, PositionMetaDto> BuildReplayMeta()
+    private Dictionary<EntityId, PositionMetaDto> BuildReplayMeta(
+        string bossEntityIdStr, MonsterInfo? bossMonsterInfo)
     {
         var meta = new Dictionary<EntityId, PositionMetaDto>(_replay!.Tracks.Count);
         foreach (var id in _replay.Tracks.Keys)
-            meta[id] = new PositionMetaDto(ReplayKindFor(id), ReplayNameFor(id) ?? "", ReplayProfessionFor(id));
+        {
+            var monsterInfo = id.IsPlayer
+                ? null
+                : _services.GameData.World.GetMonsterByEntity(id);
+            var kind = ReplayKindFor(id, bossEntityIdStr);
+            var name = ReplayNameFor(id, monsterInfo);
+            meta[id] = new PositionMetaDto(kind, name ?? "", ReplayProfessionFor(id));
+        }
         return meta;
     }
 
@@ -156,16 +289,22 @@ public sealed partial class Plugin
         catch (Exception ex) { return $"sig-error:{ex.Message}"; }
     }
 
-    private string ReplayKindFor(EntityId id)
-        => id == _services.CombatSnapshot.LocalEntityId || id.IsPlayer ? "player" : "add";
+    private string ReplayKindFor(EntityId id, string bossEntityIdStr)
+    {
+        if (id == _services.CombatSnapshot.LocalEntityId || id.IsPlayer) return "player";
+        if (!string.IsNullOrEmpty(bossEntityIdStr) &&
+            id.Value.ToString(CultureInfo.InvariantCulture) == bossEntityIdStr) return "boss";
+        return "add";
+    }
 
-    private string? ReplayNameFor(EntityId id)
+    private string? ReplayNameFor(EntityId id, MonsterInfo? monsterInfo)
         => EntityLabel.Resolve(
             id,
             _services.CombatSnapshot.LocalEntityId,
             _services.PlayerState,
             _services.CombatLookup,
-            _services.PartyRoster.Members);
+            _services.PartyRoster.Members,
+            monsterInfo);
 
     private int ReplayProfessionFor(EntityId id)
         => id.IsPlayer ? _services.CombatSpec.GetSubProfession(id) : 0;

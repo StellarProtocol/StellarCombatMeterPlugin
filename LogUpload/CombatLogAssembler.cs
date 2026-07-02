@@ -49,7 +49,8 @@ internal sealed class CombatLogAssembler
 
         // Encounter identity comes entirely from the entry (snapshotted at archive),
         // so a deferred manual upload stamps the run's OWN levelUuid/settlement.
-        var encounter = BuildEncounter(entry);
+        var bossConfigId = ResolveBossConfigId(entry);
+        var encounter    = BuildEncounter(entry, bossConfigId);
 
         // --- Uploader ---
         var localUid = _services.CombatSnapshot.LocalEntityId.Value;
@@ -103,7 +104,13 @@ internal sealed class CombatLogAssembler
     /// snapshotted onto the entry at archive time, so re-uploading an old run later cannot leak
     /// the currently-live run's identity onto it.
     /// </summary>
-    internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry)
+    /// <param name="entry">The archived encounter history entry.</param>
+    /// <param name="bossConfigId">
+    /// Monster-table config id of the identified boss entity, or 0 when no boss was found.
+    /// Resolved from <c>IGameDataWorld.GetMonsterByEntity</c> at assemble time via
+    /// <see cref="ResolveBossConfigId"/>.
+    /// </param>
+    internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry, int bossConfigId = 0)
     {
         var sceneName = entry.SceneName ?? "";
         if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
@@ -123,7 +130,7 @@ internal sealed class CombatLogAssembler
             MapId:           sceneMapId,
             LineId:          0,                    // TODO(enrich-later): lineId from server scene info
             Name:            null,                 // TODO(enrich-later): GetScene(sceneMapId)?.Name
-            BossId:          0,                    // TODO(enrich-later): from SceneData row
+            BossId:          bossConfigId,
             BossName:        null,
             Difficulty:      null,
             MasterModeScore: entry.MasterModeScore,
@@ -132,6 +139,30 @@ internal sealed class CombatLogAssembler
             EndMs:           entry.ArchivedAtMs,
             DurationMs:      entry.ArchivedAtMs - entry.EnteredAtMs,
             PassTime:        entry.PassTime);
+    }
+
+    /// <summary>
+    /// Resolves the boss's monster-table config id from the entry's captured entity set.
+    /// Iterates non-player entities, calls <c>GetMonsterByEntity</c> for each, runs
+    /// <see cref="BossPicker"/> to choose the highest-MaxHp boss, and returns its config id.
+    /// Returns 0 when no boss entity is found or when the monster table is not yet loaded.
+    /// </summary>
+    private int ResolveBossConfigId(Plugin.EncounterHistoryEntry entry)
+    {
+        var candidates = new List<(long id, bool isBoss, long maxHp)>(entry.Entities.Count);
+        foreach (var (entityId, _) in entry.Entities)
+        {
+            if (entityId.IsPlayer) continue;
+            var info   = _services.GameData.World.GetMonsterByEntity(entityId);
+            var isBoss = info.HasValue && info.Value.IsBoss;
+            var maxHp  = _services.CombatLookup.GetVitals(entityId).MaxHp;
+            candidates.Add((entityId.Value, isBoss, maxHp));
+        }
+        var bossId = Replay.BossPicker.Pick(candidates);
+        if (!bossId.HasValue) return 0;
+        var bossEntity = new EntityId(bossId.Value);
+        var bossInfo   = _services.GameData.World.GetMonsterByEntity(bossEntity);
+        return bossInfo.HasValue ? bossInfo.Value.Id : 0;
     }
 
     private static string ComputeSig(CombatLog log, string? signerKey)
