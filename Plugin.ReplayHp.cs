@@ -12,6 +12,12 @@ public sealed partial class Plugin
     // under the file-size guardrail; boss identification/upload logic stays there).
     // -----------------------------------------------------------------------
 
+    // Worker positions schema caps `playerHp` at maxProperties: 32 (see
+    // services/stellar-logs worker positions route) — an upload with more
+    // player tracks is rejected WHOLE, losing the entire replay. Stop adding
+    // entries once this many are collected.
+    private const int MaxPlayerHpTracks = 32;
+
     /// <summary>
     /// HP read for the sampler: live vitals preferred, attr-cache fallback
     /// (MaxHp attr 11320, Hp attr 11310) when the vitals delta never arrived.
@@ -38,6 +44,7 @@ public sealed partial class Plugin
             if (track is null) continue;
             result ??= new Dictionary<string, HpTrack>(8);
             result[id.Value.ToString(CultureInfo.InvariantCulture)] = track;
+            if (result.Count == MaxPlayerHpTracks) break;
         }
         return result;
     }

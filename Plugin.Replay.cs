@@ -112,7 +112,7 @@ public sealed partial class Plugin
         // Lazy boss identification — unchanged semantics from the boss-HP feature.
         if (_bossEntityId.Value == 0 && _replay.Tracks.Count > 0)
         {
-            _bossEntityId = ResolveBossEntity(nowMs);
+            _bossEntityId = ResolveBossEntity();
             if (_bossEntityId.Value != 0)
                 _hpSampler.Track(_bossEntityId.Value, nowMs - _replay.CombatStartMs);
         }
@@ -133,7 +133,7 @@ public sealed partial class Plugin
     /// wiped before archive fires, so we must capture here while they are still populated.
     /// Returns <c>default</c> (zero) when no boss entity is found.
     /// </summary>
-    private EntityId ResolveBossEntity(int nowMs)
+    private EntityId ResolveBossEntity()
     {
         var candidates = new List<(long id, bool isBoss, long maxHp)>(_replay!.Tracks.Count);
         foreach (var id in _replay.Tracks.Keys)
