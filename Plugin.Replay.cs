@@ -176,6 +176,7 @@ public sealed partial class Plugin
 
             // Resolve boss info for meta + upload fields (snapshot before Reset).
             var (bossEntityIdStr, bossMonsterInfo) = ResolveBossUploadFields();
+            EmitBossDiag();
             var bossHpTrack = BuildBossHpTrack();
 
             var doc = PositionTrackAssembler.Assemble(
@@ -240,6 +241,38 @@ public sealed partial class Plugin
     {
         if (_bossHpPct.Count == 0) return null;
         return new BossHpTrack(_bossHpMs0, _bossHpPct.ToArray());
+    }
+
+    /// <summary>
+    /// One-shot diagnostic emitted at replay archive time when a boss entity was resolved.
+    /// Logs everything needed to diagnose empty name + missing HP: attr-10 (configId path),
+    /// MonsterInfo fields, live vitals, and raw HP attrs (11310/11320) from the attr-cache.
+    /// Never throws — all accesses are defensive.
+    /// </summary>
+    private void EmitBossDiag()
+    {
+        if (_bossEntityId.Value == 0) return;
+
+        try
+        {
+            var info    = _services.GameData.World.GetMonsterByEntity(_bossEntityId);
+            var vitals  = _services.CombatLookup.GetVitals(_bossEntityId);
+            var attrs   = _services.EntityDetail.GetAttributes(_bossEntityId);
+
+            attrs.TryGetValue(10,    out var attr10);
+            attrs.TryGetValue(11310, out var attr11310);
+            attrs.TryGetValue(11320, out var attr11320);
+
+            _services.Log.Info(
+                $"[BossDiag] bossEntity={_bossEntityId.Value} configId={attr10} " +
+                $"monsterInfo: hasValue={info.HasValue} name=\"{info?.Name}\" isBoss={info?.IsBoss} id={info?.Id} monsterType={info?.MonsterType} " +
+                $"vitals: isKnown={vitals.IsKnown} hp={vitals.Hp} maxHp={vitals.MaxHp} " +
+                $"attrCache: hp11310={attr11310} maxHp11320={attr11320}");
+        }
+        catch (Exception ex)
+        {
+            _services.Log.Warning($"[BossDiag] threw: {ex.Message}");
+        }
     }
 
     // -----------------------------------------------------------------------
