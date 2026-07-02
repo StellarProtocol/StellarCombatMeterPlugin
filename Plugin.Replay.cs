@@ -41,6 +41,11 @@ public sealed partial class Plugin
     private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
     private HpTimelineSampler? _hpSampler;   // boss + players; created in InitReplay
 
+    // Player sub-profession (spec), snapshotted DURING capture — spec is cast/loadout-inferred
+    // from live caches that ResetEntities() wipes before archive, so resolving it at upload
+    // time always yielded 0 (same timing bug as the boss name). Sticky: first non-zero wins.
+    private readonly Dictionary<long, int> _replaySpecs = new();
+
     /// <summary>
     /// Capture + upload the replay position track for dungeon/raid runs.
     /// Default ON; separate from AutoUpload.
@@ -95,6 +100,7 @@ public sealed partial class Plugin
         _bossEntityId    = default;
         _bossMonsterInfo = null;
         _hpSampler?.Reset();
+        _replaySpecs.Clear();
     }
 
     // -----------------------------------------------------------------------
@@ -118,10 +124,16 @@ public sealed partial class Plugin
         }
 
         // Players join the sampler as their tracks appear (Track is idempotent).
+        // Spec is snapshotted here too, while the inference caches are live.
         foreach (var id in _replay.Tracks.Keys)
         {
-            if (id.IsPlayer)
-                _hpSampler.Track(id.Value, nowMs - _replay.CombatStartMs);
+            if (!id.IsPlayer) continue;
+            _hpSampler.Track(id.Value, nowMs - _replay.CombatStartMs);
+            if (!_replaySpecs.TryGetValue(id.Value, out var spec) || spec == 0)
+            {
+                var sub = _services.CombatSpec.GetSubProfession(id);
+                if (sub != 0) _replaySpecs[id.Value] = sub;
+            }
         }
 
         _hpSampler.Tick(dtMs);
@@ -296,8 +308,9 @@ public sealed partial class Plugin
             _services.PartyRoster.Members,
             monsterInfo);
 
+    // Read from the capture-time snapshot — live inference caches are already wiped at archive.
     private int ReplayProfessionFor(EntityId id)
-        => id.IsPlayer ? _services.CombatSpec.GetSubProfession(id) : 0;
+        => id.IsPlayer && _replaySpecs.TryGetValue(id.Value, out var spec) ? spec : 0;
 
     private static string GenerateReplayLogId()
     {
