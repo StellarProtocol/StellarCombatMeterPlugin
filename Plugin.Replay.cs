@@ -127,9 +127,17 @@ public sealed partial class Plugin
         if (_bossHpAccumMs >= ReplaySampleIntervalMs) _bossHpAccumMs = 0f;
 
         var vitals = _services.CombatLookup.GetVitals(_bossEntityId);
-        if (!vitals.IsKnown || vitals.MaxHp <= 0) return;
 
-        var pct = (int)Math.Round(100.0 * vitals.Hp / vitals.MaxHp);
+        // Prefer live vitals; fall back to attr-cache when vitals.MaxHp is 0 (delta never arrived).
+        var attrs         = _services.EntityDetail.GetAttributes(_bossEntityId);
+        var attrMaxHp     = attrs.TryGetValue(11320, out var mh) ? mh : 0L;
+        var attrHp        = attrs.TryGetValue(11310, out var h)  ? h  : 0L;
+        var maxHp         = vitals.MaxHp > 0 ? vitals.MaxHp : attrMaxHp;
+        var hp            = vitals.IsKnown   ? vitals.Hp    : attrHp;
+
+        if (maxHp <= 0) return;
+
+        var pct = (int)Math.Round(100.0 * hp / maxHp);
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
         _bossHpPct.Add(pct);
