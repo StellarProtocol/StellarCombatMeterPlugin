@@ -39,9 +39,7 @@ public sealed partial class Plugin
     // Boss HP timeline — sampled in parallel with the position capture cadence.
     private EntityId   _bossEntityId;          // set when boss is identified at assembly time; zero = none
     private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
-    private float      _bossHpAccumMs;         // mirrors ReplayCapture's accumulator for same-cadence sampling
-    private int        _bossHpMs0;
-    private readonly List<int> _bossHpPct = new();   // pct per sample: round(100*hp/maxHp), clamped 0..100
+    private HpTimelineSampler? _hpSampler;   // boss + players; created in InitReplay
 
     /// <summary>
     /// Capture + upload the replay position track for dungeon/raid runs.
@@ -66,6 +64,7 @@ public sealed partial class Plugin
             maxSamplesPerTrack:  ReplayMaxSamplesPerTrack,
             maxTotalSamples:     ReplayMaxTotalSamples,
             sampleIntervalMs:    ReplaySampleIntervalMs);
+        _hpSampler = new HpTimelineSampler(ReadHpPair);
     }
 
     // Called every frame from OnUpdate. Gate: toggle on + dungeon/raid + combat active.
@@ -77,7 +76,7 @@ public sealed partial class Plugin
         var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
         _replay.Tick(nowMs, dtMs);
-        TickBossHp(nowMs, dtMs);
+        TickHpTimelines(nowMs, dtMs);
     }
 
     // Called from OnCombatEvent BEFORE the player-only early-out so boss/add targets enter the set.
@@ -95,57 +94,41 @@ public sealed partial class Plugin
         _replay?.Reset();
         _bossEntityId    = default;
         _bossMonsterInfo = null;
-        _bossHpAccumMs   = 0f;
-        _bossHpMs0       = 0;
-        _bossHpPct.Clear();
+        _hpSampler?.Reset();
     }
 
     // -----------------------------------------------------------------------
-    // Boss HP timeline sampling (parallel cadence with ReplayCapture)
+    // Boss + player HP timeline sampling (parallel cadence with ReplayCapture)
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Samples the boss entity's HP% once per 500 ms, aligned to the same cadence as
-    /// <see cref="ReplayCapture.Tick"/> — both receive the same nowMs/dtMs per frame.
-    /// Only runs when <see cref="_bossEntityId"/> is non-zero (set after first Tick once boss
-    /// is identified from the captured entity set); the boss is identified lazily on first
-    /// sample opportunity to allow the entity set to fill during the opening seconds.
+    /// Registers the boss (lazily, once identified) and every player track with the
+    /// HP sampler, then advances it. All timelines share the 500 ms cadence.
     /// </summary>
-    private void TickBossHp(int nowMs, float dtMs)
+    private void TickHpTimelines(int nowMs, float dtMs)
     {
-        // Lazy boss identification: resolve once when the entity set is non-empty.
-        if (_bossEntityId.Value == 0 && _replay is not null && _replay.Tracks.Count > 0)
+        if (_hpSampler is null || _replay is null) return;
+
+        // Lazy boss identification — unchanged semantics from the boss-HP feature.
+        if (_bossEntityId.Value == 0 && _replay.Tracks.Count > 0)
         {
             _bossEntityId = ResolveBossEntity(nowMs);
+            if (_bossEntityId.Value != 0)
+                _hpSampler.Track(_bossEntityId.Value, nowMs - _replay.CombatStartMs);
         }
 
-        if (_bossEntityId.Value == 0) return;
+        // Players join the sampler as their tracks appear (Track is idempotent).
+        foreach (var id in _replay.Tracks.Keys)
+        {
+            if (id.IsPlayer)
+                _hpSampler.Track(id.Value, nowMs - _replay.CombatStartMs);
+        }
 
-        _bossHpAccumMs += dtMs;
-        if (_bossHpAccumMs < ReplaySampleIntervalMs) return;
-        _bossHpAccumMs -= ReplaySampleIntervalMs;
-        if (_bossHpAccumMs >= ReplaySampleIntervalMs) _bossHpAccumMs = 0f;
-
-        var vitals = _services.CombatLookup.GetVitals(_bossEntityId);
-
-        // Prefer live vitals; fall back to attr-cache when vitals.MaxHp is 0 (delta never arrived).
-        var attrs         = _services.EntityDetail.GetAttributes(_bossEntityId);
-        var attrMaxHp     = attrs.TryGetValue(11320, out var mh) ? mh : 0L;
-        var attrHp        = attrs.TryGetValue(11310, out var h)  ? h  : 0L;
-        var maxHp         = vitals.MaxHp > 0 ? vitals.MaxHp : attrMaxHp;
-        var hp            = vitals.IsKnown   ? vitals.Hp    : attrHp;
-
-        if (maxHp <= 0) return;
-
-        var pct = (int)Math.Round(100.0 * hp / maxHp);
-        if (pct < 0) pct = 0;
-        if (pct > 100) pct = 100;
-        _bossHpPct.Add(pct);
+        _hpSampler.Tick(dtMs);
     }
 
     /// <summary>
-    /// Resolves the boss entity from the current captured track set and stamps
-    /// <see cref="_bossHpMs0"/> at the moment of identification (combat-relative ms).
+    /// Resolves the boss entity from the current captured track set.
     /// Also snapshots <see cref="_bossMonsterInfo"/> from the live caches — caches will be
     /// wiped before archive fires, so we must capture here while they are still populated.
     /// Returns <c>default</c> (zero) when no boss entity is found.
@@ -163,10 +146,6 @@ public sealed partial class Plugin
         }
         var bossId = BossPicker.Pick(candidates);
         if (!bossId.HasValue) return default;
-
-        // Stamp ms0 at identification time (not at the first HP sample), aligning with
-        // ReplayCapture's position-track ms0 semantics.
-        _bossHpMs0 = Math.Max(0, nowMs - _replay.CombatStartMs);
 
         var bossEntityId = new EntityId(bossId.Value);
 
@@ -248,6 +227,7 @@ public sealed partial class Plugin
                 Nonce        = nonce,
                 BossEntityId = bossEntityIdStr,
                 BossHp       = bossHpTrack,
+                PlayerHp     = BuildPlayerHpTracks(),
             };
             doc = doc with { Sig = SignReplay(doc) };
 
@@ -288,11 +268,7 @@ public sealed partial class Plugin
     }
 
     private HpTrack? BuildBossHpTrack()
-    {
-        if (_bossHpPct.Count == 0) return null;
-        return new HpTrack(_bossHpMs0, _bossHpPct.ToArray());
-    }
-
+        => _bossEntityId.Value != 0 ? _hpSampler?.GetTrack(_bossEntityId.Value) : null;
 
     // -----------------------------------------------------------------------
     // Helpers
