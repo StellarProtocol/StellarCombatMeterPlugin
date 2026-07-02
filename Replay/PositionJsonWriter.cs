@@ -27,6 +27,7 @@ internal static class PositionJsonWriter
         w.BeginObject();
         WriteHeaderFields(w, doc);
         WriteBodyFields(w, doc);
+        WriteExtraFields(w, doc);   // boss + playerHp — NOT part of the signed body
         w.EndObject();
         return w.ToString();
     }
@@ -59,7 +60,7 @@ internal static class PositionJsonWriter
     }
 
     // ── body fields in the required JS key order ──────────────────────────────
-    // IMPORTANT: key order must match JS JSON.stringify({hz,mapId,origin,scale,tracks,meta,...}).
+    // IMPORTANT: key order must match JS JSON.stringify({hz,mapId,origin,scale,tracks,meta}).
 
     private static void WriteBodyFields(PosWriter w, PositionUploadDoc doc)
     {
@@ -72,12 +73,27 @@ internal static class PositionJsonWriter
         w.Name("scale");  w.RawToken("0.1");
         w.Name("tracks"); WriteTracks(w, doc.Tracks);
         w.Name("meta");   WriteMeta(w, doc.Meta);
-        // Boss fields — emitted only when a boss was identified.
+    }
+
+    // ── extras outside the canonical body (worker's positionsBody hashes body only) ──
+
+    private static void WriteExtraFields(PosWriter w, PositionUploadDoc doc)
+    {
         if (!string.IsNullOrEmpty(doc.BossEntityId))
         {
             w.Name("bossEntityId"); w.Str(doc.BossEntityId);
             if (doc.BossHp != null)
-                WriteBossHp(w, doc.BossHp);
+                WriteHpTrack(w, "bossHp", doc.BossHp);
+        }
+        if (doc.PlayerHp is { Count: > 0 })
+        {
+            w.Name("playerHp");
+            w.BeginObject();
+            foreach (var kv in doc.PlayerHp)
+            {
+                WriteHpTrack(w, kv.Key, kv.Value);
+            }
+            w.EndObject();
         }
     }
 
@@ -145,9 +161,9 @@ internal static class PositionJsonWriter
         w.EndObject();
     }
 
-    private static void WriteBossHp(PosWriter w, BossHpTrack track)
+    private static void WriteHpTrack(PosWriter w, string name, HpTrack track)
     {
-        w.Name("bossHp");
+        w.Name(name);
         w.BeginObject();
         w.Name("ms0"); w.Long(track.Ms0);
         w.Name("pct"); WriteIntArray(w, track.Pct);

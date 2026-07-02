@@ -55,9 +55,9 @@ internal sealed class HpTimelineSampler
     }
 
     /// <summary>The sampled track for an entity, or null when it has no samples.</summary>
-    internal BossHpTrack? GetTrack(long entityId)
+    internal HpTrack? GetTrack(long entityId)
         => _entries.TryGetValue(entityId, out var e) && e.Pct.Count > 0
-            ? new BossHpTrack(e.Ms0, e.Pct.ToArray())
+            ? new HpTrack(e.Ms0, e.Pct.ToArray())
             : null;
 
     internal IEnumerable<long> TrackedIds => _entries.Keys;

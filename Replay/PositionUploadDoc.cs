@@ -18,7 +18,14 @@ namespace Stellar.CombatMeter.Replay;
 /// <para>
 /// Boss fields: <see cref="BossEntityId"/> is non-empty when a boss entity was
 /// identified (entity id as decimal string). <see cref="BossHp"/> is non-null
-/// when boss vitals were sampled; absent in bossless runs.
+/// when boss vitals were sampled; absent in bossless runs. <see cref="PlayerHp"/>
+/// carries per-player HP% timelines keyed by entity id (as decimal string).
+/// </para>
+/// <para>
+/// Boss + playerHp are emitted only by the full <see cref="PositionJsonWriter.Write"/>
+/// output — NOT by <see cref="PositionJsonWriter.WriteBodyOnly"/>, which the worker's
+/// signature verification hashes and must match exactly
+/// <c>{hz,mapId,origin,scale,tracks,meta}</c>.
 /// </para>
 /// </summary>
 internal sealed record PositionUploadDoc(
@@ -36,18 +43,20 @@ internal sealed record PositionUploadDoc(
     long StartMs = 0,
     long EndMs = 0,
     string BossEntityId = "",
-    BossHpTrack? BossHp = null);
+    HpTrack? BossHp = null,
+    IReadOnlyDictionary<string, HpTrack>? PlayerHp = null);
 
 /// <summary>
-/// Boss HP% timeline sampled at the replay capture cadence (2 Hz).
+/// HP% timeline sampled at the replay capture cadence (2 Hz). Used for the boss
+/// (<c>bossHp</c>) and per-player (<c>playerHp</c>) uploads.
 /// <para>
 /// <see cref="Ms0"/> is the encounter-relative timestamp (ms) of the first sample,
 /// matching the relative timestamps used by <see cref="PositionTrackDto.Ms0"/>.
 /// <see cref="Pct"/> is HP% per sample: <c>round(100 * hp / maxHp)</c>, clamped 0..100.
-/// Only emitted in the upload JSON when a boss exists.
+/// Only emitted in the upload JSON when a track exists for the entity.
 /// </para>
 /// </summary>
-internal sealed record BossHpTrack(long Ms0, IReadOnlyList<int> Pct);
+internal sealed record HpTrack(long Ms0, IReadOnlyList<int> Pct);
 
 /// <summary>
 /// Per-entity delta-encoded track. Arrays are delta-encoded; ms0 is absolute start time.

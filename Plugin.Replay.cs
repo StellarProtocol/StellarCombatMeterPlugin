@@ -287,10 +287,10 @@ public sealed partial class Plugin
         return (bossIdStr, _bossMonsterInfo);
     }
 
-    private BossHpTrack? BuildBossHpTrack()
+    private HpTrack? BuildBossHpTrack()
     {
         if (_bossHpPct.Count == 0) return null;
-        return new BossHpTrack(_bossHpMs0, _bossHpPct.ToArray());
+        return new HpTrack(_bossHpMs0, _bossHpPct.ToArray());
     }
 
 
