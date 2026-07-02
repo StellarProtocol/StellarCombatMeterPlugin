@@ -139,7 +139,9 @@ public sealed partial class Plugin
     {
         try
         {
-            var log = LogAssembler.Assemble(entry, events, SignerKey, truncatedEvents);
+            // Pass the capture-time boss config id so the assembler doesn't re-resolve from
+            // wiped entity caches (ResetEntities fires before archive on scene change).
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0);
             var url = "https://stellar-logs-web.boshido.workers.dev/run/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);

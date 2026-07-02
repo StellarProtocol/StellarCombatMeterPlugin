@@ -37,9 +37,10 @@ public sealed partial class Plugin
     private bool _uploadReplay = ReplayDefaults.UploadReplayDefault;
 
     // Boss HP timeline — sampled in parallel with the position capture cadence.
-    private EntityId  _bossEntityId;          // set when boss is identified at assembly time; zero = none
-    private float     _bossHpAccumMs;         // mirrors ReplayCapture's accumulator for same-cadence sampling
-    private int       _bossHpMs0;
+    private EntityId   _bossEntityId;          // set when boss is identified at assembly time; zero = none
+    private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
+    private float      _bossHpAccumMs;         // mirrors ReplayCapture's accumulator for same-cadence sampling
+    private int        _bossHpMs0;
     private readonly List<int> _bossHpPct = new();   // pct per sample: round(100*hp/maxHp), clamped 0..100
 
     /// <summary>
@@ -92,9 +93,10 @@ public sealed partial class Plugin
     private void ResetReplay()
     {
         _replay?.Reset();
-        _bossEntityId  = default;
-        _bossHpAccumMs = 0f;
-        _bossHpMs0     = 0;
+        _bossEntityId    = default;
+        _bossMonsterInfo = null;
+        _bossHpAccumMs   = 0f;
+        _bossHpMs0       = 0;
         _bossHpPct.Clear();
     }
 
@@ -136,6 +138,8 @@ public sealed partial class Plugin
     /// <summary>
     /// Resolves the boss entity from the current captured track set and stamps
     /// <see cref="_bossHpMs0"/> at the moment of identification (combat-relative ms).
+    /// Also snapshots <see cref="_bossMonsterInfo"/> from the live caches — caches will be
+    /// wiped before archive fires, so we must capture here while they are still populated.
     /// Returns <c>default</c> (zero) when no boss entity is found.
     /// </summary>
     private EntityId ResolveBossEntity(int nowMs)
@@ -156,7 +160,46 @@ public sealed partial class Plugin
         // ReplayCapture's position-track ms0 semantics.
         _bossHpMs0 = Math.Max(0, nowMs - _replay.CombatStartMs);
 
-        return new EntityId(bossId.Value);
+        var bossEntityId = new EntityId(bossId.Value);
+
+        // Snapshot MonsterInfo NOW — caches are live at capture time but will be wiped by
+        // ResetEntities() before MaybeUploadReplay/archive fires (scene-change sequence).
+        _bossMonsterInfo = _services.GameData.World.GetMonsterByEntity(bossEntityId);
+
+        // Emit capture-time [BossDiag] while caches are live — archive-time values would be empty.
+        EmitBossDiagCapture(bossEntityId);
+
+        return bossEntityId;
+    }
+
+    /// <summary>
+    /// One-shot diagnostic emitted at CAPTURE time (boss identification) while the entity
+    /// attr/vitals caches are still live. Logs everything needed to diagnose name + HP issues:
+    /// attr-10 (configId path), MonsterInfo fields, live vitals, and raw HP attrs (11310/11320).
+    /// Never throws — all accesses are defensive.
+    /// </summary>
+    private void EmitBossDiagCapture(EntityId bossEntityId)
+    {
+        try
+        {
+            var info    = _services.GameData.World.GetMonsterByEntity(bossEntityId);
+            var vitals  = _services.CombatLookup.GetVitals(bossEntityId);
+            var attrs   = _services.EntityDetail.GetAttributes(bossEntityId);
+
+            attrs.TryGetValue(10,    out var attr10);
+            attrs.TryGetValue(11310, out var attr11310);
+            attrs.TryGetValue(11320, out var attr11320);
+
+            _services.Log.Info(
+                $"[BossDiag capture] bossEntity={bossEntityId.Value} configId={attr10} " +
+                $"monsterInfo: hasValue={info.HasValue} name=\"{info?.Name}\" isBoss={info?.IsBoss} id={info?.Id} monsterType={info?.MonsterType} " +
+                $"vitals: isKnown={vitals.IsKnown} hp={vitals.Hp} maxHp={vitals.MaxHp} " +
+                $"attrCache: hp11310={attr11310} maxHp11320={attr11320}");
+        }
+        catch (Exception ex)
+        {
+            _services.Log.Warning($"[BossDiag capture] threw: {ex.Message}");
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -174,9 +217,8 @@ public sealed partial class Plugin
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
 
-            // Resolve boss info for meta + upload fields (snapshot before Reset).
+            // Resolve boss info for meta + upload fields using capture-time snapshot.
             var (bossEntityIdStr, bossMonsterInfo) = ResolveBossUploadFields();
-            EmitBossDiag();
             var bossHpTrack = BuildBossHpTrack();
 
             var doc = PositionTrackAssembler.Assemble(
@@ -223,18 +265,18 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Returns the boss entity id string and its MonsterInfo using the already-resolved
-    /// <see cref="_bossEntityId"/> from capture time. Returns (empty, null) when no boss was
-    /// identified during capture. This ensures the HP-timeline entity and the upload
-    /// <c>bossEntityId</c> always refer to the same entity.
+    /// Returns the boss entity id string and the capture-time MonsterInfo snapshot.
+    /// Uses <see cref="_bossMonsterInfo"/> (snapshotted in <see cref="ResolveBossEntity"/>
+    /// while caches were live) — <b>not</b> a fresh <c>GetMonsterByEntity</c> call, because
+    /// <c>ResetEntities()</c> wipes the attr/vitals caches before archive fires.
+    /// Returns (empty, null) when no boss was identified during capture.
     /// </summary>
     private (string bossEntityIdStr, MonsterInfo? info) ResolveBossUploadFields()
     {
         if (_bossEntityId.Value == 0) return ("", null);
 
-        var bossInfo  = _services.GameData.World.GetMonsterByEntity(_bossEntityId);
         var bossIdStr = _bossEntityId.Value.ToString(CultureInfo.InvariantCulture);
-        return (bossIdStr, bossInfo);
+        return (bossIdStr, _bossMonsterInfo);
     }
 
     private BossHpTrack? BuildBossHpTrack()
@@ -243,37 +285,6 @@ public sealed partial class Plugin
         return new BossHpTrack(_bossHpMs0, _bossHpPct.ToArray());
     }
 
-    /// <summary>
-    /// One-shot diagnostic emitted at replay archive time when a boss entity was resolved.
-    /// Logs everything needed to diagnose empty name + missing HP: attr-10 (configId path),
-    /// MonsterInfo fields, live vitals, and raw HP attrs (11310/11320) from the attr-cache.
-    /// Never throws — all accesses are defensive.
-    /// </summary>
-    private void EmitBossDiag()
-    {
-        if (_bossEntityId.Value == 0) return;
-
-        try
-        {
-            var info    = _services.GameData.World.GetMonsterByEntity(_bossEntityId);
-            var vitals  = _services.CombatLookup.GetVitals(_bossEntityId);
-            var attrs   = _services.EntityDetail.GetAttributes(_bossEntityId);
-
-            attrs.TryGetValue(10,    out var attr10);
-            attrs.TryGetValue(11310, out var attr11310);
-            attrs.TryGetValue(11320, out var attr11320);
-
-            _services.Log.Info(
-                $"[BossDiag] bossEntity={_bossEntityId.Value} configId={attr10} " +
-                $"monsterInfo: hasValue={info.HasValue} name=\"{info?.Name}\" isBoss={info?.IsBoss} id={info?.Id} monsterType={info?.MonsterType} " +
-                $"vitals: isKnown={vitals.IsKnown} hp={vitals.Hp} maxHp={vitals.MaxHp} " +
-                $"attrCache: hp11310={attr11310} maxHp11320={attr11320}");
-        }
-        catch (Exception ex)
-        {
-            _services.Log.Warning($"[BossDiag] threw: {ex.Message}");
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -285,9 +296,19 @@ public sealed partial class Plugin
         var meta = new Dictionary<EntityId, PositionMetaDto>(_replay!.Tracks.Count);
         foreach (var id in _replay.Tracks.Keys)
         {
-            var monsterInfo = id.IsPlayer
-                ? null
-                : _services.GameData.World.GetMonsterByEntity(id);
+            MonsterInfo? monsterInfo;
+            if (!id.IsPlayer && !string.IsNullOrEmpty(bossEntityIdStr) &&
+                id.Value.ToString(CultureInfo.InvariantCulture) == bossEntityIdStr)
+            {
+                // Use the capture-time snapshot for the boss — caches wiped at archive time.
+                monsterInfo = bossMonsterInfo;
+            }
+            else
+            {
+                monsterInfo = id.IsPlayer
+                    ? null
+                    : _services.GameData.World.GetMonsterByEntity(id);
+            }
             var kind = ReplayKindFor(id, bossEntityIdStr);
             var name = ReplayNameFor(id, monsterInfo);
             meta[id] = new PositionMetaDto(kind, name ?? "", ReplayProfessionFor(id));

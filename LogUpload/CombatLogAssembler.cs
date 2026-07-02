@@ -38,18 +38,26 @@ internal sealed class CombatLogAssembler
     /// True when the raw dmg/skill forensic ring overflowed during the encounter. Forensic
     /// metadata only — every rendered number comes from the unsigned <c>derived</c> aggregates.
     /// </param>
+    /// <param name="snapshotBossConfigId">
+    /// Monster-table config id of the boss, captured at fight time before entity caches were
+    /// wiped (provided by Plugin.Replay via <c>_bossMonsterInfo?.Id</c>).
+    /// When non-zero this value is used directly as <c>encounter.bossId</c>, bypassing the
+    /// dead-cache <c>ResolveBossConfigId</c> fallback. Pass 0 when no snapshot is available
+    /// (e.g. bossless runs or manual deferred upload of pre-fix entries).
+    /// </param>
     internal CombatLog Assemble(
         Plugin.EncounterHistoryEntry entry,
         IReadOnlyList<CombatLogEvent> events,
         string? signerKey,
-        bool truncatedEvents)
+        bool truncatedEvents,
+        int snapshotBossConfigId = 0)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
 
-        // Encounter identity comes entirely from the entry (snapshotted at archive),
-        // so a deferred manual upload stamps the run's OWN levelUuid/settlement.
-        var bossConfigId = ResolveBossConfigId(entry);
+        // Use the capture-time snapshot when available; fall back to live resolution for
+        // deferred manual uploads of old entries (caches may still be warm if still in-map).
+        var bossConfigId = snapshotBossConfigId != 0 ? snapshotBossConfigId : ResolveBossConfigId(entry);
         var encounter    = BuildEncounter(entry, bossConfigId);
 
         // --- Uploader ---
