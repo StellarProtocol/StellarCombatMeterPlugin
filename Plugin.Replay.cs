@@ -153,40 +153,7 @@ public sealed partial class Plugin
         // ResetEntities() before MaybeUploadReplay/archive fires (scene-change sequence).
         _bossMonsterInfo = _services.GameData.World.GetMonsterByEntity(bossEntityId);
 
-        // Emit capture-time [BossDiag] while caches are live — archive-time values would be empty.
-        EmitBossDiagCapture(bossEntityId);
-
         return bossEntityId;
-    }
-
-    /// <summary>
-    /// One-shot diagnostic emitted at CAPTURE time (boss identification) while the entity
-    /// attr/vitals caches are still live. Logs everything needed to diagnose name + HP issues:
-    /// attr-10 (configId path), MonsterInfo fields, live vitals, and raw HP attrs (11310/11320).
-    /// Never throws — all accesses are defensive.
-    /// </summary>
-    private void EmitBossDiagCapture(EntityId bossEntityId)
-    {
-        try
-        {
-            var info    = _services.GameData.World.GetMonsterByEntity(bossEntityId);
-            var vitals  = _services.CombatLookup.GetVitals(bossEntityId);
-            var attrs   = _services.EntityDetail.GetAttributes(bossEntityId);
-
-            attrs.TryGetValue(10,    out var attr10);
-            attrs.TryGetValue(11310, out var attr11310);
-            attrs.TryGetValue(11320, out var attr11320);
-
-            _services.Log.Info(
-                $"[BossDiag capture] bossEntity={bossEntityId.Value} configId={attr10} " +
-                $"monsterInfo: hasValue={info.HasValue} name=\"{info?.Name}\" isBoss={info?.IsBoss} id={info?.Id} monsterType={info?.MonsterType} " +
-                $"vitals: isKnown={vitals.IsKnown} hp={vitals.Hp} maxHp={vitals.MaxHp} " +
-                $"attrCache: hp11310={attr11310} maxHp11320={attr11320}");
-        }
-        catch (Exception ex)
-        {
-            _services.Log.Warning($"[BossDiag capture] threw: {ex.Message}");
-        }
     }
 
     // -----------------------------------------------------------------------
