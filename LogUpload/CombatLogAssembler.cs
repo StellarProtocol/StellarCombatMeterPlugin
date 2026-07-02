@@ -155,7 +155,9 @@ internal sealed class CombatLogAssembler
             if (entityId.IsPlayer) continue;
             var info   = _services.GameData.World.GetMonsterByEntity(entityId);
             var isBoss = info.HasValue && info.Value.IsBoss;
-            var maxHp  = _services.CombatLookup.GetVitals(entityId).MaxHp;
+            var vitals = _services.CombatLookup.GetVitals(entityId);
+            if (!vitals.IsKnown) continue;    // consistent with TickBossHp: unknown vitals = not a candidate
+            var maxHp  = vitals.MaxHp;
             candidates.Add((entityId.Value, isBoss, maxHp));
         }
         var bossId = Replay.BossPicker.Pick(candidates);
