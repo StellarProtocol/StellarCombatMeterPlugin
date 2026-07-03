@@ -19,10 +19,12 @@ namespace Stellar.CombatMeter;
 internal static partial class HistoryStore
 {
     // v1 = stats + series. v2 = + "entities" (per-player frozen snapshot, issue #5). v3 = + run identity
-    // (luid/pass/mms/res) so an archived run keeps the levelUuid a (deferred/manual) upload needs. The reader
-    // accepts v1..v3 — older entries just lack the newer keys and load with defaults (LevelUuid 0, etc.), so
-    // writing v3 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
-    internal const int FormatVersion = 3;
+    // (luid/pass/mms/res) so an archived run keeps the levelUuid a (deferred/manual) upload needs. v4 = richer
+    // per-skill stats (crit-lucky/min/kills + separate heal counters) + self gear detail. v5 = ZDPS-parity
+    // per-ACTOR splits (crit/lucky/crit-lucky damage+healing values, shield break, top/effective heal).
+    // The reader accepts v1..v5 — older entries just lack the newer keys and load with defaults, so
+    // writing v5 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
+    internal const int FormatVersion = 5;
     internal const int MinSupportedVersion = 1;
 
     // ----- serialize -----
@@ -63,9 +65,23 @@ internal static partial class HistoryStore
             w.Name("h").Value(s.Hits);
             w.Name("c").Value(s.Crits);
             w.Name("lk").Value(s.Luckys);
+            w.Name("cl").Value(s.CritLuckys);
             w.Name("k").Value(s.Kills);
             w.Name("fh").Value(s.FirstHitMs);
             w.Name("lh").Value(s.LastHitMs);
+            w.Name("cd").Value(s.CritDamage);
+            w.Name("ld").Value(s.LuckyDamage);
+            w.Name("cld").Value(s.CritLuckyDamage);
+            w.Name("sb").Value(s.ShieldBreak);
+            w.Name("hh").Value(s.HealHits);
+            w.Name("hc").Value(s.HealCrits);
+            w.Name("hlk").Value(s.HealLuckys);
+            w.Name("hcl").Value(s.HealCritLuckys);
+            w.Name("ch").Value(s.CritHealing);
+            w.Name("lch").Value(s.LuckyHealing);
+            w.Name("clh").Value(s.CritLuckyHealing);
+            w.Name("tph").Value(s.TopHeal);
+            w.Name("eh").Value(s.EffectiveHealing);
             w.Name("sk"); WriteSkills(w, s.BySkill);
             w.Name("in"); WriteIncoming(w, s.IncomingBySkill);
             w.EndObject();
@@ -85,7 +101,14 @@ internal static partial class HistoryStore
             w.Name("h").Value(sk.Hits);
             w.Name("c").Value(sk.Crits);
             w.Name("lk").Value(sk.Luckys);
+            w.Name("cl").Value(sk.CritLuckys);
             w.Name("top").Value(sk.TopHit);
+            w.Name("mn").Value(sk.MinHit);
+            w.Name("k").Value(sk.Kills);
+            w.Name("hh").Value(sk.HealHits);
+            w.Name("hc").Value(sk.HealCrits);
+            w.Name("hlk").Value(sk.HealLuckys);
+            w.Name("htp").Value(sk.HealTop);
             w.EndObject();
         }
         w.EndArray();
@@ -147,6 +170,18 @@ internal static partial class HistoryStore
             w.Name("fi").Value(s.FashionIds);
             w.Name("fc").Value(s.FashionDyeCounts);
             w.Name("fd").Value(s.FashionDyes);
+            // v4: self-only per-piece gear detail (empty arrays for non-self entities).
+            w.Name("gds").Value(s.GdSlots);
+            w.Name("gdq").Value(s.GdQuality);
+            w.Name("gdr").Value(s.GdRefine);
+            w.Name("gdlv").Value(s.GdItemLv);
+            w.Name("gdbt").Value(s.GdBt);
+            w.Name("gdpv").Value(s.GdPerfVal);
+            w.Name("gdpm").Value(s.GdPerfMax);
+            w.Name("gdei").Value(s.GdEnchantId);
+            w.Name("gdel").Value(s.GdEnchantLv);
+            w.Name("gdrc").Value(s.GdRollCounts);
+            w.Name("gdrl").Value(s.GdRolls);
             w.EndObject();
         }
         w.EndArray();

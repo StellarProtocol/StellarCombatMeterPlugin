@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Domain.Inventory;
 
 namespace Stellar.CombatMeter;
 
@@ -40,6 +41,25 @@ internal sealed class EntitySnapshot
     public int[]   FashionIds       = System.Array.Empty<int>();
     public int[]   FashionDyeCounts = System.Array.Empty<int>();
     public float[] FashionDyes      = System.Array.Empty<float>();   // flattened RGBA, 4 per colour
+
+    // Per-piece instance detail — SELF ONLY (IInventory.GetSelfGear; other players broadcast ids only).
+    // Index-aligned across the Gd* arrays; GdRollCounts[i] quads of GdRolls ([kind, attrId, value, pct])
+    // belong to piece i, consumed in order. Rolls are RESOLVED at capture via the equip attr-lib tables
+    // (value = pct·(Max−Min)/100 + Min) so consumers never need the lib tables.
+    // Kind: 0 basic, 1 advanced, 2 recast, 3 rare, 4 gem effect (flat; pct = 0).
+    // GdEnchantId is the RESOLVED gem ITEM id (name carries the display level, "… Sigil Lv.2") —
+    // the wire enchant typeId/level pair is an internal index that reads as the wrong gem/level.
+    public int[] GdSlots      = System.Array.Empty<int>();
+    public int[] GdQuality    = System.Array.Empty<int>();
+    public int[] GdRefine     = System.Array.Empty<int>();
+    public int[] GdItemLv     = System.Array.Empty<int>();           // perfection_level (semantics uncertain)
+    public int[] GdBt         = System.Array.Empty<int>();           // breakthrough stage — display Lv = stage EquipGs
+    public int[] GdPerfVal    = System.Array.Empty<int>();
+    public int[] GdPerfMax    = System.Array.Empty<int>();
+    public int[] GdEnchantId  = System.Array.Empty<int>();
+    public int[] GdEnchantLv  = System.Array.Empty<int>();           // raw wire level — fallback only
+    public int[] GdRollCounts = System.Array.Empty<int>();
+    public int[] GdRolls      = System.Array.Empty<int>();           // flattened quads
 }
 
 public sealed partial class Plugin
@@ -79,9 +99,79 @@ public sealed partial class Plugin
         };
         CaptureAttributes(id, snap);
         CaptureGear(id, snap);
+        if (id == self) CaptureSelfGearDetail(snap);
         CaptureSkills(id, snap);
         CaptureFashion(id, snap);
         return snap;
+    }
+
+    // Self-only per-piece instance detail (rolls / refine / perfection / gem) from the local
+    // inventory — other players never broadcast it. Feeds the upload's `gearDetail` block.
+    private void CaptureSelfGearDetail(EntitySnapshot snap)
+    {
+        var gear = _services.Inventory.GetSelfGear();
+        var n = gear.Count;
+        snap.GdSlots = new int[n]; snap.GdQuality = new int[n]; snap.GdRefine = new int[n];
+        snap.GdItemLv = new int[n]; snap.GdBt = new int[n];
+        snap.GdPerfVal = new int[n]; snap.GdPerfMax = new int[n];
+        snap.GdEnchantId = new int[n]; snap.GdEnchantLv = new int[n];
+        snap.GdRollCounts = new int[n];
+        var rolls = new List<int>();
+        for (var i = 0; i < n; i++)
+        {
+            var g = gear[i];
+            snap.GdSlots[i] = g.Slot;
+            snap.GdQuality[i] = g.Quality;
+            snap.GdRefine[i] = g.RefineLevel;
+            snap.GdItemLv[i] = g.Perfection.Level;
+            snap.GdBt[i] = g.BreakThroughTime;
+            snap.GdPerfVal[i] = g.Perfection.Value;
+            snap.GdPerfMax[i] = g.Perfection.Max;
+            var count = 0;
+            count += AppendRolls(rolls, 0, g.Attrs.Basic);
+            count += AppendRolls(rolls, 1, g.Attrs.Advanced);
+            count += AppendRolls(rolls, 2, g.Attrs.Recast);
+            count += AppendRolls(rolls, 3, g.Attrs.Rare);
+            // Gem: resolve (typeId, internal level) → gem ITEM (display name carries "Lv.<n>") +
+            // its flat effects, mirroring EntityInspector's Item Detail. Raw pair kept as fallback.
+            if (g.Enchant is { } en)
+            {
+                snap.GdEnchantLv[i] = en.Level;
+                if (_services.GameData.Equip.GetEnchantItem(en.ItemTypeId, en.Level) is { } gem)
+                {
+                    snap.GdEnchantId[i] = gem.GemItemId;
+                    foreach (var eff in gem.Effects)
+                    {
+                        rolls.Add(4); rolls.Add(eff.AttrId); rolls.Add(eff.Value); rolls.Add(0);
+                        count++;
+                    }
+                }
+                else snap.GdEnchantId[i] = en.ItemTypeId;
+            }
+            snap.GdRollCounts[i] = count;
+        }
+        snap.GdRolls = rolls.ToArray();
+    }
+
+    // Expand each (lib ROW id, percentile) roll into resolved (attrId, value) quads — the game's own
+    // formula (floor(pct·(Max−Min)/100 + Min), verified against the live gear sheet by EntityInspector).
+    // School-sourced rolls resolve against the v2 school row table (row-id spaces collide).
+    private int AppendRolls(List<int> into, int kind, IReadOnlyList<GearAttrRoll> src)
+    {
+        var n = 0;
+        foreach (var r in src)
+        {
+            var entries = r.School
+                ? _services.GameData.Equip.GetSchoolAttrLibRow(r.LibRowId)
+                : _services.GameData.Equip.GetAttrLibRow(r.LibRowId);
+            foreach (var e in entries)
+            {
+                var value = r.Percentile * (long)(e.Max - e.Min) / 100 + e.Min;
+                into.Add(kind); into.Add(e.AttrId); into.Add((int)value); into.Add(r.Percentile);
+                n++;
+            }
+        }
+        return n;
     }
 
     // Non-zero broadcast attrs only (self ~130 ids, others fewer).

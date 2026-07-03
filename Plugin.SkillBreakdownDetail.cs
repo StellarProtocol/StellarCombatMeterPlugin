@@ -32,7 +32,26 @@ public sealed partial class Plugin
             // Empty 5th cell keeps row 2 column-aligned with row 1 (which gained LUCK %).
             new CellElement(new TextElement(() => ""), Weight: 1f),
         }, Gap: 10f),
+        // ZDPS-parity split row (v5 stats). Metric-aware: DPS shows the damage-value splits +
+        // active DPS; HPS shows the healing splits + effective/overheal; Taken renders "—".
+        new RowElement(new HudElement[]
+        {
+            DetailStat(() => DetailSplitKey(0), () => SkillDetail(9)),
+            DetailStat(() => DetailSplitKey(1), () => SkillDetail(10)),
+            DetailStat(() => DetailSplitKey(2), () => SkillDetail(11)),
+            DetailStat(() => DetailSplitKey(3), () => SkillDetail(12)),
+            DetailStat(() => DetailSplitKey(4), () => SkillDetail(13)),
+        }, Gap: 10f),
     }, Gap: 4f);
+
+    // Row-3 labels per metric (Taken has no outgoing splits).
+    private string DetailSplitKey(int col)
+    {
+        if (_skillBreakdown is not { } sb || sb.Metric == Metric.Taken) return "";
+        return sb.Metric == Metric.Hps
+            ? col switch { 0 => "C.HEAL", 1 => "L.HEAL", 2 => "CL.HEAL", 3 => "EFFECTIVE", _ => "OVERHEAL" }
+            : col switch { 0 => "C.DMG", 1 => "L.DMG", 2 => "CL.DMG", 3 => "SHLD BRK", _ => "ACTIVE" };
+    }
 
     private HudElement DetailStat(Func<string> key, Func<string> value)
         => new CellElement(new ColumnElement(new HudElement[]
@@ -74,8 +93,23 @@ public sealed partial class Plugin
             6 => $"{ComputeUptime(s.FirstHitMs, s.LastHitMs, dur) * 100f:F0}%",
             7 => sb.Metric == Metric.Hps ? FormatAmount(s.TotalDamage) : FormatAmount(s.TotalHealing),
             8 => $"{luck:F0}%",
+            // Row 3 — ZDPS-parity splits, metric-aware.
+            9  => sb.Metric == Metric.Hps ? FormatAmount(s.CritHealing) : FormatAmount(s.CritDamage),
+            10 => sb.Metric == Metric.Hps ? FormatAmount(s.LuckyHealing) : FormatAmount(s.LuckyDamage),
+            11 => sb.Metric == Metric.Hps ? FormatAmount(s.CritLuckyHealing) : FormatAmount(s.CritLuckyDamage),
+            12 => sb.Metric == Metric.Hps ? FormatAmount(s.EffectiveHealing) : FormatAmount(s.ShieldBreak),
+            13 => sb.Metric == Metric.Hps
+                ? FormatAmount(Math.Max(0, s.TotalHealing - s.EffectiveHealing))
+                : FormatAmount(ActiveDps(s)),
             _ => "—",
         };
+    }
+
+    /// <summary>Damage over the source's own active span (first→last hit) — ZDPS "Active DPS".</summary>
+    private static long ActiveDps(SourceStats s)
+    {
+        var span = s.LastHitMs - s.FirstHitMs;
+        return span > 0 ? s.TotalDamage * 1000 / span : 0;
     }
 
     // Taken-mode detail: every stat derives from the incoming side. CRIT%/UPTIME have no taken analogue

@@ -273,7 +273,32 @@ internal sealed class CombatLogAssembler
             Attributes:   attrs,
             Gear:         gear,
             Skills:       skills,
-            Fashion:      fashion);
+            Fashion:      fashion,
+            GearDetail:   BuildGearDetail(snap));
+    }
+
+    // Self-only per-piece instance detail (captured into the snapshot from IInventory.GetSelfGear;
+    // arrays are empty for everyone else). Null when absent so the writer omits the key entirely.
+    private static IReadOnlyList<GearDetail>? BuildGearDetail(EntitySnapshot snap)
+    {
+        var n = snap.GdSlots.Length;
+        if (n == 0) return null;
+        var list = new List<GearDetail>(n);
+        var off = 0;
+        for (var i = 0; i < n; i++)
+        {
+            var count = i < snap.GdRollCounts.Length ? snap.GdRollCounts[i] : 0;
+            var rolls = new int[count][];
+            for (var r = 0; r < count && off + 3 < snap.GdRolls.Length; r++, off += 4)
+                rolls[r] = new[] { snap.GdRolls[off], snap.GdRolls[off + 1], snap.GdRolls[off + 2], snap.GdRolls[off + 3] };
+            list.Add(new GearDetail(
+                snap.GdSlots[i], snap.GdQuality[i], snap.GdRefine[i],
+                snap.GdPerfVal[i], snap.GdPerfMax[i],
+                snap.GdEnchantId[i], snap.GdEnchantLv[i], rolls,
+                i < snap.GdItemLv.Length ? snap.GdItemLv[i] : 0,
+                i < snap.GdBt.Length ? snap.GdBt[i] : 0));
+        }
+        return list;
     }
 
     private static string GenerateLogId()

@@ -63,6 +63,13 @@ public sealed partial class Plugin : IStellarPlugin
     // it rides on the derived aggregates, not the truncation-bounded event ring.
     private readonly List<DeathEntry> _deaths = new();
 
+    // Battle-imagine cast log (all players) — TRUE timestamps for the web replay timeline. The raw
+    // event ring truncates on long fights (a 20-man world boss keeps only the tail), so bubbles built
+    // from raw events bunched at the end; this list rides on the aggregates instead. Deduped per
+    // (source, base imagine id) within a short window; capped as a runaway guard.
+    private readonly List<ImagineCastEntry> _imagineCasts = new();
+    private readonly Dictionary<(EntityId, int), long> _lastImagineCastMs = new();
+
     // EntityId -> per-second time-series (dealt/healing/taken). Frozen into history at archive.
     // Bucket count is HARD-CAPPED at TimelineMaxBuckets: the timeline coalesces (doubles bucket width)
     // past it, so the series stays bounded no matter how long the fight runs — a 1-hour encounter just
@@ -291,6 +298,8 @@ public sealed partial class Plugin : IStellarPlugin
         _stats.Clear();
         _timelines.Clear();
         _deaths.Clear();
+        _imagineCasts.Clear();
+        _lastImagineCastMs.Clear();
         _agg.Reset();
         // Reset the per-entity bar-animation cache too — it's keyed by EntityId and would otherwise grow
         // unbounded across a session (one entry per entity ever ranked). Clear() is the encounter-reset hook

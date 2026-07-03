@@ -34,8 +34,8 @@ public sealed class HistoryStoreTests
             TopHit = 54321, Hits = 480, Crits = 91, Luckys = 64, Kills = 3,
             FirstHitMs = 1000, LastHitMs = 120000,
         };
-        sa.BySkill[101] = new SkillStats { Total = 500000, HealTotal = 0, Hits = 200, Crits = 40, Luckys = 25, TopHit = 30000 };
-        sa.BySkill[102] = new SkillStats { Total = 0, HealTotal = 4242, Hits = 12, Crits = 1, Luckys = 0, TopHit = 800 };
+        sa.BySkill[101] = new SkillStats { Total = 500000, HealTotal = 0, Hits = 200, Crits = 40, Luckys = 25, CritLuckys = 9, TopHit = 30000, MinHit = 120, Kills = 2 };
+        sa.BySkill[102] = new SkillStats { Total = 0, HealTotal = 4242, HealHits = 12, HealCrits = 1, HealLuckys = 3, HealTop = 800 };
         sa.IncomingBySkill[900] = new IncomingSkillStats { Total = 7777, Hits = 30, TopHit = 1200 };
         e.Stats[a] = sa;
 
@@ -76,6 +76,17 @@ public sealed class HistoryStoreTests
             FashionIds = new[] { 7001, 7002 },
             FashionDyeCounts = new[] { 2, 0 },
             FashionDyes = new[] { 0.5f, 0.25f, 0.125f, 1f, 0.9f, 0.8f, 0.7f, 1f },   // 2 colours for entry 0
+            // v4 self-only gear detail: two pieces, first with 2 rolls, second with 1.
+            GdSlots      = new[] { 200, 201 },
+            GdQuality    = new[] { 4, 5 },
+            GdRefine     = new[] { 15, 12 },
+            GdItemLv     = new[] { 170, 160 },
+            GdPerfVal    = new[] { 100, 87 },
+            GdPerfMax    = new[] { 100, 100 },
+            GdEnchantId  = new[] { 55001, 0 },
+            GdEnchantLv  = new[] { 3, 0 },
+            GdRollCounts = new[] { 2, 1 },
+            GdRolls      = new[] { 1, 9001, 95, 1,  1, 9002, 40, 0,  0, 9100, 100, 0 },
         };
         return e;
     }
@@ -98,6 +109,16 @@ public sealed class HistoryStoreTests
         Assert.Equal(want.FashionIds, got.FashionIds);
         Assert.Equal(want.FashionDyeCounts, got.FashionDyeCounts);
         Assert.Equal(want.FashionDyes, got.FashionDyes);
+        Assert.Equal(want.GdSlots, got.GdSlots);
+        Assert.Equal(want.GdQuality, got.GdQuality);
+        Assert.Equal(want.GdRefine, got.GdRefine);
+        Assert.Equal(want.GdItemLv, got.GdItemLv);
+        Assert.Equal(want.GdPerfVal, got.GdPerfVal);
+        Assert.Equal(want.GdPerfMax, got.GdPerfMax);
+        Assert.Equal(want.GdEnchantId, got.GdEnchantId);
+        Assert.Equal(want.GdEnchantLv, got.GdEnchantLv);
+        Assert.Equal(want.GdRollCounts, got.GdRollCounts);
+        Assert.Equal(want.GdRolls, got.GdRolls);
     }
 
     [Fact]
@@ -140,7 +161,14 @@ public sealed class HistoryStoreTests
                 Assert.Equal(sk.Hits, dk.Hits);
                 Assert.Equal(sk.Crits, dk.Crits);
                 Assert.Equal(sk.Luckys, dk.Luckys);
+                Assert.Equal(sk.CritLuckys, dk.CritLuckys);
                 Assert.Equal(sk.TopHit, dk.TopHit);
+                Assert.Equal(sk.MinHit, dk.MinHit);
+                Assert.Equal(sk.Kills, dk.Kills);
+                Assert.Equal(sk.HealHits, dk.HealHits);
+                Assert.Equal(sk.HealCrits, dk.HealCrits);
+                Assert.Equal(sk.HealLuckys, dk.HealLuckys);
+                Assert.Equal(sk.HealTop, dk.HealTop);
             }
             Assert.Equal(s.IncomingBySkill.Count, d.IncomingBySkill.Count);
             foreach (var (sid, inc) in s.IncomingBySkill)
@@ -255,7 +283,7 @@ public sealed class HistoryStoreTests
     [InlineData("[]")]                                 // array, not the expected object
     [InlineData("{\"v\":1,\"bogus\":5}")]             // unknown key
     [InlineData("{\"scene\":\"x\"}")]                 // missing version marker
-    [InlineData("{\"v\":4,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
+    [InlineData("{\"v\":6,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
     public void Malformed_or_legacy_input_is_skipped_without_throwing(string garbage)
     {
         // Must never throw, and must report failure (entry skipped) for unsupported shapes.

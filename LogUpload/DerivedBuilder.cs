@@ -19,16 +19,24 @@ internal static class DerivedBuilder
         {
             var key = id.Value.ToString(CultureInfo.InvariantCulture);
             perActor[key] = new ActorAgg(s.TotalDamage, s.TotalHealing, s.TotalTaken,
-                s.Hits, s.Crits, s.Luckys, s.Deaths, s.TopHit, s.FirstHitMs, s.LastHitMs);
+                s.Hits, s.Crits, s.Luckys, s.Deaths, s.TopHit, s.FirstHitMs, s.LastHitMs,
+                s.CritLuckys,
+                s.CritDamage, s.LuckyDamage, s.CritLuckyDamage, s.ShieldBreak,
+                s.HealHits, s.HealCrits, s.HealLuckys, s.HealCritLuckys,
+                s.CritHealing, s.LuckyHealing, s.CritLuckyHealing,
+                s.TopHeal, s.EffectiveHealing);
 
             var dl = new List<SkillAgg>(); var hl = new List<SkillAgg>();
             foreach (var (sid, sk) in s.BySkill)
             {
-                if (sk.Total > 0) dl.Add(new SkillAgg(sid, sk.Total, sk.Hits, sk.Crits));
-                if (sk.HealTotal > 0) hl.Add(new SkillAgg(sid, sk.HealTotal, sk.Hits, sk.Crits));
+                if (sk.Total > 0)
+                    dl.Add(new SkillAgg(sid, sk.Total, sk.Hits, sk.Crits, sk.Luckys, sk.CritLuckys, sk.TopHit, sk.MinHit));
+                // Heal rows use the SEPARATE heal counters (damage Hits/Crits were wrong for hybrids).
+                if (sk.HealTotal > 0)
+                    hl.Add(new SkillAgg(sid, sk.HealTotal, sk.HealHits, sk.HealCrits, sk.HealLuckys, 0, sk.HealTop, 0));
             }
             var tl = new List<TakenAgg>();
-            foreach (var (sid, inc) in s.IncomingBySkill) tl.Add(new TakenAgg(sid, inc.Total, inc.Hits));
+            foreach (var (sid, inc) in s.IncomingBySkill) tl.Add(new TakenAgg(sid, inc.Total, inc.Hits, inc.TopHit));
             dmgSkills[key] = dl; healSkills[key] = hl; takenSkills[key] = tl;
         }
 
@@ -36,8 +44,13 @@ internal static class DerivedBuilder
         foreach (var de in entry.DeathLog)
             deaths.Add(new DeathRec(de.Ms, de.Victim.Value.ToString(CultureInfo.InvariantCulture), de.Skill));
 
+        var casts = new List<ImagineCastRec>(entry.ImagineCasts.Count);
+        foreach (var ic in entry.ImagineCasts)
+            casts.Add(new ImagineCastRec(ic.Ms, ic.Source.Value.ToString(CultureInfo.InvariantCulture), ic.Skill));
+
         var series = BuildSeries(entry);
-        return new Derived(entry.CombatDurationMs, truncatedEvents, perActor, dmgSkills, healSkills, takenSkills, deaths, series);
+        return new Derived(entry.CombatDurationMs, truncatedEvents, perActor, dmgSkills, healSkills, takenSkills, deaths, series,
+            casts.Count > 0 ? casts : null);
     }
 
     private static SeriesBlock BuildSeries(Plugin.EncounterHistoryEntry entry)

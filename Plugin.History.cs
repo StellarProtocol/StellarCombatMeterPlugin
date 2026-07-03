@@ -15,6 +15,9 @@ internal struct SourceSeries
 /// <summary>A single killing-blow record: when (epoch ms), who died, and the attacker skill id.</summary>
 internal readonly record struct DeathEntry(long Ms, EntityId Victim, int Skill);
 
+/// <summary>One battle-imagine cast: when (epoch ms), who, and the BASE imagine skill id.</summary>
+internal readonly record struct ImagineCastEntry(long Ms, EntityId Source, int Skill);
+
 public sealed partial class Plugin
 {
     private const int HistoryCapacity = 50;
@@ -29,7 +32,8 @@ public sealed partial class Plugin
         public long     CombatDurationMs;
         public Dictionary<EntityId, SourceStats> Stats = new();
         public Dictionary<EntityId, SourceSeries> Series = new();   // NEW
-        public List<DeathEntry> DeathLog = new();   // NEW: complete killing-blow list (truncation-independent)
+        public List<DeathEntry> DeathLog = new();   // complete killing-blow list (truncation-independent)
+        public List<ImagineCastEntry> ImagineCasts = new();   // imagine casts w/ true ms (truncation-independent)
         public Dictionary<EntityId, EntitySnapshot> Entities = new();   // per-player frozen entity snapshot (issue #5)
         public PartyType PartyType;
         public int       MemberCount;
@@ -76,6 +80,7 @@ public sealed partial class Plugin
             Stats            = DeepCopyStats(),
             Series           = FreezeTimelines(),
             DeathLog         = new List<DeathEntry>(_deaths),
+            ImagineCasts     = new List<ImagineCastEntry>(_imagineCasts),
             Entities         = SnapshotEntities(),
             PartyType        = _services.PartySnapshot.PartyType,
             // Combatant count — every entity that participated, not just party.
@@ -111,48 +116,10 @@ public sealed partial class Plugin
 
     private Dictionary<EntityId, SourceStats> DeepCopyStats()
     {
+        // Clone() is field-complete (MemberwiseClone + dict deep-copy) — a hand-listed
+        // initializer here silently dropped newly added fields from every upload.
         var copy = new Dictionary<EntityId, SourceStats>(_stats.Count);
-        foreach (var (id, src) in _stats)
-        {
-            var s2 = new SourceStats
-            {
-                TotalDamage  = src.TotalDamage,
-                TotalHealing = src.TotalHealing,
-                TotalTaken   = src.TotalTaken,
-                TopHit       = src.TopHit,
-                Hits         = src.Hits,
-                Crits        = src.Crits,
-                Luckys       = src.Luckys,
-                Kills        = src.Kills,
-                Deaths       = src.Deaths,
-                FirstHitMs   = src.FirstHitMs,
-                LastHitMs    = src.LastHitMs,
-                BySkill      = new Dictionary<int, SkillStats>(src.BySkill.Count),
-                IncomingBySkill = new Dictionary<int, IncomingSkillStats>(src.IncomingBySkill.Count),
-            };
-            foreach (var (sid, sk) in src.BySkill)
-            {
-                s2.BySkill[sid] = new SkillStats
-                {
-                    Total     = sk.Total,
-                    HealTotal = sk.HealTotal,
-                    Hits      = sk.Hits,
-                    Crits     = sk.Crits,
-                    Luckys    = sk.Luckys,
-                    TopHit    = sk.TopHit,
-                };
-            }
-            foreach (var (sid, inc) in src.IncomingBySkill)
-            {
-                s2.IncomingBySkill[sid] = new IncomingSkillStats
-                {
-                    Total  = inc.Total,
-                    Hits   = inc.Hits,
-                    TopHit = inc.TopHit,
-                };
-            }
-            copy[id] = s2;
-        }
+        foreach (var (id, src) in _stats) copy[id] = src.Clone();
         return copy;
     }
 

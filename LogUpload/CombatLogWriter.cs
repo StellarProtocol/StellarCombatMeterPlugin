@@ -34,6 +34,12 @@ internal static class CombatLogWriter
         w.Name("perActorHealSkills"); WriteSkillMap(w, d.PerActorHealSkills);
         w.Name("perActorTakenSkills"); WriteTakenMap(w, d.PerActorTakenSkills);
         w.Name("deaths"); WriteDeaths(w, d.Deaths);
+        if (d.ImagineCasts is { Count: > 0 } casts)
+        {
+            w.Name("imagineCasts"); w.BeginArray();
+            foreach (var c in casts) { w.BeginObject(); w.Name("ms").Number(c.Ms); w.Name("src").Str(c.Src); w.Name("skill").Number(c.Skill); w.EndObject(); }
+            w.EndArray();
+        }
         w.Name("series"); WriteSeries(w, d.Series);
         w.EndObject();
     }
@@ -47,6 +53,12 @@ internal static class CombatLogWriter
             w.Name("damage").Number(a.Damage); w.Name("healing").Number(a.Healing); w.Name("damageTaken").Number(a.DamageTaken);
             w.Name("hits").Number(a.Hits); w.Name("crits").Number(a.Crits); w.Name("luckys").Number(a.Luckys); w.Name("deaths").Number(a.Deaths);
             w.Name("topHit").Number(a.TopHit); w.Name("firstHitMs").Number(a.FirstHitMs); w.Name("lastHitMs").Number(a.LastHitMs);
+            w.Name("critLuckys").Number(a.CritLuckys);
+            w.Name("critDmg").Number(a.CritDamage); w.Name("luckyDmg").Number(a.LuckyDamage); w.Name("critLuckyDmg").Number(a.CritLuckyDamage);
+            w.Name("shieldBreak").Number(a.ShieldBreak);
+            w.Name("healHits").Number(a.HealHits); w.Name("healCrits").Number(a.HealCrits); w.Name("healLuckys").Number(a.HealLuckys); w.Name("healCritLuckys").Number(a.HealCritLuckys);
+            w.Name("critHeal").Number(a.CritHealing); w.Name("luckyHeal").Number(a.LuckyHealing); w.Name("critLuckyHeal").Number(a.CritLuckyHealing);
+            w.Name("topHeal").Number(a.TopHeal); w.Name("effHeal").Number(a.EffectiveHealing);
             w.EndObject();
         }
         w.EndObject();
@@ -58,7 +70,15 @@ internal static class CombatLogWriter
         foreach (var kv in m)
         {
             w.Name(kv.Key); w.BeginArray();
-            foreach (var s in kv.Value) { w.BeginObject(); w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total); w.Name("hits").Number(s.Hits); w.Name("crits").Number(s.Crits); w.EndObject(); }
+            foreach (var s in kv.Value)
+            {
+                w.BeginObject();
+                w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total);
+                w.Name("hits").Number(s.Hits); w.Name("crits").Number(s.Crits);
+                w.Name("luckys").Number(s.Luckys); w.Name("critLuckys").Number(s.CritLuckys);
+                w.Name("top").Number(s.Top); w.Name("min").Number(s.Min);
+                w.EndObject();
+            }
             w.EndArray();
         }
         w.EndObject();
@@ -70,7 +90,7 @@ internal static class CombatLogWriter
         foreach (var kv in m)
         {
             w.Name(kv.Key); w.BeginArray();
-            foreach (var s in kv.Value) { w.BeginObject(); w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total); w.Name("hits").Number(s.Hits); w.EndObject(); }
+            foreach (var s in kv.Value) { w.BeginObject(); w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total); w.Name("hits").Number(s.Hits); w.Name("top").Number(s.Top); w.EndObject(); }
             w.EndArray();
         }
         w.EndObject();
@@ -173,8 +193,30 @@ internal static class CombatLogWriter
             w.Name("gear"); WriteIntArrays(w, a.Gear);
             w.Name("skills"); WriteIntArrays(w, a.Skills);
             w.Name("fashion"); WriteFashion(w, a.Fashion);
+            if (a.GearDetail is { Count: > 0 } gd) { w.Name("gearDetail"); WriteGearDetail(w, gd); }
         }
         w.EndObject();
+    }
+
+    private static void WriteGearDetail(JsonWriter w, IReadOnlyList<GearDetail> rows)
+    {
+        w.BeginArray();
+        foreach (var g in rows)
+        {
+            w.BeginObject();
+            w.Name("slot").Number(g.Slot);
+            w.Name("quality").Number(g.Quality);
+            w.Name("refine").Number(g.RefineLevel);
+            w.Name("lvl").Number(g.ItemLevel);
+            w.Name("bt").Number(g.BreakThrough);
+            w.Name("perfVal").Number(g.PerfectionValue);
+            w.Name("perfMax").Number(g.PerfectionMax);
+            w.Name("enchantId").Number(g.EnchantId);
+            w.Name("enchantLv").Number(g.EnchantLevel);
+            w.Name("rolls"); WriteIntArrays(w, g.Rolls);
+            w.EndObject();
+        }
+        w.EndArray();
     }
 
     private static void WriteLongPairs(JsonWriter w, IReadOnlyList<long[]> rows)

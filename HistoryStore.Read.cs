@@ -74,9 +74,23 @@ internal static partial class HistoryStore
                     case "h":   return ReadInt(r, out s.Hits);
                     case "c":   return ReadInt(r, out s.Crits);
                     case "lk":  return ReadInt(r, out s.Luckys);
+                    case "cl":  return ReadInt(r, out s.CritLuckys);
                     case "k":   return ReadInt(r, out s.Kills);
                     case "fh":  return ReadLong(r, out s.FirstHitMs);
                     case "lh":  return ReadLong(r, out s.LastHitMs);
+                    case "cd":  return ReadLong(r, out s.CritDamage);
+                    case "ld":  return ReadLong(r, out s.LuckyDamage);
+                    case "cld": return ReadLong(r, out s.CritLuckyDamage);
+                    case "sb":  return ReadLong(r, out s.ShieldBreak);
+                    case "hh":  return ReadInt(r, out s.HealHits);
+                    case "hc":  return ReadInt(r, out s.HealCrits);
+                    case "hlk": return ReadInt(r, out s.HealLuckys);
+                    case "hcl": return ReadInt(r, out s.HealCritLuckys);
+                    case "ch":  return ReadLong(r, out s.CritHealing);
+                    case "lch": return ReadLong(r, out s.LuckyHealing);
+                    case "clh": return ReadLong(r, out s.CritLuckyHealing);
+                    case "tph": return ReadLong(r, out s.TopHeal);
+                    case "eh":  return ReadLong(r, out s.EffectiveHealing);
                     case "sk":  return ReadSkills(r, s.BySkill);
                     case "in":  return ReadIncoming(r, s.IncomingBySkill);
                     default:    return false;
@@ -98,7 +112,14 @@ internal static partial class HistoryStore
                 "h"   => ReadInt(r, out sk.Hits),
                 "c"   => ReadInt(r, out sk.Crits),
                 "lk"  => ReadInt(r, out sk.Luckys),
+                "cl"  => ReadInt(r, out sk.CritLuckys),
                 "top" => ReadLong(r, out sk.TopHit),
+                "mn"  => ReadLong(r, out sk.MinHit),
+                "k"   => ReadInt(r, out sk.Kills),
+                "hh"  => ReadInt(r, out sk.HealHits),
+                "hc"  => ReadInt(r, out sk.HealCrits),
+                "hlk" => ReadInt(r, out sk.HealLuckys),
+                "htp" => ReadLong(r, out sk.HealTop),
                 _     => false,
             })) return false;
             into[id] = sk;
@@ -170,6 +191,18 @@ internal static partial class HistoryStore
                     case "fi":  return ReadIntArray(r, out s.FashionIds);
                     case "fc":  return ReadIntArray(r, out s.FashionDyeCounts);
                     case "fd":  return ReadFloatArray(r, out s.FashionDyes);
+                    // v4 self-only gear detail.
+                    case "gds":  return ReadIntArray(r, out s.GdSlots);
+                    case "gdq":  return ReadIntArray(r, out s.GdQuality);
+                    case "gdr":  return ReadIntArray(r, out s.GdRefine);
+                    case "gdlv": return ReadIntArray(r, out s.GdItemLv);
+                    case "gdbt": return ReadIntArray(r, out s.GdBt);
+                    case "gdpv": return ReadIntArray(r, out s.GdPerfVal);
+                    case "gdpm": return ReadIntArray(r, out s.GdPerfMax);
+                    case "gdei": return ReadIntArray(r, out s.GdEnchantId);
+                    case "gdel": return ReadIntArray(r, out s.GdEnchantLv);
+                    case "gdrc": return ReadIntArray(r, out s.GdRollCounts);
+                    case "gdrl": return ReadIntArray(r, out s.GdRolls);
                     default:    return false;
                 }
             })) return false;
@@ -197,6 +230,15 @@ internal static partial class HistoryStore
         s.FashionSlots = Trim(s.FashionSlots, fashN);
         s.FashionIds = Trim(s.FashionIds, fashN);
         s.FashionDyeCounts = Trim(s.FashionDyeCounts, fashN);
+
+        // v4 gear-detail group (7 aligned arrays + roll counts; GdRolls is a flat quad stream).
+        var gdN = Min(Min(Min(s.GdSlots.Length, s.GdQuality.Length), Min(s.GdRefine.Length, s.GdPerfVal.Length)),
+                      Min(Min(s.GdPerfMax.Length, s.GdEnchantId.Length), Min(s.GdEnchantLv.Length, s.GdRollCounts.Length)));
+        s.GdSlots = Trim(s.GdSlots, gdN); s.GdQuality = Trim(s.GdQuality, gdN); s.GdRefine = Trim(s.GdRefine, gdN);
+        s.GdPerfVal = Trim(s.GdPerfVal, gdN); s.GdPerfMax = Trim(s.GdPerfMax, gdN);
+        s.GdEnchantId = Trim(s.GdEnchantId, gdN); s.GdEnchantLv = Trim(s.GdEnchantLv, gdN);
+        s.GdRollCounts = Trim(s.GdRollCounts, gdN);
+        s.GdRolls = Trim(s.GdRolls, s.GdRolls.Length - s.GdRolls.Length % 4);   // never a partial quad
         // FashionDyes is a flat RGBA stream consumed by FashionDyeCounts; leave it as read (the renderer clamps
         // its own cursor against the stream length), but never let it carry a partial colour.
         s.FashionDyes = Trim(s.FashionDyes, s.FashionDyes.Length - s.FashionDyes.Length % 4);

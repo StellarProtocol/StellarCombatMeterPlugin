@@ -90,6 +90,19 @@ public sealed partial class Plugin
         if (_replay is null) return;
         _replay.NoteEntity(src);
         _replay.NoteEntity(tgt);
+        // Snapshot monster info NOW, while the AOI caches are live — BuildReplayMeta runs at
+        // archive time when the caches are already wiped, which left every non-boss mob as
+        // "Mob#uid" on the web replay (only the boss had a capture-time snapshot).
+        SnapshotReplayMonster(src);
+        SnapshotReplayMonster(tgt);
+    }
+
+    private readonly Dictionary<EntityId, MonsterInfo?> _replayMonsterInfo = new();
+
+    private void SnapshotReplayMonster(EntityId id)
+    {
+        if (id.IsPlayer || _replayMonsterInfo.ContainsKey(id)) return;
+        _replayMonsterInfo[id] = _services.GameData.World.GetMonsterByEntity(id);
     }
 
     private bool IsInstancedRun() => _services.Dungeon.CurrentRunId != 0;
@@ -99,6 +112,7 @@ public sealed partial class Plugin
         _replay?.Reset();
         _bossEntityId    = default;
         _bossMonsterInfo = null;
+        _replayMonsterInfo.Clear();
         _hpSampler?.Reset();
         _replaySpecs.Clear();
     }
@@ -266,11 +280,15 @@ public sealed partial class Plugin
                 // Use the capture-time snapshot for the boss — caches wiped at archive time.
                 monsterInfo = bossMonsterInfo;
             }
+            else if (id.IsPlayer)
+            {
+                monsterInfo = null;
+            }
             else
             {
-                monsterInfo = id.IsPlayer
-                    ? null
-                    : _services.GameData.World.GetMonsterByEntity(id);
+                // Capture-time snapshot first (live lookup returns null post-wipe at archive).
+                if (!_replayMonsterInfo.TryGetValue(id, out monsterInfo))
+                    monsterInfo = _services.GameData.World.GetMonsterByEntity(id);
             }
             var kind = ReplayKindFor(id, bossEntityIdStr);
             var name = ReplayNameFor(id, monsterInfo);

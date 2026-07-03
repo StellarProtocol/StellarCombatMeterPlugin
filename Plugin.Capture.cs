@@ -72,12 +72,24 @@ public sealed partial class Plugin
         return s;
     }
 
-    // Healing accrues to the source's total + per-skill heal total + healing timeline.
+    // Healing accrues to the source's total + per-skill heal counters + healing timeline.
+    // Heal hits/crits/luckys are tracked SEPARATELY from the damage counters — the upload's heal
+    // breakdown previously borrowed the damage-path Hits/Crits (0/0 for pure heals, wrong for hybrids).
     private void CaptureHeal(SourceStats s, CombatEvent.DamageDealt d)
     {
         s.TotalHealing += d.Amount;
+        s.HealHits += 1;
+        if (d.IsCrit) { s.HealCrits += 1; s.CritHealing += d.Amount; }
+        if (d.IsLucky) { s.HealLuckys += 1; s.LuckyHealing += d.Amount; }
+        if (d.IsCrit && d.IsLucky) { s.HealCritLuckys += 1; s.CritLuckyHealing += d.Amount; }
+        if (d.Amount > s.TopHeal) s.TopHeal = d.Amount;
+        s.EffectiveHealing += d.ActualAmount;   // real applied heal; total − effective = overheal
         if (!s.BySkill.TryGetValue(d.SkillId, out var hsk)) { hsk = new SkillStats(); s.BySkill[d.SkillId] = hsk; }
         hsk.HealTotal += d.Amount;
+        hsk.HealHits  += 1;
+        if (d.IsCrit) hsk.HealCrits += 1;
+        if (d.IsLucky) hsk.HealLuckys += 1;
+        if (d.Amount > hsk.HealTop) hsk.HealTop = d.Amount;
         if (_combatActive) TimelineFor(d.SourceId).Add(TimelineChannel.Healing, d.TimestampMs, _combatStartMs, d.Amount);
     }
 
@@ -102,9 +114,11 @@ public sealed partial class Plugin
         s.TotalDamage += d.Amount;
         TimelineFor(d.SourceId).Add(TimelineChannel.Dealt, d.TimestampMs, _combatStartMs, d.Amount);
         s.Hits        += 1;
-        if (d.IsCrit) s.Crits += 1;
-        if (d.IsLucky) s.Luckys += 1;
+        if (d.IsCrit) { s.Crits += 1; s.CritDamage += d.Amount; }
+        if (d.IsLucky) { s.Luckys += 1; s.LuckyDamage += d.Amount; }
+        if (d.IsCrit && d.IsLucky) { s.CritLuckys += 1; s.CritLuckyDamage += d.Amount; }
         if (d.IsDead) s.Kills += 1;
+        s.ShieldBreak += d.ShieldAbsorbed;
         if (d.Amount > s.TopHit) s.TopHit = d.Amount;
         if (s.FirstHitMs == 0) s.FirstHitMs = d.TimestampMs;
         s.LastHitMs = d.TimestampMs;
@@ -118,7 +132,10 @@ public sealed partial class Plugin
         sk.Hits  += 1;
         if (d.IsCrit) sk.Crits += 1;
         if (d.IsLucky) sk.Luckys += 1;
+        if (d.IsCrit && d.IsLucky) sk.CritLuckys += 1;
+        if (d.IsDead) sk.Kills += 1;
         if (d.Amount > sk.TopHit) sk.TopHit = d.Amount;
+        if (d.Amount > 0 && (sk.MinHit == 0 || d.Amount < sk.MinHit)) sk.MinHit = d.Amount;
     }
 
     // Spec comes from the framework's shared cast-resolved cache (ICombatSpec): the framework recognises
@@ -126,6 +143,20 @@ public sealed partial class Plugin
     // meter no longer infers spec from the AOI loadout (that carries both specs' signature skills →
     // mislabelled players, e.g. Falconry shown as Wildpack). Returns 0 until a spec-defining skill is cast.
     private int ResolveSpec(EntityId id) => StickySpec(id, _services.CombatSpec.GetSubProfession(id));
+
+    // Timeline cast log: one entry per cast (multi-hit imagines collapse via the per-source window);
+    // capped as a runaway guard — 20 players × a cast every ~30s stays far below the cap for any fight.
+    private const int MaxImagineCasts = 600;
+    private const long ImagineCastDedupMs = 5000;
+
+    private void RecordImagineCast(EntityId src, int baseSkillId, long ms)
+    {
+        if (_imagineCasts.Count >= MaxImagineCasts) return;
+        var key = (src, baseSkillId);
+        if (_lastImagineCastMs.TryGetValue(key, out var last) && ms - last < ImagineCastDedupMs) return;
+        _lastImagineCastMs[key] = ms;
+        _imagineCasts.Add(new ImagineCastEntry(ms, src, baseSkillId));
+    }
 
     // Feed the inferred-others cooldown tracker when a Battle-Imagine cast is seen (all players incl.
     // self — harmless, self display uses LocalCooldowns). GetImagineForSkill is null for non-imagine
@@ -135,6 +166,7 @@ public sealed partial class Plugin
         if (!d.SourceId.IsPlayer) return;
         if (_services.ResonanceData.GetImagineForSkill(d.SkillId) is not { } info) return;
         LogImagineCast(d.SourceId, d.SkillId, info.SkillId);   // TEMP capture: is the cast seen? how many hits?
+        RecordImagineCast(d.SourceId, info.SkillId, d.TimestampMs);
         int ms = info.ChargeCount > 1 ? info.RechargeMs : info.CooldownMs;
         // Key by the BASE imagine skill id (info.SkillId), not the leveled cast id (d.SkillId), so OtherSlot —
         // which looks the tracker up by the equipped loadout's base id — finds it.
