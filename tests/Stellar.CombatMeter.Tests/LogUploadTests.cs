@@ -279,6 +279,63 @@ public sealed class LogUploadTests
     }
 
     // -------------------------------------------------------------------------
+    // Pre-combat imagine casts (c43da68 follow-up): ImagineCastEntry.Ms carries the
+    // TRUE SkillUsed-Begin epoch ms, independent of _combatStartMs — a cast recorded
+    // while staging (before the encounter's first hit) has Ms < entry.EnteredAtMs
+    // (== _combatStartMs, snapshotted at ManualArchive time). Neither DerivedBuilder
+    // nor CombatLogWriter must clip/drop entries whose Ms precedes the combat window;
+    // the web renderer already normalizes to a combat-relative (possibly negative) ms
+    // via toCombatMs(), so the plugin's only job is to carry the true timestamp through
+    // untouched all the way to the wire.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Derived_preserves_imagine_casts_recorded_before_combat_start()
+    {
+        var id = new EntityId(123L << 16);
+        const long combatStartMs = 50_000;
+        const long preCombatCastMs = 42_000;   // 8s before the first hit — staging-area cast
+        const long duringCombatCastMs = 55_000;
+
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            EnteredAtMs      = combatStartMs,   // snapshotted from _combatStartMs at archive
+            ArchivedAtMs     = 70_000,
+            CombatDurationMs = 20_000,
+            Stats = new() { [id] = new SourceStats { TotalDamage = 100, Hits = 1, FirstHitMs = combatStartMs, LastHitMs = combatStartMs } },
+            ImagineCasts = new()
+            {
+                new ImagineCastEntry(preCombatCastMs, id, 111),
+                new ImagineCastEntry(duringCombatCastMs, id, 222),
+            },
+        };
+
+        var derived = DerivedBuilder.Build(entry, truncatedEvents: false);
+
+        Assert.NotNull(derived.ImagineCasts);
+        Assert.Equal(2, derived.ImagineCasts!.Count);
+        var pre = derived.ImagineCasts!.Single(c => c.Skill == 111);
+        Assert.Equal(preCombatCastMs, pre.Ms);
+        Assert.True(pre.Ms < entry.EnteredAtMs, "pre-combat cast must keep its true ms, before encounter.StartMs");
+
+        var during = derived.ImagineCasts!.Single(c => c.Skill == 222);
+        Assert.Equal(duringCombatCastMs, during.Ms);
+
+        // Round-trip through the wire writer: the JSON must carry the pre-combat cast's true
+        // (smaller-than-StartMs) ms verbatim — no clamping to encounter.StartMs.
+        var encounter = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(combatStartMs, encounter.StartMs);
+
+        var header = new LogHeader("cm-precombat-cast", 70_000L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            encounter, new Uploader(id.Value, "sig", "nonce"));
+        var log = new CombatLog(1, header, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>(), derived);
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains($"\"ms\":{preCombatCastMs},\"src\":\"{id.Value}\",\"skill\":111", json);
+        Assert.Contains($"\"ms\":{duringCombatCastMs},\"src\":\"{id.Value}\",\"skill\":222", json);
+    }
+
+    // -------------------------------------------------------------------------
     // BuildEncounter: run-identity comes from the archived entry, NOT live IDungeonState.
     // -------------------------------------------------------------------------
 
