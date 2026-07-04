@@ -20,6 +20,7 @@ public sealed partial class Plugin
 
     private Dictionary<long, long>? _portraitStamps;                     // loaded lazily from prefs
     private readonly ConcurrentQueue<(List<long> Uids, long SentAtMs)> _portraitAcks = new();
+    private bool _portraitEmptyLogged;                                   // one-shot breadcrumb, see LogNothingToReportOnce
 
     /// <summary>Called from AssembleAndUpload right after the log upload is fired (main thread).
     /// Collects roster members whose stamp is stale and fires one signed batch POST. Never throws.</summary>
@@ -27,13 +28,12 @@ public sealed partial class Plugin
     {
         try
         {
-            var members = _services.PartyRoster.Members;
-            if (members.Count == 0) return;                              // solo — nothing with URLs yet
+            var members = _services.PartyRoster.Members;                 // empty on solo/NPC runs — self is covered below
             _portraitStamps ??= LoadPortraitStamps();
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-            var entries = new List<PortraitEntry>(members.Count);
-            var uids = new List<long>(members.Count);
+            var entries = new List<PortraitEntry>(members.Count + 1);
+            var uids = new List<long>(members.Count + 1);
             foreach (var m in members)
             {
                 var entry = BuildPortraitEntry(m, now);
@@ -42,7 +42,8 @@ public sealed partial class Plugin
                 uids.Add(m.CharId);
                 if (entries.Count == 24) break;                          // server cap
             }
-            if (entries.Count == 0) return;
+            AppendSelfIfMissing(entries, uids, now);
+            if (entries.Count == 0) { LogNothingToReportOnce(); return; }
 
             var localUid = LocalUidForUpload();                          // same source as CombatLogAssembler's Uploader.LocalUid
             var nonce = Guid.NewGuid().ToString("N");
@@ -90,6 +91,59 @@ public sealed partial class Plugin
             MasterScore:  snap?.Identity.MasterScore ?? 0,
             TitleId:      snap?.Identity.TitleId ?? 0,
             FightPoint:   snap?.FightPoint ?? 0);
+    }
+
+    /// <summary>Ensures the LOCAL player is in the batch even when the roster is empty (solo/NPC
+    /// runs) or missed self. Built from the social-snapshot cache alone; no-op when the snapshot
+    /// is absent, self is already batched (by uid), the stamp is fresh, or the batch is full.</summary>
+    private void AppendSelfIfMissing(List<PortraitEntry> entries, List<long> uids, long nowMs)
+    {
+        if (entries.Count >= 24) return;                                 // server cap
+        var self = TryBuildSelfEntry(nowMs);
+        if (self is null || uids.Contains(self.Uid)) return;
+        entries.Add(self);
+        uids.Add(self.Uid);
+    }
+
+    /// <summary>Builds the local player's entry from the cached social snapshot (populated after
+    /// the ID card was opened), or null when unavailable/throttled/URL-less.</summary>
+    private PortraitEntry? TryBuildSelfEntry(long nowMs)
+    {
+        var selfEntity = _services.CombatSnapshot.LocalEntityId;
+        if (selfEntity.Value == 0) return null;                          // not in world yet
+        var snap = _services.EntityDetail.GetSocialSnapshot(selfEntity);
+        if (snap is null) return null;
+
+        // CharId is the wire truth; the >>16 fallback mirrors CombatLogAssembler's uid derivation.
+        var uid = snap.CharId != 0 ? snap.CharId : selfEntity.Value >> 16;
+        if (uid == 0) return null;
+        if (_portraitStamps!.TryGetValue(uid, out var t) && nowMs - t < PortraitTtlMs) return null;
+
+        var profileUrl  = PickUrl(snap.ProfileUrl, null);
+        var halfbodyUrl = PickUrl(snap.HalfBodyUrl, null);
+        if (profileUrl is null && halfbodyUrl is null) return null;      // no pictures on the CDN yet
+
+        return new PortraitEntry(
+            Uid: uid,
+            ProfileUrl:  profileUrl,
+            HalfbodyUrl: halfbodyUrl,
+            Name:         Truncate(snap.Name),
+            Level:        snap.Level,
+            ProfessionId: snap.ProfessionId,
+            Guild:        Truncate(snap.Identity.Guild),
+            MasterScore:  snap.Identity.MasterScore,
+            TitleId:      snap.Identity.TitleId,
+            FightPoint:   snap.FightPoint);
+    }
+
+    // One-shot (per session) diagnosis breadcrumb: fires only when the reporter had nothing to
+    // send AND the self social snapshot is absent — the case E2E would otherwise be blind to.
+    private void LogNothingToReportOnce()
+    {
+        if (_portraitEmptyLogged) return;
+        if (_services.EntityDetail.GetSocialSnapshot(_services.CombatSnapshot.LocalEntityId) is not null) return;
+        _portraitEmptyLogged = true;
+        _services.Log.Info("[CombatMeter.Portraits] Nothing to report: no eligible roster entries and no self social snapshot cached yet.");
     }
 
     /// <summary>Drain acks on the main thread (call from the plugin's existing per-frame poll,
