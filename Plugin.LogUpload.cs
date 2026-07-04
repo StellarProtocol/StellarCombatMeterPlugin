@@ -164,6 +164,8 @@ public sealed partial class Plugin
                 if (ok) _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId}");
                 else    _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
             });
+
+            MaybeReportPortraits();
         }
         catch (Exception ex)
         {
