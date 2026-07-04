@@ -106,6 +106,12 @@ public sealed partial class Plugin
     internal void MaybeUploadLog(EncounterHistoryEntry entry)
     {
         if (!AutoUpload) { _logBuffer.Clear(); return; }
+        if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
+        {                           // path; uploading would collide every field fight on run:0
+            _logBuffer.Clear();
+            _services.Log.Info("[CombatMeter.SP1] Field fight (no run id) — not uploaded.");
+            return;
+        }
 
         AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true);
     }
