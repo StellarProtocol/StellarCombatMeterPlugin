@@ -1,5 +1,5 @@
 // Portrait batch reporting: after each run upload, send roster avatar URLs + identity
-// to StellarLogs, throttled to once per 24 h per charId.
+// to StellarLogs, throttled to once per 24 h per character (keyed by entity uid).
 
 using System;
 using System.Collections.Concurrent;
@@ -39,7 +39,7 @@ public sealed partial class Plugin
                 var entry = BuildPortraitEntry(m, now);
                 if (entry is null) continue;
                 entries.Add(entry);
-                uids.Add(m.CharId);
+                uids.Add(entry.Uid);
                 if (entries.Count == 24) break;                          // server cap
             }
             AppendSelfIfMissing(entries, uids, now);
@@ -70,7 +70,10 @@ public sealed partial class Plugin
     private PortraitEntry? BuildPortraitEntry(PartyMember m, long nowMs)
     {
         if (m.CharId == 0) return null;
-        if (_portraitStamps!.TryGetValue(m.CharId, out var t) && nowMs - t < PortraitTtlMs) return null;
+        // Entity uid ((charId << 16) | 640) — the key the StellarLogs site/DO reads for character
+        // pages (same keying as the combat-log actor map). Stamps use the same uid we send.
+        var uid = m.EntityId.Value;
+        if (_portraitStamps!.TryGetValue(uid, out var t) && nowMs - t < PortraitTtlMs) return null;
 
         // Enrich from the social-snapshot cache when available (always populated for self
         // after the ID card was opened; opportunistic for others).
@@ -81,7 +84,7 @@ public sealed partial class Plugin
         if (profileUrl is null && halfbodyUrl is null) return null;      // nothing with URLs for this member yet
 
         return new PortraitEntry(
-            Uid: m.CharId,
+            Uid: uid,
             ProfileUrl:  profileUrl,
             HalfbodyUrl: halfbodyUrl,
             Name:         Truncate(snap?.Name ?? m.Name),
@@ -110,12 +113,13 @@ public sealed partial class Plugin
     private PortraitEntry? TryBuildSelfEntry(long nowMs)
     {
         var selfEntity = _services.CombatSnapshot.LocalEntityId;
-        if (selfEntity.Value == 0) return null;                          // not in world yet
+        if (selfEntity.IsNone) return null;                              // not in world yet (no snapshot key either)
         var snap = _services.EntityDetail.GetSocialSnapshot(selfEntity);
         if (snap is null) return null;
 
-        // CharId is the wire truth; the >>16 fallback mirrors CombatLogAssembler's uid derivation.
-        var uid = snap.CharId != 0 ? snap.CharId : selfEntity.Value >> 16;
+        // Entity uid, same keying as BuildPortraitEntry: prefer the live LocalEntityId; the
+        // (charId << 16) | 640 reconstruction from the snapshot is the equivalent fallback.
+        var uid = selfEntity.Value != 0 ? selfEntity.Value : (snap.CharId << 16) | 640;
         if (uid == 0) return null;
         if (_portraitStamps!.TryGetValue(uid, out var t) && nowMs - t < PortraitTtlMs) return null;
 
