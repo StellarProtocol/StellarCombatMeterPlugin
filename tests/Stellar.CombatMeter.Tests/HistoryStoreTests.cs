@@ -24,6 +24,7 @@ public sealed class HistoryStoreTests
             PartyType        = PartyType.Raid20,
             MemberCount      = 7,
             DifficultyLevel  = 6,   // dungeon challenge level (raw DungeonSceneInfo.difficulty)
+            DungeonStartMs   = 1_699_999_990_000L,   // dungeon run-timer start (epoch ms)
         };
 
         var a = new EntityId(0x0000_0001_0000_0280L);   // player
@@ -138,6 +139,7 @@ public sealed class HistoryStoreTests
         Assert.Equal(src.PartyType, got.PartyType);
         Assert.Equal(src.MemberCount, got.MemberCount);
         Assert.Equal(src.DifficultyLevel, got.DifficultyLevel);
+        Assert.Equal(src.DungeonStartMs, got.DungeonStartMs);
 
         Assert.Equal(src.Stats.Count, got.Stats.Count);
         foreach (var (id, s) in src.Stats)
@@ -237,6 +239,21 @@ public sealed class HistoryStoreTests
         Assert.Empty(got.Entities);   // v1 carried no entities → empty map, no throw
     }
 
+    // A v6 entry (no "dstart" key) STILL LOADS under the v7 reader — DungeonStartMs defaults to 0
+    // (the version-bump trap: older entries lack the newer key, must load with the default).
+    [Fact]
+    public void V6_entry_without_dstart_loads_with_zero_dungeon_start()
+    {
+        const string v6 = "{\"v\":6,\"scene\":\"Old Keep\",\"enter\":100,\"arch\":200,\"dur\":50,"
+                        + "\"party\":0,\"members\":3,\"luid\":42,\"pass\":0,\"mms\":0,\"diff\":6,\"res\":\"partial\","
+                        + "\"stats\":[],\"series\":[],\"entities\":[]}";
+
+        Assert.True(HistoryStore.TryDeserializeEntry(v6, out var got));
+        Assert.NotNull(got);
+        Assert.Equal(6, got!.DifficultyLevel);
+        Assert.Equal(0L, got.DungeonStartMs);   // absent in v6 → defaults to 0 (unknown)
+    }
+
     // A truncated / mismatched entities payload degrades — the reader clamps the parallel arrays to their
     // shortest member rather than throwing or mis-indexing (spec §3.3 truncated-degrades).
     [Fact]
@@ -285,7 +302,7 @@ public sealed class HistoryStoreTests
     [InlineData("[]")]                                 // array, not the expected object
     [InlineData("{\"v\":1,\"bogus\":5}")]             // unknown key
     [InlineData("{\"scene\":\"x\"}")]                 // missing version marker
-    [InlineData("{\"v\":7,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
+    [InlineData("{\"v\":8,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
     public void Malformed_or_legacy_input_is_skipped_without_throwing(string garbage)
     {
         // Must never throw, and must report failure (entry skipped) for unsupported shapes.

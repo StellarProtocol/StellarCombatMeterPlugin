@@ -43,6 +43,9 @@ public sealed partial class Plugin
         // Raw DungeonSceneInfo.difficulty (IDungeonState.CurrentDifficulty), snapshotted at archive.
         // Semantic UNCONFIRMED (1-20 challenge level vs. tier enum) — 0 when absent/not seen.
         public int       DifficultyLevel;
+        // Server epoch ms when the in-game dungeon run-timer started (IDungeonState.RunTimerStartMs),
+        // snapshotted at archive. 0 when unknown (no run timer seen / open world).
+        public long      DungeonStartMs;
         public string    Result = "partial"; // "kill" once settled, else "partial"
     }
 
@@ -102,6 +105,7 @@ public sealed partial class Plugin
             PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
             DifficultyLevel  = _services.Dungeon.CurrentDifficulty,
+            DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
             Result           = freshSettlement is not null ? "kill" : "partial",
         };
         _history.Add(entry);

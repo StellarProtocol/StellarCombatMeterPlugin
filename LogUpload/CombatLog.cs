@@ -59,7 +59,10 @@ internal sealed record Encounter(
     string Result, long StartMs, long EndMs, long DurationMs, int PassTime,
     // Raw DungeonSceneInfo.difficulty (dungeon challenge level, e.g. "Master 6"'s 6).
     // Semantic UNCONFIRMED (1-20 level vs. tier enum) — additive, 0/omitted when unknown.
-    int DifficultyLevel = 0);
+    int DifficultyLevel = 0,
+    // Server epoch ms when the in-game dungeon run-timer started (IDungeonState.RunTimerStartMs).
+    // Additive — 0/omitted when unknown. NOT covered by the upload signature (CanonicalPayload).
+    long DungeonStartMs = 0);
 
 internal sealed record Uploader(long LocalUid, string Sig, string Nonce);
 

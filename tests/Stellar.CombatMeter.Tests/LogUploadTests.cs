@@ -360,6 +360,50 @@ public sealed class LogUploadTests
         Assert.Equal(348535, enc.DurationMs);     // EndMs - StartMs
     }
 
+    // The archived entry's DungeonStartMs (snapshotted from IDungeonState.RunTimerStartMs at
+    // ManualArchive, same lifecycle point as DifficultyLevel) flows through BuildEncounter and
+    // is emitted as header.encounter.dungeonStartMs when set.
+    [Fact]
+    public void BuildEncounter_carries_dungeonStartMs_and_writer_emits_it_when_set()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 11_000, CombatDurationMs = 10_000,
+            LevelUuid = 42, Result = "kill",
+            DungeonStartMs = 1_700_000_000_000L,   // run-timer start snapshotted at archive
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(1_700_000_000_000L, enc.DungeonStartMs);
+
+        var hdr = new LogHeader("cm-dstart", 11_000L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains("\"dungeonStartMs\":1700000000000", json);
+    }
+
+    // Unknown run-timer start (0) is OMITTED from header.encounter — matching how the other
+    // optional encounter fields (difficultyLevel, name, bossName, …) are handled.
+    [Fact]
+    public void Writer_omits_dungeonStartMs_when_unknown()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 11_000, CombatDurationMs = 10_000,
+            LevelUuid = 42, Result = "partial",   // DungeonStartMs left at default 0
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(0L, enc.DungeonStartMs);
+
+        var hdr = new LogHeader("cm-no-dstart", 11_000L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.DoesNotContain("dungeonStartMs", json);
+    }
+
     // -------------------------------------------------------------------------
     // Manual-upload offline serialize smoke: a CombatLog built from an entry's
     // aggregates with EMPTY events serializes correctly — every rendered number
@@ -564,5 +608,26 @@ public sealed class LogUploadTests
         Assert.Equal(7, parts.Length);
         Assert.Equal(64, parts[6].Length);
         Assert.Matches("^[0-9a-f]{64}$", parts[6]);
+    }
+
+    // Signature safety: the canonical payload hashes only logId|levelUuid|localUid|startMs|endMs|
+    // nonce|sha256(events) — DungeonStartMs (like DifficultyLevel) is NOT covered, so adding it
+    // to header.encounter cannot change an existing signature.
+    [Fact]
+    public void CanonicalPayload_is_invariant_to_dungeonStartMs()
+    {
+        var actors = new Dictionary<string, Actor>();
+        var upl = new Uploader(55L, "", "abc123nonce");
+        Encounter Enc(long dstart) => new Encounter("dungeon", 77L, null, 100, 0, null, 0, null, null, 0,
+            "kill", 1000L, 2000L, 1000L, 0, DifficultyLevel: 0, DungeonStartMs: dstart);
+
+        var without = CanonicalPayload.Build(new CombatLog(1,
+            new LogHeader("my-log-id", 2000L, "2.11", "SEA", null, null, "public", Enc(0), upl),
+            actors, new List<CombatLogEvent>()));
+        var with = CanonicalPayload.Build(new CombatLog(1,
+            new LogHeader("my-log-id", 2000L, "2.11", "SEA", null, null, "public", Enc(1_700_000_000_000L), upl),
+            actors, new List<CombatLogEvent>()));
+
+        Assert.Equal(without, with);
     }
 }
