@@ -12,14 +12,16 @@ namespace Stellar.CombatMeter.LogUpload;
 internal sealed record PortraitEntry(
     long Uid, string? ProfileUrl, string? HalfbodyUrl,
     string? Name, int Level, int ProfessionId,
-    string? Guild, int MasterScore, int TitleId, long FightPoint);
+    string? Guild, int MasterScore, int TitleId, long FightPoint,
+    int FashionCollect = 0, int RideCollect = 0, int WeaponSkinCollect = 0);
 
 /// <summary>
 /// Serializes a portrait batch and builds its canonical signing payload.
 /// CROSS-REPO INVARIANT (services/stellar-logs/src/worker/verify.ts): the server hashes
 /// JSON.stringify of the re-parsed entries — key order and key omission here MUST match:
 /// uid, profileUrl, halfbodyUrl, identity{name, level, professionId, guild, masterScore,
-/// titleId, fightPoint}; absent/zero values are OMITTED, never emitted as null/0.
+/// titleId, fightPoint, fashionCollect, rideCollect, weaponSkinCollect}; absent/zero values
+/// are OMITTED, never emitted as null/0.
 /// </summary>
 internal static class PortraitReport
 {
@@ -61,6 +63,9 @@ internal static class PortraitReport
         AppendInt(id, "masterScore", e.MasterScore);
         AppendInt(id, "titleId", e.TitleId);
         AppendLong(id, "fightPoint", e.FightPoint);
+        AppendInt(id, "fashionCollect", e.FashionCollect);
+        AppendInt(id, "rideCollect", e.RideCollect);
+        AppendInt(id, "weaponSkinCollect", e.WeaponSkinCollect);
         if (id.Length > 0)
             sb.Append(",\"identity\":{").Append(id.ToString(), 1, id.Length - 1).Append('}');
         sb.Append('}');

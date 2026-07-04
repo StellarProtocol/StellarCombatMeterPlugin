@@ -93,7 +93,10 @@ public sealed partial class Plugin
             Guild:        Truncate(snap?.Identity.Guild),
             MasterScore:  snap?.Identity.MasterScore ?? 0,
             TitleId:      snap?.Identity.TitleId ?? 0,
-            FightPoint:   snap?.FightPoint ?? 0);
+            FightPoint:   snap?.FightPoint ?? 0,
+            FashionCollect:    snap?.Identity.FashionCollect ?? 0,
+            RideCollect:       snap?.Identity.RideCollect ?? 0,
+            WeaponSkinCollect: snap?.Identity.WeaponSkinCollect ?? 0);
     }
 
     /// <summary>Ensures the LOCAL player is in the batch even when the roster is empty (solo/NPC
@@ -137,7 +140,10 @@ public sealed partial class Plugin
             Guild:        Truncate(snap.Identity.Guild),
             MasterScore:  snap.Identity.MasterScore,
             TitleId:      snap.Identity.TitleId,
-            FightPoint:   snap.FightPoint);
+            FightPoint:   snap.FightPoint,
+            FashionCollect:    snap.Identity.FashionCollect,
+            RideCollect:       snap.Identity.RideCollect,
+            WeaponSkinCollect: snap.Identity.WeaponSkinCollect);
     }
 
     // One-shot (per session) diagnosis breadcrumb: fires only when the reporter had nothing to
