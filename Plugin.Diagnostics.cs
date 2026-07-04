@@ -57,6 +57,18 @@ public sealed partial class Plugin
             $"[CombatMeter][img-cast] recorded src={src.Value} self={isSelf} base={baseSkillId} ms={ms} now={_services.CombatSnapshot.ServerNowMs}");
     }
 
+    // One line per CombatEvent.EntitySummonAppeared attributed to a tracked player — the signal
+    // ObserveSummonAppeared caches to nudge a foreign imagine cast's recorded timestamp earlier than its
+    // first-hit time. Validation trail: after a run with imagines cast by other players, grep
+    // "[img-summon] appeared" and diff its ms against the matching "[img-cast] recorded" line — the
+    // recorded ms should equal (or be very close to) the appear ms, not the (usually later) hit ms.
+    private void LogSummonAppeared(CombatEvent.EntitySummonAppeared sa)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][img-summon] appeared summoner={sa.SummonerId.Value} summon={sa.SummonId.Value} ms={sa.TimestampMs}");
+    }
+
     // Every SkillUsed event that either belongs to the local player or maps to a Battle Imagine. Kept
     // as an id-space probe: SkillUsed-Begin-based imagine detection was tried and matched ZERO real
     // casts (run 282346129222270976) — these lines show what ids/phases/casters the stream ACTUALLY

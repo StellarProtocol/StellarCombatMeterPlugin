@@ -16,6 +16,7 @@ public sealed partial class Plugin
 
         if (_paused) return;
         if (evt is CombatEvent.SkillUsed su) { LogSkillUsed(su); return; }
+        if (evt is CombatEvent.EntitySummonAppeared sa) { ObserveSummonAppeared(sa); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
@@ -158,6 +159,14 @@ public sealed partial class Plugin
     //            (leveled skill_level_id → SkillFightLevelTable.SkillId → base) — exactly how
     //            ResonanceTracker has always identified foreign casts. First hit of a burst records;
     //            the burst-gap logic below collapses the summon's ongoing action stream into ONE cast.
+    //            The recorded TIMESTAMP is nudged earlier using CombatEvent.EntitySummonAppeared (see
+    //            ObserveSummonAppeared / ResolveImagineCastMs) when a summon owned by the same player
+    //            appeared shortly before the first hit — this trims the summon's wind-up out of the
+    //            recorded cast time without needing an id-mapping table (no offline table links an
+    //            imagine skill id to a summoned MonsterId or a granted buff id — recon'd and confirmed
+    //            absent from StarResonanceData's SkillTable/SkillEffectTable/MonsterTable/BuffTable; see
+    //            task-foreign-imagine-report.md). Non-damaging imagines (e.g. a pure haste buff with no
+    //            summon and no hit) remain undetected — no wire signal attributes them to a caster.
     // Capped as a runaway guard — 20 players × a cast every ~30s stays far below the cap for any fight.
     private const int MaxImagineCasts = 600;
 
@@ -202,8 +211,41 @@ public sealed partial class Plugin
         // Self casts are recorded by the authoritative LocalCooldowns begin-advance detector (press-time,
         // pre-combat-capable); recording them from damage too would double-count the same cast ~seconds late.
         if (d.SourceId.Value == _services.CombatSnapshot.LocalEntityId.Value) return;
-        if (ObserveBurstHit(_lastImagineHitMs, (d.SourceId, info.SkillId), d.TimestampMs, ImagineRetriggerGapMs))
-            AddImagineCast(d.SourceId, info.SkillId, d.TimestampMs);
+        if (!ObserveBurstHit(_lastImagineHitMs, (d.SourceId, info.SkillId), d.TimestampMs, ImagineRetriggerGapMs)) return;
+        long? appearMs = _summonAppearMs.TryGetValue(d.SourceId, out var a) ? a : null;
+        AddImagineCast(d.SourceId, info.SkillId, ResolveImagineCastMs(d.TimestampMs, appearMs, SummonAppearWindowMs));
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Others — early timestamp anchor from CombatEvent.EntitySummonAppeared (see the field's XML doc:
+    // it fires only when an appearing entity's AttrCollection carries AttrTopSummonerId/AttrSummonerId).
+    // Keyed by the OWNER (player), not the summon's own entity id — DamageDealt.SourceId is already
+    // resolved to the same owner (TopSummonerId ?? AttackerUuid), so the two correlate directly without
+    // needing to track the summon's raw uuid or which specific imagine it belongs to.
+    // ------------------------------------------------------------------------------------------------
+
+    // How far back an appear may reach to anchor a hit's cast time. Generous over the recon'd ~6s
+    // wind-up symptom; a stale appear well outside this window falls back to the hit's own timestamp.
+    internal const long SummonAppearWindowMs = 8000;
+
+    private readonly Dictionary<EntityId, long> _summonAppearMs = new();
+
+    private void ObserveSummonAppeared(CombatEvent.EntitySummonAppeared sa)
+    {
+        if (!sa.SummonerId.IsPlayer) return;
+        _summonAppearMs[sa.SummonerId] = sa.TimestampMs;
+        LogSummonAppeared(sa);
+    }
+
+    /// <summary>Picks the cast timestamp to record for a foreign player's imagine: a recent summon-appear
+    /// time when one is on file (press-time-ish, avoids the summon's wind-up), else the hit's own
+    /// timestamp (the pre-existing behaviour).</summary>
+    internal static long ResolveImagineCastMs(long hitMs, long? appearMs, long maxWindowMs)
+    {
+        if (appearMs is not { } a) return hitMs;
+        if (a > hitMs) return hitMs;                  // clock-skew guard: an appear can't postdate its own hit
+        if (hitMs - a > maxWindowMs) return hitMs;     // stale appear — not this burst's summon
+        return a;
     }
 
     // ------------------------------------------------------------------------------------------------

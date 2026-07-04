@@ -130,4 +130,47 @@ public sealed class ImagineCastTests
         // we started watching — must NOT be recorded retroactively.
         Assert.False(Plugin.IsFreshBegin(beginMs: 10_000, nowMs: 10_000 + Plugin.SelfBeginFreshMs + 1));
     }
+
+    // -------------------------------------------------------------------------
+    // Others: EntitySummonAppeared timestamp anchor (ResolveImagineCastMs).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void No_appear_on_file_falls_back_to_hit_time()
+    {
+        Assert.Equal(5000, Plugin.ResolveImagineCastMs(hitMs: 5000, appearMs: null, maxWindowMs: 8000));
+    }
+
+    [Fact]
+    public void Recent_appear_anchors_the_recorded_time_earlier_than_the_hit()
+    {
+        // The summon appeared 4s before its first hit landed (wind-up) — record the earlier, near-press
+        // time instead of the first-hit-late time.
+        Assert.Equal(6000, Plugin.ResolveImagineCastMs(hitMs: 10_000, appearMs: 6000, maxWindowMs: 8000));
+    }
+
+    [Fact]
+    public void Appear_exactly_at_the_window_boundary_still_anchors()
+    {
+        Assert.Equal(2000, Plugin.ResolveImagineCastMs(hitMs: 10_000, appearMs: 2000, maxWindowMs: 8000));
+    }
+
+    [Fact]
+    public void Stale_appear_outside_the_window_falls_back_to_hit_time()
+    {
+        // The cached appear belongs to an earlier, unrelated summon spawn — too old to be this burst's.
+        Assert.Equal(10_000, Plugin.ResolveImagineCastMs(hitMs: 10_000, appearMs: 1999, maxWindowMs: 8000));
+    }
+
+    [Fact]
+    public void Appear_after_the_hit_is_clock_skew_and_ignored()
+    {
+        Assert.Equal(5000, Plugin.ResolveImagineCastMs(hitMs: 5000, appearMs: 5001, maxWindowMs: 8000));
+    }
+
+    [Fact]
+    public void Appear_exactly_at_hit_time_anchors()
+    {
+        Assert.Equal(5000, Plugin.ResolveImagineCastMs(hitMs: 5000, appearMs: 5000, maxWindowMs: 8000));
+    }
 }

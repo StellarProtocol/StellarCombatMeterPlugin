@@ -310,6 +310,7 @@ public sealed partial class Plugin : IStellarPlugin
         _deaths.Clear();
         _imagineCasts.Clear();
         _lastImagineHitMs.Clear();
+        _summonAppearMs.Clear();
         // _selfImagineBegin intentionally NOT cleared — see its declaration in Plugin.Capture.cs.
         _agg.Reset();
         // Reset the per-entity bar-animation cache too — it's keyed by EntityId and would otherwise grow
