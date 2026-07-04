@@ -65,10 +65,12 @@ public sealed partial class Plugin : IStellarPlugin
 
     // Battle-imagine cast log (all players) — TRUE timestamps for the web replay timeline. The raw
     // event ring truncates on long fights (a 20-man world boss keeps only the tail), so bubbles built
-    // from raw events bunched at the end; this list rides on the aggregates instead. Deduped per
-    // (source, base imagine id) within a short window; capped as a runaway guard.
+    // from raw events bunched at the end; this list rides on the aggregates instead. Self casts come
+    // from the LocalCooldowns begin-advance detector; other players' from the damage burst-gap logic —
+    // _lastImagineHitMs holds each (source, base imagine id)'s last SEEN hit time (refreshed on every
+    // hit, recorded only after a gap of silence). Capped as a runaway guard.
     private readonly List<ImagineCastEntry> _imagineCasts = new();
-    private readonly Dictionary<(EntityId, int), long> _lastImagineCastMs = new();
+    private readonly Dictionary<(EntityId, int), long> _lastImagineHitMs = new();
 
     // EntityId -> per-second time-series (dealt/healing/taken). Frozen into history at archive.
     // Bucket count is HARD-CAPPED at TimelineMaxBuckets: the timeline coalesces (doubles bucket width)
@@ -277,6 +279,7 @@ public sealed partial class Plugin : IStellarPlugin
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
+        DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         RebuildSnapshots();
     }
 
@@ -306,7 +309,8 @@ public sealed partial class Plugin : IStellarPlugin
         _timelines.Clear();
         _deaths.Clear();
         _imagineCasts.Clear();
-        _lastImagineCastMs.Clear();
+        _lastImagineHitMs.Clear();
+        // _selfImagineBegin intentionally NOT cleared — see its declaration in Plugin.Capture.cs.
         _agg.Reset();
         // Reset the per-entity bar-animation cache too — it's keyed by EntityId and would otherwise grow
         // unbounded across a session (one entry per entity ever ranked). Clear() is the encounter-reset hook

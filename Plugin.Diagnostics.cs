@@ -46,9 +46,21 @@ public sealed partial class Plugin
             $"secs={slot.RemainingSeconds} frac={slot.CooldownFraction:F2} now={now}");
     }
 
-    // Every SkillUsed event that either belongs to the local player or maps to a Battle Imagine. This is
-    // the diagnostic trail for the cast-time detector in Plugin.Capture.cs (ObserveResonanceCastBegin) —
-    // shows the raw phase sequence a cast goes through and confirms Begin fires once per press.
+    // One line per RECORDED imagine-cast entry (post burst-gap/dedup, i.e. exactly what lands in
+    // _imagineCasts and therefore in the upload's derived.imagineCasts). Validation trail: after a
+    // run, grep "[img-cast] recorded" and diff against the uploaded log's imagineCasts array.
+    private void LogImagineCastRecorded(EntityId src, int baseSkillId, long ms)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        bool isSelf = src.Value == _services.CombatSnapshot.LocalEntityId.Value;
+        _services.Log.Info(
+            $"[CombatMeter][img-cast] recorded src={src.Value} self={isSelf} base={baseSkillId} ms={ms} now={_services.CombatSnapshot.ServerNowMs}");
+    }
+
+    // Every SkillUsed event that either belongs to the local player or maps to a Battle Imagine. Kept
+    // as an id-space probe: SkillUsed-Begin-based imagine detection was tried and matched ZERO real
+    // casts (run 282346129222270976) — these lines show what ids/phases/casters the stream ACTUALLY
+    // carries so any future attempt starts from data, not assumption.
     private int _skillUsedLogCount;
     private void LogSkillUsed(CombatEvent.SkillUsed su)
     {

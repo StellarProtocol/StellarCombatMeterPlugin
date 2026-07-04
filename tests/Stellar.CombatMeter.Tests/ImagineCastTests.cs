@@ -1,99 +1,133 @@
+using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
-using Stellar.Abstractions.Domain.GameData;
 using Stellar.CombatMeter;
 using Xunit;
 
 namespace Stellar.CombatMeter.Tests;
 
 /// <summary>
-/// Covers the Battle-Imagine cast-detection redesign: casts are recorded at the SkillUsed Begin
-/// (101) event's true timestamp, not inferred from later damage dealt by a summon. Plugin itself
-/// cannot be headless-instantiated (IL2CPP-bound services — see ReplayCaptureTests' doc comment),
-/// so these exercise the extracted pure predicates <see cref="Plugin.IsImagineCastBegin"/> and
-/// <see cref="Plugin.ShouldRecordImagineCast"/> that back <c>ObserveResonanceCastBegin</c> /
-/// <c>RecordImagineCast</c> in Plugin.Capture.cs.
+/// Covers the Battle-Imagine cast-recording logic, modelled on the REAL detection paths (both proven
+/// in-game by the meter's imagine-cooldown display; a SkillUsed-Begin scheme was live-falsified —
+/// run 282346129222270976 recorded zero casts):
+/// <list type="bullet">
+/// <item>SELF — LocalCooldowns begin-advance: the wire moves an imagine cooldown row's
+/// skill_begin_time only ON CAST (ImagineCooldownCalc's contract), so an advance IS a cast at the
+/// press instant. Predicates: <see cref="Plugin.IsSelfCastBeginAdvance"/> + <see cref="Plugin.IsFreshBegin"/>.</item>
+/// <item>OTHERS — DamageDealt hits resolving via GetImagineForSkill, collapsed per damage burst:
+/// <see cref="Plugin.ObserveBurstHit"/> refreshes the (src, base) last-seen time on EVERY hit and only
+/// reports a new cast after ≥ <see cref="Plugin.ImagineRetriggerGapMs"/> of silence.</item>
+/// </list>
+/// Plugin itself cannot be headless-instantiated (IL2CPP-bound services — see ReplayCaptureTests'
+/// doc comment), hence the extracted static predicates.
 /// </summary>
 public sealed class ImagineCastTests
 {
-    private static readonly ImagineInfo SomeImagine = new(
-        SkillId: 12345, Name: "Test Imagine", IconAddress: "", ChargeCount: 2, RechargeMs: 20000, CooldownMs: 0);
+    private static readonly EntityId PlayerA = new(0x0000_0001_0000_0280L);   // low 16 bits = 640 → IsPlayer
+    private static readonly EntityId PlayerB = new(0x0000_0002_0000_0280L);
+    private const int ImagineX = 12345;
+    private const int ImagineY = 54321;
 
     // -------------------------------------------------------------------------
-    // IsImagineCastBegin — only a player's Begin phase against a resolved imagine counts as a cast.
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public void IsImagineCastBegin_true_for_player_begin_with_imagine_info()
-    {
-        Assert.True(Plugin.IsImagineCastBegin(SkillEventPhase.Begin, casterIsPlayer: true, SomeImagine));
-    }
-
-    [Fact]
-    public void IsImagineCastBegin_false_when_skill_is_not_an_imagine()
-    {
-        // GetImagineForSkill returned null — not a Battle Imagine skill at all.
-        Assert.False(Plugin.IsImagineCastBegin(SkillEventPhase.Begin, casterIsPlayer: true, info: null));
-    }
-
-    [Theory]
-    [InlineData(SkillEventPhase.StageBegin)]
-    [InlineData(SkillEventPhase.StageEnd)]
-    [InlineData(SkillEventPhase.AccumulateEnd)]
-    [InlineData(SkillEventPhase.SkillEnd)]
-    public void IsImagineCastBegin_false_for_non_begin_phases_of_the_same_cast(SkillEventPhase phase)
-    {
-        // These are later phases of the SAME cast (or a long-lived summon's later animation stages) —
-        // must never create a second cast entry. This is the fix for the "1:09 phantom cast bubble
-        // when the player had no stacks left" symptom: the old damage-based inference re-fired on the
-        // summon's later ACTION; Begin-only detection structurally excludes every later phase.
-        Assert.False(Plugin.IsImagineCastBegin(phase, casterIsPlayer: true, SomeImagine));
-    }
-
-    [Fact]
-    public void IsImagineCastBegin_false_when_caster_is_not_a_player()
-    {
-        // A long-lived summon's own autonomous actions carry the summon's EntityId as CasterId, which
-        // is never IsPlayer — excluded structurally, no combat-active/encounter gating needed.
-        Assert.False(Plugin.IsImagineCastBegin(SkillEventPhase.Begin, casterIsPlayer: false, SomeImagine));
-    }
-
-    // -------------------------------------------------------------------------
-    // ShouldRecordImagineCast — dedup keyed on (src, base-skill) elsewhere; this is the time-window
-    // predicate in isolation.
+    // Others: burst-gap collapse over the damage stream.
     // -------------------------------------------------------------------------
 
     [Fact]
-    public void ShouldRecordImagineCast_true_on_first_sighting()
+    public void FirstHit_of_a_burst_records_a_cast()
     {
-        Assert.True(Plugin.ShouldRecordImagineCast(ms: 1000, lastMs: null, dedupWindowMs: 1500));
+        var seen = new Dictionary<(EntityId, int), long>();
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 1000, gapMs: 10_000));
     }
 
     [Fact]
-    public void ShouldRecordImagineCast_false_within_the_dedup_window()
+    public void Sustained_summon_damage_records_exactly_one_cast()
     {
-        // A resent/duplicate Begin for the same cast, 400ms later — must not double-record.
-        Assert.False(Plugin.ShouldRecordImagineCast(ms: 1400, lastMs: 1000, dedupWindowMs: 1500));
+        // Reproduces the "phantom cast bubble at 1:09 with no stacks left" symptom: the old dedup
+        // compared against the last RECORDED time, so a summon hitting continuously re-recorded every
+        // 5s. Burst-gap semantics refresh last-seen on every hit — a 90s stream of hits every 3s must
+        // yield exactly ONE cast entry.
+        var seen = new Dictionary<(EntityId, int), long>();
+        int recorded = 0;
+        for (long ms = 0; ms <= 90_000; ms += 3000)
+            if (Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms, Plugin.ImagineRetriggerGapMs)) recorded++;
+        Assert.Equal(1, recorded);
     }
 
     [Fact]
-    public void ShouldRecordImagineCast_true_once_the_window_has_elapsed()
+    public void A_new_burst_after_silence_records_a_second_cast()
     {
-        Assert.True(Plugin.ShouldRecordImagineCast(ms: 2600, lastMs: 1000, dedupWindowMs: 1500));
+        var seen = new Dictionary<(EntityId, int), long>();
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 0, gapMs: 10_000));
+        Assert.False(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 4000, gapMs: 10_000));     // same burst
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 14_000, gapMs: 10_000));    // 10s silence → recast
     }
 
     [Fact]
-    public void ShouldRecordImagineCast_true_at_exactly_the_window_boundary()
+    public void Different_imagines_and_different_players_have_independent_keys()
     {
-        Assert.True(Plugin.ShouldRecordImagineCast(ms: 2500, lastMs: 1000, dedupWindowMs: 1500));
+        // "Two imagines cast back-to-back, only one recorded" symptom: keys include the base skill id
+        // AND the source, so neither a second imagine nor a second player is swallowed by the gap.
+        var seen = new Dictionary<(EntityId, int), long>();
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 29_000, gapMs: 10_000));
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineY), ms: 29_400, gapMs: 10_000));
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerB, ImagineX), ms: 29_500, gapMs: 10_000));
     }
 
     [Fact]
-    public void Two_different_imagines_back_to_back_both_record()
+    public void Gap_boundary_is_inclusive()
     {
-        // Reproduces the "of two imagines cast back-to-back, only one was recorded" symptom. The dedup
-        // key (elsewhere) is (src, baseSkillId) — different base ids never collide, so both casts must
-        // pass ShouldRecordImagineCast independently even inside the same short window.
-        Assert.True(Plugin.ShouldRecordImagineCast(ms: 29000, lastMs: null, dedupWindowMs: 1500));   // imagine A, first sighting
-        Assert.True(Plugin.ShouldRecordImagineCast(ms: 29400, lastMs: null, dedupWindowMs: 1500));   // imagine B, first sighting (independent key)
+        var seen = new Dictionary<(EntityId, int), long>();
+        Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 0, gapMs: 10_000);
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 10_000, gapMs: 10_000));
+    }
+
+    // -------------------------------------------------------------------------
+    // Self: LocalCooldowns skill_begin_time advance.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void First_sighting_of_a_begin_is_a_cast()
+    {
+        Assert.True(Plugin.IsSelfCastBeginAdvance(beginMs: 5000, lastBeginMs: null));
+    }
+
+    [Fact]
+    public void Unchanged_begin_is_the_same_cast()
+    {
+        // The cooldown row is re-polled every ~100ms while recharging; the begin only moves on cast.
+        Assert.False(Plugin.IsSelfCastBeginAdvance(beginMs: 5000, lastBeginMs: 5000));
+    }
+
+    [Fact]
+    public void Begin_jitter_within_the_advance_threshold_is_not_a_cast()
+    {
+        Assert.False(Plugin.IsSelfCastBeginAdvance(beginMs: 5400, lastBeginMs: 5000));
+    }
+
+    [Fact]
+    public void Begin_advance_past_the_threshold_is_a_new_cast()
+    {
+        // Two charges dumped back-to-back each move begin — both must count (pre-combat stack dump).
+        Assert.True(Plugin.IsSelfCastBeginAdvance(beginMs: 5000 + Plugin.SelfBeginAdvanceMs + 1, lastBeginMs: 5000));
+    }
+
+    [Fact]
+    public void Zero_or_negative_begin_is_never_a_cast()
+    {
+        Assert.False(Plugin.IsSelfCastBeginAdvance(beginMs: 0, lastBeginMs: null));
+        Assert.False(Plugin.IsSelfCastBeginAdvance(beginMs: -1, lastBeginMs: null));
+    }
+
+    [Fact]
+    public void First_sighted_recent_begin_is_fresh()
+    {
+        Assert.True(Plugin.IsFreshBegin(beginMs: 10_000, nowMs: 12_000));
+    }
+
+    [Fact]
+    public void First_sighted_old_begin_is_stale_not_a_live_cast()
+    {
+        // Plugin load / scene re-entry mid-recharge: the row's begin is from a cast made long before
+        // we started watching — must NOT be recorded retroactively.
+        Assert.False(Plugin.IsFreshBegin(beginMs: 10_000, nowMs: 10_000 + Plugin.SelfBeginFreshMs + 1));
     }
 }

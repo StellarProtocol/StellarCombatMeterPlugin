@@ -15,7 +15,7 @@ public sealed partial class Plugin
         MaybeCaptureForLog(evt);
 
         if (_paused) return;
-        if (evt is CombatEvent.SkillUsed su) { LogSkillUsed(su); ObserveResonanceCastBegin(su); return; }
+        if (evt is CombatEvent.SkillUsed su) { LogSkillUsed(su); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
@@ -44,6 +44,7 @@ public sealed partial class Plugin
 
         var s = StatsFor(d.SourceId);
 
+        ObserveResonanceCast(d);
         if (d.IsHeal) { CaptureHeal(s, d); return; }
         AccumulateDamage(s, d);
     }
@@ -147,52 +148,106 @@ public sealed partial class Plugin
     // mislabelled players, e.g. Falconry shown as Wildpack). Returns 0 until a spec-defining skill is cast.
     private int ResolveSpec(EntityId id) => StickySpec(id, _services.CombatSpec.GetSubProfession(id));
 
-    // Timeline cast log: one entry per cast, recorded at the SkillUsed Begin (101) event — the button-
-    // press instant, not at first/ongoing damage. Capped as a runaway guard — 20 players × a cast every
-    // ~30s stays far below the cap for any fight.
+    // Timeline cast log: one entry per cast, from the two PROVEN detection signals (the same ones the
+    // meter's imagine-cooldown display already runs on — nothing here invents a new id-matching scheme):
+    //   SELF   — the LocalCooldowns snapshot: the wire moves an imagine row's skill_begin_time only ON
+    //            CAST (ImagineCooldownCalc's documented contract, in-game-validated by the self slot).
+    //            A begin advance IS a cast, timestamped at the press instant — works pre-combat and
+    //            regardless of whether the summon ever deals damage. See DetectSelfImagineCasts.
+    //   OTHERS — DamageDealt hits whose SkillId resolves via IGameDataResonance.GetImagineForSkill
+    //            (leveled skill_level_id → SkillFightLevelTable.SkillId → base) — exactly how
+    //            ResonanceTracker has always identified foreign casts. First hit of a burst records;
+    //            the burst-gap logic below collapses the summon's ongoing action stream into ONE cast.
+    // Capped as a runaway guard — 20 players × a cast every ~30s stays far below the cap for any fight.
     private const int MaxImagineCasts = 600;
-    // Guards only against a duplicate delivery of the SAME Begin (e.g. a resent AOI batch); Begin fires
-    // once per cast so this window is short — it must not be wide enough to swallow a second, genuinely
-    // different cast of the same imagine a player queues back-to-back.
-    internal const long ImagineCastDedupMs = 1500;
 
-    // Pure predicate over the dedup state — extracted so it's unit-testable without a live Plugin
-    // instance (Plugin is IL2CPP-service-bound and cannot be headless-instantiated; see
-    // ReplayCaptureTests' ReplayToggleTests doc comment for the established pattern).
-    internal static bool ShouldRecordImagineCast(long ms, long? lastMs, long dedupWindowMs)
-        => lastMs is null || ms - lastMs.Value >= dedupWindowMs;
+    // A long-lived summon keeps dealing damage under the same imagine-resolvable skill id for its whole
+    // lifetime, so a new cast entry is only recorded when a hit arrives after at least this much SILENCE
+    // for the (src, base) key. Every observed hit refreshes the key's last-seen time — the old code
+    // compared against the last RECORDED time instead, so a persistent summon minted a phantom "cast"
+    // every 5s of sustained damage (the 1:09 no-stacks-left bubble). Residual: recasting the SAME
+    // imagine while its previous summon is still landing hits merges into one entry.
+    internal const long ImagineRetriggerGapMs = 10_000;
 
-    private void RecordImagineCast(EntityId src, int baseSkillId, long ms)
+    // Pure burst-gap transition — extracted so it's unit-testable without a live Plugin instance
+    // (Plugin is IL2CPP-service-bound and cannot be headless-instantiated; see ReplayCaptureTests'
+    // ReplayToggleTests doc comment for the established pattern). Refreshes lastSeen[key] to ms and
+    // returns true when this hit starts a NEW burst (no prior sighting, or ≥ gapMs of silence).
+    internal static bool ObserveBurstHit(
+        Dictionary<(EntityId, int), long> lastSeen, (EntityId, int) key, long ms, long gapMs)
     {
-        if (_imagineCasts.Count >= MaxImagineCasts) return;
-        var key = (src, baseSkillId);
-        long? last = _lastImagineCastMs.TryGetValue(key, out var l) ? l : null;
-        if (!ShouldRecordImagineCast(ms, last, ImagineCastDedupMs)) return;
-        _lastImagineCastMs[key] = ms;
-        _imagineCasts.Add(new ImagineCastEntry(ms, src, baseSkillId));
+        long? last = lastSeen.TryGetValue(key, out var l) ? l : null;
+        lastSeen[key] = ms;
+        return last is null || ms - last.Value >= gapMs;
     }
 
-    // Pure predicate: does this SkillUsed event represent a Battle-Imagine cast starting? Only the
-    // Begin phase (101) counts — StageBegin/StageEnd/AccumulateEnd/SkillEnd are later phases of the
-    // SAME cast and must not create additional entries. A summon's own autonomous actions carry the
-    // summon's EntityId as CasterId (never IsPlayer, per SyncDamageInfo/AoiSyncDelta attribution), so
-    // they're excluded structurally — no combat-active/encounter gating required.
-    internal static bool IsImagineCastBegin(SkillEventPhase phase, bool casterIsPlayer, ImagineInfo? info)
-        => phase == SkillEventPhase.Begin && casterIsPlayer && info is not null;
-
-    // Feed both the true-ms cast log AND the inferred-others cooldown tracker when a Battle-Imagine
-    // cast begins (all players incl. self — harmless, self display uses LocalCooldowns). Fires at the
-    // SkillUsed Begin timestamp, i.e. the actual button-press instant, so pre-combat casts (before the
-    // encounter's first damage event) are captured too — _imagineCasts carries true ms independent of
-    // _combatStartMs/_combatActive.
-    private void ObserveResonanceCastBegin(CombatEvent.SkillUsed su)
+    private void AddImagineCast(EntityId src, int baseSkillId, long ms)
     {
-        if (_services.ResonanceData.GetImagineForSkill(su.SkillId) is not { } info) return;
-        if (!IsImagineCastBegin(su.Phase, su.CasterId.IsPlayer, info)) return;
-        RecordImagineCast(su.CasterId, info.SkillId, su.TimestampMs);
+        if (_imagineCasts.Count >= MaxImagineCasts) return;
+        _imagineCasts.Add(new ImagineCastEntry(ms, src, baseSkillId));
+        LogImagineCastRecorded(src, baseSkillId, ms);
+    }
+
+    // Feed the inferred-others cooldown tracker + (for others) the cast log when a Battle-Imagine hit
+    // is seen. GetImagineForSkill is null for non-imagine skills. Multi-charge skills recharge on
+    // EnergyChargeTime; single-charge on the per-cast cooldown.
+    private void ObserveResonanceCast(CombatEvent.DamageDealt d)
+    {
+        if (!d.SourceId.IsPlayer) return;
+        if (_services.ResonanceData.GetImagineForSkill(d.SkillId) is not { } info) return;
         int ms = info.ChargeCount > 1 ? info.RechargeMs : info.CooldownMs;
-        // Key by the BASE imagine skill id (info.SkillId), not the leveled cast id (su.SkillId), so OtherSlot —
+        // Key by the BASE imagine skill id (info.SkillId), not the leveled cast id (d.SkillId), so OtherSlot —
         // which looks the tracker up by the equipped loadout's base id — finds it.
-        _resTracker.OnCast(su.CasterId, info.SkillId, info.ChargeCount, ms, _services.CombatSnapshot.ServerNowMs);
+        _resTracker.OnCast(d.SourceId, info.SkillId, info.ChargeCount, ms, _services.CombatSnapshot.ServerNowMs);
+        // Self casts are recorded by the authoritative LocalCooldowns begin-advance detector (press-time,
+        // pre-combat-capable); recording them from damage too would double-count the same cast ~seconds late.
+        if (d.SourceId.Value == _services.CombatSnapshot.LocalEntityId.Value) return;
+        if (ObserveBurstHit(_lastImagineHitMs, (d.SourceId, info.SkillId), d.TimestampMs, ImagineRetriggerGapMs))
+            AddImagineCast(d.SourceId, info.SkillId, d.TimestampMs);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Self-cast detection from LocalCooldowns (authoritative wire signal, independent of combat events).
+    // ------------------------------------------------------------------------------------------------
+
+    // Same "new cast" threshold ImagineCooldownCalc.Update applies to begin advances (jitter guard).
+    internal const long SelfBeginAdvanceMs = 500;
+    // First sighting of an already-old begin (plugin load / scene re-entry mid-recharge) is NOT a cast.
+    internal const long SelfBeginFreshMs = 5000;
+
+    /// <summary>True when <paramref name="beginMs"/> is a NEW cast relative to the last seen begin.</summary>
+    internal static bool IsSelfCastBeginAdvance(long beginMs, long? lastBeginMs)
+        => beginMs > 0 && (lastBeginMs is null || beginMs > lastBeginMs.Value + SelfBeginAdvanceMs);
+
+    /// <summary>True when a first-sighted begin is recent enough to count as a live cast.</summary>
+    internal static bool IsFreshBegin(long beginMs, long nowMs) => nowMs - beginMs <= SelfBeginFreshMs;
+
+    // base imagine skill id -> last seen skill_begin_time. NOT cleared by Clear(): begins only ever
+    // advance, so keeping them across encounter resets prevents a pre-archive cast from re-recording
+    // into the next encounter as a "first sighting".
+    private readonly Dictionary<int, long> _selfImagineBegin = new();
+
+    // Poll the LocalCooldowns snapshot for imagine rows whose begin advanced (≈10 Hz from OnUpdate).
+    // Runs outside the combat-event path on purpose: it captures casts made before any combat event
+    // flows (pre-pull stack dumps) and while the meter window is hidden.
+    private void DetectSelfImagineCasts()
+    {
+        if (_paused) return;
+        var local = _services.CombatSnapshot.LocalEntityId;
+        if (!local.IsPlayer) return;   // not in world yet
+        foreach (var cd in _services.CombatSnapshot.LocalCooldowns)
+        {
+            if (_services.ResonanceData.GetImagineForSkill(cd.SkillId) is not { } info) continue;
+            ObserveSelfImagineBegin(local, info.SkillId, cd.BeginTimeMs);
+        }
+    }
+
+    private void ObserveSelfImagineBegin(EntityId local, int baseSkillId, long beginMs)
+    {
+        bool known = _selfImagineBegin.TryGetValue(baseSkillId, out var last);
+        if (!IsSelfCastBeginAdvance(beginMs, known ? last : null)) return;
+        _selfImagineBegin[baseSkillId] = beginMs;
+        if (!known && !IsFreshBegin(beginMs, _services.CombatSnapshot.ServerNowMs)) return;
+        AddImagineCast(local, baseSkillId, beginMs);
     }
 }
