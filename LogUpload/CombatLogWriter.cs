@@ -152,6 +152,7 @@ internal static class CombatLogWriter
         w.Name("endMs").Number(e.EndMs);
         w.Name("durationMs").Number(e.DurationMs);
         w.Name("passTime").Number(e.PassTime);
+        if (e.DifficultyLevel != 0) w.Name("difficultyLevel").Number(e.DifficultyLevel);
         w.EndObject();
     }
 

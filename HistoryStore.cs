@@ -21,10 +21,11 @@ internal static partial class HistoryStore
     // v1 = stats + series. v2 = + "entities" (per-player frozen snapshot, issue #5). v3 = + run identity
     // (luid/pass/mms/res) so an archived run keeps the levelUuid a (deferred/manual) upload needs. v4 = richer
     // per-skill stats (crit-lucky/min/kills + separate heal counters) + self gear detail. v5 = ZDPS-parity
-    // per-ACTOR splits (crit/lucky/crit-lucky damage+healing values, shield break, top/effective heal).
-    // The reader accepts v1..v5 — older entries just lack the newer keys and load with defaults, so
-    // writing v5 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
-    internal const int FormatVersion = 5;
+    // per-ACTOR splits (crit/lucky/crit-lucky damage+healing values, shield break, top/effective heal). v6 = +
+    // "diff" (raw DungeonSceneInfo.difficulty / dungeon challenge level; semantic unconfirmed, 0 when absent).
+    // The reader accepts v1..v6 — older entries just lack the newer keys and load with defaults, so
+    // writing v6 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
+    internal const int FormatVersion = 6;
     internal const int MinSupportedVersion = 1;
 
     // ----- serialize -----
@@ -43,6 +44,7 @@ internal static partial class HistoryStore
         w.Name("luid").Value(e.LevelUuid);          // run identity — needed for (deferred) upload
         w.Name("pass").Value(e.PassTime);
         w.Name("mms").Value(e.MasterModeScore);
+        w.Name("diff").Value(e.DifficultyLevel);   // v6: dungeon challenge level (semantic unconfirmed)
         w.Name("res").Value(e.Result);
         w.Name("stats"); WriteStats(w, e.Stats);
         w.Name("series"); WriteSeries(w, e.Series);

@@ -145,7 +145,8 @@ internal sealed class CombatLogAssembler
             StartMs:         entry.EnteredAtMs,
             EndMs:           entry.ArchivedAtMs,
             DurationMs:      entry.ArchivedAtMs - entry.EnteredAtMs,
-            PassTime:        entry.PassTime);
+            PassTime:        entry.PassTime,
+            DifficultyLevel: entry.DifficultyLevel);
     }
 
     /// <summary>

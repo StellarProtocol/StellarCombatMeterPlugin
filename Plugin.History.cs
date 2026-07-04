@@ -40,6 +40,9 @@ public sealed partial class Plugin
         public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
         public int       PassTime;         // settlement clear-time seconds at archive
         public int       MasterModeScore;  // settlement master-mode score at archive
+        // Raw DungeonSceneInfo.difficulty (IDungeonState.CurrentDifficulty), snapshotted at archive.
+        // Semantic UNCONFIRMED (1-20 challenge level vs. tier enum) — 0 when absent/not seen.
+        public int       DifficultyLevel;
         public string    Result = "partial"; // "kill" once settled, else "partial"
     }
 
@@ -89,6 +92,7 @@ public sealed partial class Plugin
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
             PassTime         = settlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = settlement?.MasterModeScore ?? 0,
+            DifficultyLevel  = _services.Dungeon.CurrentDifficulty,
             Result           = settlement is not null ? "kill" : "partial",
         };
         _history.Add(entry);

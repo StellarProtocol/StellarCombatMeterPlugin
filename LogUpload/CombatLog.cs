@@ -56,7 +56,10 @@ internal sealed record LogHeader(
 internal sealed record Encounter(
     string Kind, long LevelUuid, string? DungeonGuid, int MapId, int LineId,
     string? Name, int BossId, string? BossName, string? Difficulty, int MasterModeScore,
-    string Result, long StartMs, long EndMs, long DurationMs, int PassTime);
+    string Result, long StartMs, long EndMs, long DurationMs, int PassTime,
+    // Raw DungeonSceneInfo.difficulty (dungeon challenge level, e.g. "Master 6"'s 6).
+    // Semantic UNCONFIRMED (1-20 level vs. tier enum) — additive, 0/omitted when unknown.
+    int DifficultyLevel = 0);
 
 internal sealed record Uploader(long LocalUid, string Sig, string Nonce);
 

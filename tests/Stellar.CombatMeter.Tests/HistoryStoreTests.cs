@@ -23,6 +23,7 @@ public sealed class HistoryStoreTests
             CombatDurationMs = 123_456L,
             PartyType        = PartyType.Raid20,
             MemberCount      = 7,
+            DifficultyLevel  = 6,   // dungeon challenge level (raw DungeonSceneInfo.difficulty)
         };
 
         var a = new EntityId(0x0000_0001_0000_0280L);   // player
@@ -136,6 +137,7 @@ public sealed class HistoryStoreTests
         Assert.Equal(src.CombatDurationMs, got.CombatDurationMs);
         Assert.Equal(src.PartyType, got.PartyType);
         Assert.Equal(src.MemberCount, got.MemberCount);
+        Assert.Equal(src.DifficultyLevel, got.DifficultyLevel);
 
         Assert.Equal(src.Stats.Count, got.Stats.Count);
         foreach (var (id, s) in src.Stats)
@@ -283,7 +285,7 @@ public sealed class HistoryStoreTests
     [InlineData("[]")]                                 // array, not the expected object
     [InlineData("{\"v\":1,\"bogus\":5}")]             // unknown key
     [InlineData("{\"scene\":\"x\"}")]                 // missing version marker
-    [InlineData("{\"v\":6,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
+    [InlineData("{\"v\":7,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
     public void Malformed_or_legacy_input_is_skipped_without_throwing(string garbage)
     {
         // Must never throw, and must report failure (entry skipped) for unsupported shapes.
