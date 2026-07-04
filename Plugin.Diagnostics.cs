@@ -46,21 +46,9 @@ public sealed partial class Plugin
             $"secs={slot.RemainingSeconds} frac={slot.CooldownFraction:F2} now={now}");
     }
 
-    // TEMP capture: every observed imagine "cast" (a DamageDealt that classifies as an imagine). Reveals
-    // whether self casts are seen at all and how many damage hits one cast produces (multi-hit => the
-    // damage stream over-counts casts; the cast-time tracker will need per-cast dedup).
-    private int _castLogCount;
-    private void LogImagineCast(EntityId src, int dmgSkillId, int baseSkillId)
-    {
-        if (!StellarDiagnostics.IsEnabled || _castLogCount >= 120) return;
-        _castLogCount++;
-        bool isSelf = src.Value == _services.CombatSnapshot.LocalEntityId.Value;
-        _services.Log.Info($"[CombatMeter][img-cast] src={src.Value} self={isSelf} dmgSkill={dmgSkillId} base={baseSkillId} now={_services.CombatSnapshot.ServerNowMs}");
-    }
-
-    // TEMP capture: every SkillUsed event (the per-cast skill-phase signal, not per-hit). Shows whether an
-    // imagine cast surfaces here, under which skill id + phase, and how it maps to the equipped imagine —
-    // candidate clean cast signal for the cast-time charge tracker (self + others, same as ZDPS's AttrSkillId).
+    // Every SkillUsed event that either belongs to the local player or maps to a Battle Imagine. This is
+    // the diagnostic trail for the cast-time detector in Plugin.Capture.cs (ObserveResonanceCastBegin) —
+    // shows the raw phase sequence a cast goes through and confirms Begin fires once per press.
     private int _skillUsedLogCount;
     private void LogSkillUsed(CombatEvent.SkillUsed su)
     {
