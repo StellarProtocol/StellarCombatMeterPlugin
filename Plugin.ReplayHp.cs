@@ -48,4 +48,19 @@ public sealed partial class Plugin
         }
         return result;
     }
+
+    // Shift a single HP track's Ms0 by the same capture->combat-start offset applied to the
+    // position tracks (see MaybeUploadReplay), so boss HP stays synced with the replay timeline.
+    private static HpTrack? RebaseHpTrack(HpTrack? track, int msOffset)
+        => track is null ? null : track with { Ms0 = track.Ms0 + msOffset };
+
+    // Shift every player HP track's Ms0 by the same offset (see RebaseHpTrack).
+    private static IReadOnlyDictionary<string, HpTrack>? RebasePlayerHpTracks(
+        IReadOnlyDictionary<string, HpTrack>? tracks, int msOffset)
+    {
+        if (tracks is null || msOffset == 0) return tracks;
+        var result = new Dictionary<string, HpTrack>(tracks.Count);
+        foreach (var (id, track) in tracks) result[id] = track with { Ms0 = track.Ms0 + msOffset };
+        return result;
+    }
 }

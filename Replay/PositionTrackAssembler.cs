@@ -25,15 +25,21 @@ internal static class PositionTrackAssembler
     /// <param name="origin">World-space origin (X, Z) of the quantization grid.</param>
     /// <param name="scale">Quantization cell size (meters). Typically 0.1.</param>
     /// <param name="meta">Optional per-entity metadata (kind, name, professionId).</param>
+    /// <param name="msOffset">
+    /// Added to each track's Ms0 to rebase the timeline zero point — see
+    /// <c>Plugin.Replay.cs</c> <c>MaybeUploadReplay</c> for why capture start and combat start
+    /// can differ (sampling now begins at dungeon-enter, ahead of the first pull).
+    /// </param>
     public static PositionUploadDoc Assemble(
         IReadOnlyDictionary<EntityId, PositionTrack> tracks,
         int hz,
         int mapId,
         (float X, float Z) origin,
         float scale,
-        IReadOnlyDictionary<EntityId, PositionMetaDto>? meta = null)
+        IReadOnlyDictionary<EntityId, PositionMetaDto>? meta = null,
+        int msOffset = 0)
     {
-        var dtoTracks = BuildTracks(tracks, origin, scale);
+        var dtoTracks = BuildTracks(tracks, origin, scale, msOffset);
         var dtoMeta = BuildMeta(meta);
         return new PositionUploadDoc(hz, mapId, origin, scale, dtoTracks, dtoMeta);
     }
@@ -41,7 +47,8 @@ internal static class PositionTrackAssembler
     private static IReadOnlyDictionary<string, PositionTrackDto> BuildTracks(
         IReadOnlyDictionary<EntityId, PositionTrack> tracks,
         (float X, float Z) origin,
-        float scale)
+        float scale,
+        int msOffset)
     {
         // Sort keys ascending by numeric entity id for deterministic output.
         var sorted = tracks.Keys
@@ -50,11 +57,12 @@ internal static class PositionTrackAssembler
 
         var result = new Dictionary<string, PositionTrackDto>(sorted.Count);
         foreach (var id in sorted)
-            result[id.Value.ToString(CultureInfo.InvariantCulture)] = BuildTrackDto(tracks[id], origin, scale);
+            result[id.Value.ToString(CultureInfo.InvariantCulture)] = BuildTrackDto(tracks[id], origin, scale, msOffset);
         return result;
     }
 
-    private static PositionTrackDto BuildTrackDto(PositionTrack track, (float X, float Z) origin, float scale)
+    private static PositionTrackDto BuildTrackDto(
+        PositionTrack track, (float X, float Z) origin, float scale, int msOffset)
     {
         var samples = track.Snapshot();
         if (samples.Length == 0)
@@ -74,8 +82,10 @@ internal static class PositionTrackAssembler
             absYaw[i] = PositionCodec.QuantizeYaw(s.Yaw);
         }
 
+        // Only the first sample's ms needs shifting: every later sample's time is implied by the
+        // doc-level hz (constant stride) on decode, not stored individually.
         return new PositionTrackDto(
-            Ms0: samples[0].Ms,
+            Ms0: samples[0].Ms + msOffset,
             Dx:  PositionCodec.DeltaEncode(absX),
             Dz:  PositionCodec.DeltaEncode(absZ),
             Y:   PositionCodec.DeltaEncode(absY),

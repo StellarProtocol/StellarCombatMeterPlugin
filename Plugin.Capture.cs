@@ -59,6 +59,10 @@ public sealed partial class Plugin
         // to 0 on scene-leave, which may be exactly when the archive fires. ManualArchive uses this if the
         // live id is already 0 at archive time.
         _lastRunId     = _services.Dungeon.CurrentRunId;
+        // Baseline for the false-KILL fix: remember whatever LastSettlement already read BEFORE this
+        // encounter started, so archive-time can tell a fresh kill (settlement changed since combat
+        // started) apart from a stale settlement carried over from an earlier segment of the same run.
+        _settlementAtCombatStart = _services.Dungeon.LastSettlement;
     }
 
     // Get-or-create the per-source aggregate.

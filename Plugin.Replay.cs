@@ -72,16 +72,37 @@ public sealed partial class Plugin
         _hpSampler = new HpTimelineSampler(ReadHpPair);
     }
 
-    // Called every frame from OnUpdate. Gate: toggle on + dungeon/raid + combat active.
+    // Called every frame from OnUpdate. Gate: toggle on + dungeon/raid run in progress. Deliberately
+    // NOT gated on _combatActive — the run-id latch (IsInstancedRun) fires on dungeon ENTER, well
+    // before the first pull, so the replay's walk-in from the dungeon entrance to the first pack is
+    // captured too (previously the track started at the first damage event, mid-dungeon). The DPS
+    // combat clock (_combatActive/_combatStartMs) is untouched by this — see MaybeUploadReplay's
+    // msOffset rebase, which keeps the uploaded track's zero point at combat start regardless of how
+    // early sampling actually began.
     private void TickReplayCapture(float deltaTimeSec)
     {
         if (_replay is null || !_uploadReplay) return;
-        _replay.Active = _combatActive && IsInstancedRun();
+        _replay.Active = IsInstancedRun();
         if (!_replay.Active) return;
+        // Register local + party entities up front so their pre-combat movement (before any of them
+        // has dealt/taken damage) is sampled too — NoteReplayEntity below only fires from combat
+        // events, which by definition haven't happened yet during the walk-in. NoteEntity is a cheap
+        // idempotent dict-contains check, safe to call every tick (covers late-joining members too).
+        NoteRosterEntities();
         var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
         _replay.Tick(nowMs, dtMs);
         TickHpTimelines(nowMs, dtMs);
+    }
+
+    // Seeds the replay's tracked-entity set with the local player + current party roster, so
+    // TickReplayCapture starts sampling their positions from dungeon-enter rather than waiting for
+    // the first combat event to register them (see TickReplayCapture).
+    private void NoteRosterEntities()
+    {
+        if (_replay is null) return;
+        _replay.NoteEntity(_services.CombatSnapshot.LocalEntityId);
+        foreach (var m in _services.PartyRoster.Members) _replay.NoteEntity(m.EntityId);
     }
 
     // Called from OnCombatEvent BEFORE the player-only early-out so boss/add targets enter the set.
@@ -197,9 +218,18 @@ public sealed partial class Plugin
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
 
+            // Sampling now starts at dungeon-enter (TickReplayCapture), not at first damage, so
+            // _replay.CombatStartMs (the capture's own zero point) usually PRECEDES the DPS combat
+            // clock's encounter.StartMs. Rebase every track's Ms0 by this offset so the uploaded
+            // doc's zero point stays exactly at combat start (matching StartMs below) — pre-combat
+            // samples land at negative ms, which the codec/viewer already tolerate (plain signed
+            // ints; the site's death/imagine-cast markers are converted the same way and only ever
+            // occur at/after combat start, so they stay aligned with the extended position timeline).
+            var msOffset = _replay.CombatStartMs - (int)encounter.StartMs;
+
             // Resolve boss info for meta + upload fields using capture-time snapshot.
             var (bossEntityIdStr, bossMonsterInfo) = ResolveBossUploadFields();
-            var bossHpTrack = BuildBossHpTrack();
+            var bossHpTrack = RebaseHpTrack(BuildBossHpTrack(), msOffset);
 
             var doc = PositionTrackAssembler.Assemble(
                 tracks: _replay.Tracks,
@@ -207,6 +237,7 @@ public sealed partial class Plugin
                 mapId:  encounter.MapId,
                 origin: (0f, 0f),
                 scale:  0.1f,
+                msOffset: msOffset,
                 meta:   BuildReplayMeta(bossEntityIdStr, bossMonsterInfo));
 
             var nonce = GenerateReplayNonce();
@@ -220,7 +251,7 @@ public sealed partial class Plugin
                 Nonce        = nonce,
                 BossEntityId = bossEntityIdStr,
                 BossHp       = bossHpTrack,
-                PlayerHp     = BuildPlayerHpTracks(),
+                PlayerHp     = RebasePlayerHpTracks(BuildPlayerHpTracks(), msOffset),
             };
             doc = doc with { Sig = SignReplay(doc) };
 

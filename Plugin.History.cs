@@ -73,7 +73,16 @@ public sealed partial class Plugin
         // Snapshot run-identity from the live dungeon state AT ARCHIVE so a deferred
         // (manual) upload of this entry uses the right levelUuid / settlement — not
         // whatever run happens to be live when the user later clicks Upload.
+        //
+        // LastSettlement is sticky for the whole dungeon run (it survives the drop-to-0 on
+        // leave-scene, and a same-uuid re-entry never clears it), so its mere non-null-ness
+        // is NOT evidence that THIS encounter ended in a kill — it may be left over from an
+        // earlier boss/segment cleared earlier in the same run. Only count it as a genuine
+        // kill when it differs from the baseline snapshotted at THIS encounter's combat
+        // start (EnsureCombatStarted) — i.e. the settlement actually changed during this
+        // encounter. A manual archive mid-fight (no new settlement) correctly stays "partial".
         var settlement = _services.Dungeon.LastSettlement;
+        var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
         var entry = new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
@@ -90,10 +99,10 @@ public sealed partial class Plugin
             // Guarded by _stats.Count == 0 early-return above, so >= 1 here.
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
-            PassTime         = settlement?.PassTimeSeconds ?? 0,
-            MasterModeScore  = settlement?.MasterModeScore ?? 0,
+            PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
+            MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
             DifficultyLevel  = _services.Dungeon.CurrentDifficulty,
-            Result           = settlement is not null ? "kill" : "partial",
+            Result           = freshSettlement is not null ? "kill" : "partial",
         };
         _history.Add(entry);
         foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
@@ -106,6 +115,16 @@ public sealed partial class Plugin
 
         Clear();
     }
+
+    /// <summary>
+    /// True when <paramref name="current"/> is evidence of a kill genuinely earned by THIS
+    /// encounter: non-null AND different from <paramref name="baseline"/> (the settlement already
+    /// on record when this encounter's combat started). IDungeonState.LastSettlement is sticky for
+    /// the whole dungeon run — unchanged since baseline means it belongs to an earlier segment of
+    /// the same run, not this one, so a manual archive mid-fight must not report "kill".
+    /// </summary>
+    internal static bool IsFreshKill(DungeonSettlementInfo? current, DungeonSettlementInfo? baseline)
+        => current is not null && !current.Equals(baseline);
 
     private long ComputeDurationMs()
     {

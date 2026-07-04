@@ -262,4 +262,58 @@ public class PositionTrackAssemblerTests
         Assert.DoesNotContain("startMs",  body);
         Assert.DoesNotContain("endMs",    body);
     }
+
+    // ── Test 4: msOffset rebases the timeline zero point (movement-before-combat fix) ──
+
+    [Fact]
+    public void Assemble_WithZeroOffset_LeavesMs0Unchanged()
+    {
+        var tracks = new Dictionary<EntityId, PositionTrack>
+        {
+            [new EntityId(1)] = MakeTrack((0, 0f, 0f, 0f, 0f), (500, 1f, 0f, 0f, 0f)),
+        };
+
+        var doc = PositionTrackAssembler.Assemble(tracks, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f);
+
+        Assert.Equal(0, doc.Tracks["1"].Ms0);
+    }
+
+    [Fact]
+    public void Assemble_WithNegativeOffset_ShiftsMs0EarlierAllowingNegativeTimes()
+    {
+        // Sampling now starts at dungeon-enter, ahead of combat start — MaybeUploadReplay
+        // computes a negative msOffset (capture start - combat start) so pre-combat samples land
+        // at negative ms relative to the combat clock, extending the pre-fix "first sample is
+        // always ms=0 at combat start" contract backward instead of breaking it.
+        var tracks = new Dictionary<EntityId, PositionTrack>
+        {
+            // First sample captured 4000ms before combat started (walking to the pull).
+            [new EntityId(1)] = MakeTrack((0, 0f, 0f, 0f, 0f), (500, 1f, 0f, 0f, 0f)),
+        };
+
+        var doc = PositionTrackAssembler.Assemble(
+            tracks, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f, msOffset: -4000);
+
+        Assert.Equal(-4000, doc.Tracks["1"].Ms0);
+        // Only Ms0 shifts — the delta-encoded position/yaw arrays are untouched by the offset.
+        Assert.Equal(new[] { 0, 10 }, doc.Tracks["1"].Dx);
+    }
+
+    [Fact]
+    public void Assemble_OffsetDoesNotApplyToEmptyTrackSentinel()
+    {
+        // An empty track's Ms0 sentinel (0) is a "no samples" marker, not a real timestamp — the
+        // offset must not be applied to it (would otherwise fabricate a bogus negative time for a
+        // track that was never actually sampled).
+        var tracks = new Dictionary<EntityId, PositionTrack>
+        {
+            [new EntityId(1)] = new PositionTrack(maxSamples: 8),   // no samples added
+        };
+
+        var doc = PositionTrackAssembler.Assemble(
+            tracks, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f, msOffset: -4000);
+
+        Assert.Equal(0, doc.Tracks["1"].Ms0);
+        Assert.Empty(doc.Tracks["1"].Dx);
+    }
 }

@@ -98,4 +98,43 @@ public sealed class HistoryCaptureTests
         // lastHit <= firstHit (no progress) → 0, regardless of duration.
         Assert.Equal(0f, Plugin.ComputeUptime(5000, 5000, 60000));
     }
+
+    // -------------------------------------------------------------------------
+    // IsFreshKill — false-"KILL"-badge fix (bug: manual mid-dungeon archive with
+    // no boss killed still showed the "kill" pill, because IDungeonState.LastSettlement
+    // is sticky for the whole run and doesn't reset between segments/pulls).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void IsFreshKill_false_when_no_settlement_observed()
+    {
+        Assert.False(Plugin.IsFreshKill(current: null, baseline: null));
+    }
+
+    [Fact]
+    public void IsFreshKill_false_when_settlement_unchanged_since_encounter_started()
+    {
+        // Reproduces the reported bug: a stale settlement from an earlier segment of the same
+        // run was already sitting in LastSettlement before this encounter's first hit, and never
+        // changed — a manual archive here must NOT be tagged "kill".
+        var stale = new DungeonSettlementInfo(120, 500);
+        Assert.False(Plugin.IsFreshKill(current: stale, baseline: stale));
+    }
+
+    [Fact]
+    public void IsFreshKill_true_when_settlement_newly_appears_during_the_encounter()
+    {
+        var fresh = new DungeonSettlementInfo(95, 800);
+        Assert.True(Plugin.IsFreshKill(current: fresh, baseline: null));
+    }
+
+    [Fact]
+    public void IsFreshKill_true_when_settlement_changes_from_an_earlier_kill_in_the_same_run()
+    {
+        // Multi-boss run: baseline already holds boss #1's settlement; boss #2's differing
+        // settlement is genuine evidence that THIS encounter ended in a kill too.
+        var boss1 = new DungeonSettlementInfo(100, 400);
+        var boss2 = new DungeonSettlementInfo(140, 650);
+        Assert.True(Plugin.IsFreshKill(current: boss2, baseline: boss1));
+    }
 }

@@ -95,6 +95,12 @@ public sealed partial class Plugin : IStellarPlugin
     private long _lastDamageMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
     private bool _combatActive;
+    // IDungeonState.LastSettlement is sticky for the whole dungeon run (framework keeps it across the
+    // drop-to-0 on leave-scene, and across a same-uuid re-entry) — so its mere non-null-ness does NOT mean
+    // THIS encounter ended in a kill; it may be left over from an earlier kill/segment in the same run.
+    // Snapshotting it here at combat start lets ManualArchive tell "settlement changed during this
+    // encounter" (genuine fresh kill) apart from "settlement was already sitting there" (stale/false).
+    private DungeonSettlementInfo? _settlementAtCombatStart;
 
     // Persisted UI state.
     private Metric     _metric = Metric.Dps;
@@ -317,6 +323,7 @@ public sealed partial class Plugin : IStellarPlugin
         _combatStartMs = 0;
         _lastDamageMs  = 0;
         _lastRunId     = 0;
+        _settlementAtCombatStart = null;
         ResetReplay();
     }
 
