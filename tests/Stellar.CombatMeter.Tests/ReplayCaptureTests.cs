@@ -87,6 +87,34 @@ public class ReplayCaptureTests
         cap.Tick(nowMs: 750, dtMs: 250);  // 250 remainder + 250 = 500 → fires sample 2
         Assert.Equal(2, cap.TotalSamples);
     }
+
+    [Fact]
+    public void Reset_ClearsTracksAndSamples()
+    {
+        var world = new Dictionary<EntityId, Position3D> { [new EntityId(1)] = new(1, 2, 3) };
+        var cap = Make(world, out _);
+        cap.Active = true;
+        cap.NoteEntity(new EntityId(1));
+        cap.Tick(nowMs: 0, dtMs: 500);   // sample 1
+        cap.Tick(nowMs: 500, dtMs: 500); // sample 2
+        Assert.Equal(2, cap.TotalSamples);
+        Assert.NotEmpty(cap.Tracks);
+
+        cap.Reset();
+
+        Assert.Equal(0, cap.TotalSamples);
+        Assert.Empty(cap.Tracks);
+    }
+
+    [Fact]
+    public void Reset_OnFreshCapture_DoesNotThrow()
+    {
+        var cap = Make(new(), out _);
+        var ex = Record.Exception(() => cap.Reset());
+        Assert.Null(ex);
+        Assert.Equal(0, cap.TotalSamples);
+        Assert.Empty(cap.Tracks);
+    }
 }
 
 /// <summary>
