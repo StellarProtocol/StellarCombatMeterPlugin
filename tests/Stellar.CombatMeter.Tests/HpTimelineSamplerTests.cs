@@ -67,6 +67,37 @@ public class HpTimelineSamplerTests
     }
 
     [Fact]
+    public void Reset_ClearsTracksAndSamples()
+    {
+        var s = new HpTimelineSampler(_ => (50, 100));
+        s.Track(1, ms0: 0);
+        s.Track(2, ms0: 0);
+        s.Tick(500f);
+        Assert.NotNull(s.GetTrack(1));
+        Assert.NotNull(s.GetTrack(2));
+
+        s.Reset();
+
+        Assert.Null(s.GetTrack(1));
+        Assert.Null(s.GetTrack(2));
+        Assert.Empty(s.TrackedIds);
+
+        // Post-reset the sampler is usable again — re-tracking + ticking produces fresh samples.
+        s.Track(1, ms0: 0);
+        s.Tick(500f);
+        Assert.NotNull(s.GetTrack(1));
+    }
+
+    [Fact]
+    public void Reset_OnFreshSampler_DoesNotThrow()
+    {
+        var s = new HpTimelineSampler(_ => (1, 1));
+        var ex = Record.Exception(() => s.Reset());
+        Assert.Null(ex);
+        Assert.Empty(s.TrackedIds);
+    }
+
+    [Fact]
     public void StopsAtMaxSamplesPerEntity()
     {
         var s = new HpTimelineSampler(_ => (1, 1));

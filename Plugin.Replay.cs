@@ -36,6 +36,11 @@ public sealed partial class Plugin
     private ReplayCapture? _replay;
     private bool _uploadReplay = ReplayDefaults.UploadReplayDefault;
 
+    // Latches the dungeon run-id TickReplayCapture last observed, so a transition to a
+    // DIFFERENT run (including via 0, e.g. a crash → re-enter) can be detected and the prior
+    // run's capture dropped before it leaks into the new run's replay (Bug 2 source fix).
+    private long _replayRunId;
+
     // Boss HP timeline — sampled in parallel with the position capture cadence.
     private EntityId   _bossEntityId;          // set when boss is identified at assembly time; zero = none
     private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
@@ -82,6 +87,18 @@ public sealed partial class Plugin
     private void TickReplayCapture(float deltaTimeSec)
     {
         if (_replay is null || !_uploadReplay) return;
+
+        var runId = _services.Dungeon.CurrentRunId;
+        if (runId != _replayRunId)
+        {
+            // Entering a NEW instanced run (incl. crash → re-enter): drop the prior run's
+            // capture so its movement can't leak into this run's replay (Bug 2 source fix).
+            // Only clear on a non-zero id so we never wipe a just-finished run's tracks
+            // before MaybeUploadReplay (fires at archive time, in-dungeon) has assembled them.
+            if (runId != 0) ResetReplay();
+            _replayRunId = runId;
+        }
+
         _replay.Active = IsInstancedRun();
         if (!_replay.Active) return;
         // Register local + party entities up front so their pre-combat movement (before any of them
