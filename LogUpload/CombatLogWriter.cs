@@ -154,6 +154,7 @@ internal static class CombatLogWriter
         w.Name("passTime").Number(e.PassTime);
         if (e.DifficultyLevel != 0) w.Name("difficultyLevel").Number(e.DifficultyLevel);
         if (e.DungeonStartMs != 0) w.Name("dungeonStartMs").Number(e.DungeonStartMs);
+        if (e.DefeatedCount != 0) w.Name("defeated").Number(e.DefeatedCount);
         w.EndObject();
     }
 

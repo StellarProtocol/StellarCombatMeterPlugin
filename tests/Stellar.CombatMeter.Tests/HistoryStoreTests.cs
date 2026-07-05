@@ -302,7 +302,7 @@ public sealed class HistoryStoreTests
     [InlineData("[]")]                                 // array, not the expected object
     [InlineData("{\"v\":1,\"bogus\":5}")]             // unknown key
     [InlineData("{\"scene\":\"x\"}")]                 // missing version marker
-    [InlineData("{\"v\":8,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
+    [InlineData("{\"v\":9,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
     public void Malformed_or_legacy_input_is_skipped_without_throwing(string garbage)
     {
         // Must never throw, and must report failure (entry skipped) for unsupported shapes.

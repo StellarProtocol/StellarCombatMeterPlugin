@@ -62,7 +62,10 @@ internal sealed record Encounter(
     int DifficultyLevel = 0,
     // Server epoch ms when the in-game dungeon run-timer started (IDungeonState.RunTimerStartMs).
     // Additive — 0/omitted when unknown. NOT covered by the upload signature (CanonicalPayload).
-    long DungeonStartMs = 0);
+    long DungeonStartMs = 0,
+    // IDungeonState.LastDefeatedCount snapshotted at archive. Additive — 0/omitted when unknown
+    // (also 0 until the attr feeding it is wired on the framework side).
+    int DefeatedCount = 0);
 
 internal sealed record Uploader(long LocalUid, string Sig, string Nonce);
 

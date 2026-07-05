@@ -51,6 +51,7 @@ internal static partial class HistoryStore
                 case "diff":    if (!ReadLong(r, out var diff)) return false; e.DifficultyLevel = (int)diff; break;
                 case "dstart":  if (!ReadLong(r, out e.DungeonStartMs)) return false; break;
                 case "res":     if (!ReadString(r, out var res)) return false; e.Result = res ?? "partial"; break;
+                case "def":     if (!ReadLong(r, out var def)) return false; e.Defeated = (int)def; break;
                 case "stats":   if (!ReadStats(r, e.Stats)) return false; break;
                 case "series":  if (!ReadSeries(r, e.Series)) return false; break;
                 case "entities": if (!ReadEntities(r, e.Entities)) return false; break;

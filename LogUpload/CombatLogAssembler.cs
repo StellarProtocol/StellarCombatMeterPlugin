@@ -147,7 +147,8 @@ internal sealed class CombatLogAssembler
             DurationMs:      entry.ArchivedAtMs - entry.EnteredAtMs,
             PassTime:        entry.PassTime,
             DifficultyLevel: entry.DifficultyLevel,
-            DungeonStartMs:  entry.DungeonStartMs);
+            DungeonStartMs:  entry.DungeonStartMs,
+            DefeatedCount:   entry.Defeated);
     }
 
     /// <summary>

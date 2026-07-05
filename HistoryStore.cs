@@ -24,9 +24,10 @@ internal static partial class HistoryStore
     // per-ACTOR splits (crit/lucky/crit-lucky damage+healing values, shield break, top/effective heal). v6 = +
     // "diff" (raw DungeonSceneInfo.difficulty / dungeon challenge level; semantic unconfirmed, 0 when absent).
     // v7 = + "dstart" (server epoch ms the dungeon run-timer started, IDungeonState.RunTimerStartMs; 0 when absent).
-    // The reader accepts v1..v7 — older entries just lack the newer keys and load with defaults, so
-    // writing v7 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
-    internal const int FormatVersion = 7;
+    // v8 = + "def" (IDungeonState.LastDefeatedCount snapshot; 0 when absent/not yet wired).
+    // The reader accepts v1..v8 — older entries just lack the newer keys and load with defaults, so
+    // writing v8 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
+    internal const int FormatVersion = 8;
     internal const int MinSupportedVersion = 1;
 
     // ----- serialize -----
@@ -48,6 +49,7 @@ internal static partial class HistoryStore
         w.Name("diff").Value(e.DifficultyLevel);   // v6: dungeon challenge level (semantic unconfirmed)
         w.Name("dstart").Value(e.DungeonStartMs);  // v7: dungeon run-timer start (epoch ms, 0 when absent)
         w.Name("res").Value(e.Result);
+        w.Name("def").Value(e.Defeated);           // v8: IDungeonState.LastDefeatedCount snapshot
         w.Name("stats"); WriteStats(w, e.Stats);
         w.Name("series"); WriteSeries(w, e.Series);
         w.Name("entities"); WriteEntities(w, e.Entities);

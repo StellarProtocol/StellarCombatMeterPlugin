@@ -137,4 +137,22 @@ public sealed class HistoryCaptureTests
         var boss2 = new DungeonSettlementInfo(140, 650);
         Assert.True(Plugin.IsFreshKill(current: boss2, baseline: boss1));
     }
+
+    // -------------------------------------------------------------------------
+    // ResolveVerdict — 3-way run verdict (fail/kill/partial). Fail wins outright
+    // (a wipe), independent of any stale/fresh settlement lying around from an
+    // earlier segment of the same run.
+    // -------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(false, DungeonOutcome.Failed,  "fail")]
+    [InlineData(true,  DungeonOutcome.Failed,  "fail")]
+    [InlineData(true,  DungeonOutcome.None,    "kill")]
+    [InlineData(false, DungeonOutcome.Success, "kill")]
+    [InlineData(false, DungeonOutcome.None,    "partial")]
+    public void ResolveVerdict_truth_table(bool hasSettlement, DungeonOutcome outcome, string expected)
+    {
+        var s = hasSettlement ? new DungeonSettlementInfo(481, 425) : (DungeonSettlementInfo?)null;
+        Assert.Equal(expected, Plugin.ResolveVerdict(s, outcome));
+    }
 }

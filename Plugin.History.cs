@@ -47,6 +47,8 @@ public sealed partial class Plugin
         // snapshotted at archive. 0 when unknown (no run timer seen / open world).
         public long      DungeonStartMs;
         public string    Result = "partial"; // "kill" once settled, else "partial"
+        // IDungeonState.LastDefeatedCount snapshotted at archive — 0 until the attr feeding it is wired.
+        public int       Defeated;
     }
 
     private void OnSceneChanged(string? newScene)
@@ -106,7 +108,8 @@ public sealed partial class Plugin
             MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
             DifficultyLevel  = _services.Dungeon.CurrentDifficulty,
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
-            Result           = freshSettlement is not null ? "kill" : "partial",
+            Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
+            Defeated         = _services.Dungeon.LastDefeatedCount,
         };
         _history.Add(entry);
         foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
@@ -129,6 +132,15 @@ public sealed partial class Plugin
     /// </summary>
     internal static bool IsFreshKill(DungeonSettlementInfo? current, DungeonSettlementInfo? baseline)
         => current is not null && !current.Equals(baseline);
+
+    // 3-way run verdict. Fail wins outright (a wipe). Otherwise a fresh settlement OR a
+    // Success outcome = kill; neither = partial (left/abandoned mid-run).
+    internal static string ResolveVerdict(DungeonSettlementInfo? freshSettlement, DungeonOutcome outcome)
+    {
+        if (outcome == DungeonOutcome.Failed) return "fail";
+        if (freshSettlement is not null || outcome == DungeonOutcome.Success) return "kill";
+        return "partial";
+    }
 
     private long ComputeDurationMs()
     {
