@@ -24,6 +24,18 @@ public sealed partial class Plugin
         _services.Log.Info(
             $"[CombatMeter][name] unresolved id={skillId} (no skill, override, or buff name) — add to SkillNameOverrides if needed");
     }
+
+    // Scene-boundary replay reset (93:53 cross-scene-carryover fix). Logs the outgoing/incoming
+    // scene, the current run id, samples held at reset, and whether the outgoing scene archived —
+    // so an in-game diagnostics pass can confirm the reset fires on a no-combat scene change (the
+    // path that previously leaked pre-dungeon samples into the next run's replay upload).
+    private void LogReplaySceneReset(string? outgoing, string? incoming, int samplesAtReset, bool archived)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter.Replay][scene] reset '{outgoing}' -> '{incoming}' " +
+            $"runId={_services.Dungeon.CurrentRunId} samplesAtReset={samplesAtReset} outgoingArchived={archived}");
+    }
     // TEMP cast-time-redesign capture: wire cd row vs what we render for a SELF imagine, on change + every
     // ~0.5s. Pins the multi-charge recharge model (does `begin` reset per cast? parallel vs sequential?) and
     // shows where our seconds/charges diverge from the game's own [Z]/[X]. Remove before the next commit.

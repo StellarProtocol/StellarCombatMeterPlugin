@@ -59,9 +59,24 @@ public sealed partial class Plugin
             return;
         }
 
+        // Capture pre-archive state for the diagnostics line below (ManualArchive may reset the
+        // capture when the outgoing scene had combat).
+        var archived = _stats.Count > 0;
+        var samplesAtReset = _replay?.TotalSamples ?? 0;
+
         // Auto-archive on scene change. ManualArchive() is the single source of
         // truth for the snapshot-and-clear flow; the Archive button calls it too.
         ManualArchive();
+
+        // Unconditionally reset the replay capture at the scene boundary. ManualArchive()
+        // early-returns (never Clear()s -> never ResetReplay()s) when the outgoing scene had no
+        // combat (_stats.Count == 0) — so a no-combat instanced scene's position samples would
+        // otherwise linger and concatenate onto the NEXT run's replay upload (the 93:53
+        // cross-scene-carryover bug). When the outgoing scene DID have combat, ManualArchive
+        // already uploaded + reset the replay, so this call is a harmless no-op. Everything
+        // WITHIN a single scene (walk-in, long in-dungeon idle) is untouched.
+        ResetReplay();
+        LogReplaySceneReset(_lastSceneName, newScene, samplesAtReset, archived);
 
         _lastSceneName = newScene;
     }
