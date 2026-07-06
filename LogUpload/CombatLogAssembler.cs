@@ -141,6 +141,7 @@ internal sealed class CombatLogAssembler
             BossName:        null,
             Difficulty:      null,
             MasterModeScore: entry.MasterModeScore,
+            TotalScore:      entry.TotalScore,
             Result:          entry.Result,
             StartMs:         entry.EnteredAtMs,
             EndMs:           entry.ArchivedAtMs,

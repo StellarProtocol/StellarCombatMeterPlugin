@@ -147,6 +147,7 @@ internal static class CombatLogWriter
         if (e.BossName != null) w.Name("bossName").Str(e.BossName);
         if (e.Difficulty != null) w.Name("difficulty").Str(e.Difficulty);
         w.Name("masterModeScore").Number(e.MasterModeScore);
+        if (e.TotalScore != 0) w.Name("totalScore").Number(e.TotalScore);
         w.Name("result").Str(e.Result);
         w.Name("startMs").Number(e.StartMs);
         w.Name("endMs").Number(e.EndMs);

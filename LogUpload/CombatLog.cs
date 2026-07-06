@@ -60,6 +60,9 @@ internal sealed record Encounter(
     // Raw DungeonSceneInfo.difficulty (dungeon challenge level, e.g. "Master 6"'s 6).
     // Semantic UNCONFIRMED (1-20 level vs. tier enum) — additive, 0/omitted when unknown.
     int DifficultyLevel = 0,
+    // Achieved "Total Score" (DungeonScore.total_score) — the numerator in the "686/700"
+    // pairing with MasterModeScore (the max/par). Additive, 0/omitted when not a scored run.
+    int TotalScore = 0,
     // Server epoch ms when the in-game dungeon run-timer started (IDungeonState.RunTimerStartMs).
     // Additive — 0/omitted when unknown. NOT covered by the upload signature (CanonicalPayload).
     long DungeonStartMs = 0,

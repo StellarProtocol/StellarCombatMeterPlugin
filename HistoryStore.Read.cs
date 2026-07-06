@@ -48,6 +48,7 @@ internal static partial class HistoryStore
                 case "luid":    if (!ReadLong(r, out e.LevelUuid)) return false; break;
                 case "pass":    if (!ReadLong(r, out var pass)) return false; e.PassTime = (int)pass; break;
                 case "mms":     if (!ReadLong(r, out var mms)) return false; e.MasterModeScore = (int)mms; break;
+                case "tscore":  if (!ReadLong(r, out var tsc)) return false; e.TotalScore = (int)tsc; break;
                 case "diff":    if (!ReadLong(r, out var diff)) return false; e.DifficultyLevel = (int)diff; break;
                 case "dstart":  if (!ReadLong(r, out e.DungeonStartMs)) return false; break;
                 case "res":     if (!ReadString(r, out var res)) return false; e.Result = res ?? "partial"; break;

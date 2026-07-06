@@ -27,7 +27,7 @@ internal static partial class HistoryStore
     // v8 = + "def" (IDungeonState.LastDefeatedCount snapshot; 0 when absent/not yet wired).
     // The reader accepts v1..v8 — older entries just lack the newer keys and load with defaults, so
     // writing v8 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
-    internal const int FormatVersion = 8;
+    internal const int FormatVersion = 9;
     internal const int MinSupportedVersion = 1;
 
     // ----- serialize -----
@@ -46,6 +46,7 @@ internal static partial class HistoryStore
         w.Name("luid").Value(e.LevelUuid);          // run identity — needed for (deferred) upload
         w.Name("pass").Value(e.PassTime);
         w.Name("mms").Value(e.MasterModeScore);
+        w.Name("tscore").Value(e.TotalScore);      // v9: achieved DungeonScore.total_score (numerator of "686/700")
         w.Name("diff").Value(e.DifficultyLevel);   // v6: dungeon challenge level (semantic unconfirmed)
         w.Name("dstart").Value(e.DungeonStartMs);  // v7: dungeon run-timer start (epoch ms, 0 when absent)
         w.Name("res").Value(e.Result);

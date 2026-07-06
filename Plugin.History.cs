@@ -39,7 +39,8 @@ public sealed partial class Plugin
         public int       MemberCount;
         public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
         public int       PassTime;         // settlement clear-time seconds at archive
-        public int       MasterModeScore;  // settlement master-mode score at archive
+        public int       MasterModeScore;  // settlement master-mode MAX/PAR score (master_mode_score) at archive
+        public int       TotalScore;       // achieved DungeonScore.total_score at archive (numerator of "686/700")
         // Raw DungeonSceneInfo.difficulty (IDungeonState.CurrentDifficulty), snapshotted at archive.
         // Semantic UNCONFIRMED (1-20 challenge level vs. tier enum) — 0 when absent/not seen.
         public int       DifficultyLevel;
@@ -121,6 +122,7 @@ public sealed partial class Plugin
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
             PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
+            TotalScore       = freshSettlement?.TotalScore ?? 0,
             DifficultyLevel  = _services.Dungeon.CurrentDifficulty,
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
