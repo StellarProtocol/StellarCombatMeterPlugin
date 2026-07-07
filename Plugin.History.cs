@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 
@@ -123,7 +124,7 @@ public sealed partial class Plugin
             PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
             TotalScore       = freshSettlement?.TotalScore ?? 0,
-            DifficultyLevel  = _services.Dungeon.CurrentDifficulty,
+            DifficultyLevel  = Math.Max(_difficultyAtCombatStart, _services.Dungeon.CurrentDifficulty),
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
             Defeated         = _services.Dungeon.LastDefeatedCount,

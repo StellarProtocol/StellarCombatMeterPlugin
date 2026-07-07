@@ -96,6 +96,8 @@ public sealed partial class Plugin : IStellarPlugin
     private long _combatStartMs;
     private long _lastDamageMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
+    private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
+                                            // run-id change (e.g. a fail-out to a new scene) that can precede archive.
     private bool _combatActive;
     // IDungeonState.LastSettlement is sticky for the whole dungeon run (framework keeps it across the
     // drop-to-0 on leave-scene, and across a same-uuid re-entry) — so its mere non-null-ness does NOT mean
@@ -328,6 +330,7 @@ public sealed partial class Plugin : IStellarPlugin
         _combatStartMs = 0;
         _lastDamageMs  = 0;
         _lastRunId     = 0;
+        _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
         ResetReplay();
     }

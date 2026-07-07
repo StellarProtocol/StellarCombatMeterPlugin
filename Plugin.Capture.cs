@@ -64,6 +64,10 @@ public sealed partial class Plugin
         // encounter started, so archive-time can tell a fresh kill (settlement changed since combat
         // started) apart from a stale settlement carried over from an earlier segment of the same run.
         _settlementAtCombatStart = _services.Dungeon.LastSettlement;
+        // Latch the Master difficulty level too — it arrives at scene-enter (before combat) and
+        // survives here, but CurrentDifficulty is reset to 0 on a run-id change that can precede
+        // archive (fail-out to a result/lobby scene), which dropped the "Master N" level on fails.
+        _difficultyAtCombatStart = _services.Dungeon.CurrentDifficulty;
     }
 
     // Get-or-create the per-source aggregate.
