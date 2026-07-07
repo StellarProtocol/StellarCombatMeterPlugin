@@ -253,11 +253,12 @@ public sealed partial class Plugin
             var self = _services.CombatSnapshot.LocalEntityId;
             if (self.IsNone) return;
 
+            var before = _services.EntityDetail.GetSocialSnapshot(self)?.Identity.MasterScore ?? 0;
             _services.EntityDetail.RefreshSocialSnapshot(self);   // main-thread-only RPC; must run before any await
-            var score = await MasterScoreRefresh.PollForScore(
+            var score = await MasterScoreRefresh.PollForChangedScore(
                 () => _services.EntityDetail.GetSocialSnapshot(self)?.Identity.MasterScore ?? 0,
-                attempts: MasterScorePollAttempts, delayMs: MasterScorePollDelayMs).ConfigureAwait(false);
-            if (score <= 0) return;                                // never credited within the poll budget — leave it
+                before, attempts: MasterScorePollAttempts, delayMs: MasterScorePollDelayMs).ConfigureAwait(false);
+            if (score <= 0) return;                                // unchanged, or never credited within the poll budget — nothing to send
 
             SendSelfMasterScoreEntry(self, score);
         }
