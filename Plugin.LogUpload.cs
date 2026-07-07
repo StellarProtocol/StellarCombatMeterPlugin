@@ -172,6 +172,9 @@ public sealed partial class Plugin
             });
 
             MaybeReportPortraits();
+
+            if (MasterScoreRefresh.IsMasterModeRun(entry.MasterModeScore, entry.DifficultyLevel))
+                RefreshAndSendSelfMasterScore();
         }
         catch (Exception ex)
         {

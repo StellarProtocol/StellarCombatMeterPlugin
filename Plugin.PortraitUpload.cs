@@ -18,6 +18,9 @@ public sealed partial class Plugin
     private const int PortraitMaxTextLen = 64;                          // server rejects name/guild > 64 chars
     private const int PortraitMaxUrlLen = 1024;                         // server rejects urls > 1024 chars
 
+    private const int MasterScorePollAttempts = 4;
+    private const int MasterScorePollDelayMs = 1500;
+
     private Dictionary<long, long>? _portraitStamps;                     // loaded lazily from prefs
     private readonly ConcurrentQueue<(List<long> Uids, long SentAtMs)> _portraitAcks = new();
     private bool _portraitEmptyLogged;                                   // one-shot breadcrumb, see LogNothingToReportOnce
@@ -231,5 +234,67 @@ public sealed partial class Plugin
         }
         _prefs.Set(PrefPortraitStamps, sb.ToString());
         _prefs.Save();
+    }
+
+    /// <summary>Called from <c>SerializeAndUpload</c> right after a master-mode run's log upload
+    /// is fired (main thread), gated on <see cref="MasterScoreRefresh.IsMasterModeRun"/>. Refreshes
+    /// the account master score and pushes it via a self-only, identity-only batch — completely
+    /// decoupled from the throttled roster portrait feed above (does NOT read/write
+    /// <see cref="_portraitStamps"/>). Fire-and-forget; never throws into the caller.
+    ///
+    /// Threading: <c>RefreshSocialSnapshot</c> drives the game's Lua VM and is main-thread-only,
+    /// so it — and the <c>LocalEntityId</c> read — MUST happen synchronously here, before the first
+    /// await. The poll that follows only reads the thread-safe social-snapshot cache, so it is
+    /// safe to resume off the main thread after the await hop.</summary>
+    internal async void RefreshAndSendSelfMasterScore()
+    {
+        try
+        {
+            var self = _services.CombatSnapshot.LocalEntityId;
+            if (self.IsNone) return;
+
+            _services.EntityDetail.RefreshSocialSnapshot(self);   // main-thread-only RPC; must run before any await
+            var score = await MasterScoreRefresh.PollForScore(
+                () => _services.EntityDetail.GetSocialSnapshot(self)?.Identity.MasterScore ?? 0,
+                attempts: MasterScorePollAttempts, delayMs: MasterScorePollDelayMs).ConfigureAwait(false);
+            if (score <= 0) return;                                // never credited within the poll budget — leave it
+
+            SendSelfMasterScoreEntry(self, score);
+        }
+        catch (Exception ex)
+        {
+            _services.Log.Warning($"[CombatMeter.MasterScore] refresh threw: {ex.Message}");
+        }
+    }
+
+    /// <summary>Builds + sends a self-only, identity-only portrait-batch entry carrying just the
+    /// fresh master score, via the existing signed <see cref="PortraitUploader"/> path. Other
+    /// identity fields are omitted (0) — the server's <c>mergeIdentity</c> <c>&gt;0</c> guard
+    /// ignores them, so this cannot clobber previously-reported name/guild/etc.</summary>
+    private void SendSelfMasterScoreEntry(EntityId self, int score)
+    {
+        var entry = new PortraitEntry(
+            Uid: self.Value,
+            ProfileUrl: null,
+            HalfbodyUrl: null,
+            Name: null,
+            Level: 0,
+            ProfessionId: 0,
+            Guild: null,
+            MasterScore: score,
+            TitleId: 0,
+            FightPoint: 0);
+
+        var localUid = LocalUidForUpload();
+        var nonce = Guid.NewGuid().ToString("N");
+        var entriesJson = PortraitReport.WriteEntries(new List<PortraitEntry> { entry });
+        var sig = SignPortraits(SignerKey, PortraitReport.CanonicalPayload(localUid, nonce, entriesJson));
+        var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson);
+
+        _services.Log.Info($"[CombatMeter.MasterScore] Sending refreshed master score {score} for self.");
+        PortraitUploader.UploadFireAndForget(body, (ok, status) =>
+        {
+            if (!ok) _services.Log.Warning($"[CombatMeter.MasterScore] Send FAILED (HTTP {status}).");
+        });
     }
 }
