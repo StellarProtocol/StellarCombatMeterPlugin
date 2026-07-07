@@ -70,7 +70,12 @@ internal sealed record Encounter(
     // (also 0 until the attr feeding it is wired on the framework side).
     int DefeatedCount = 0);
 
-internal sealed record Uploader(long LocalUid, string Sig, string Nonce);
+// MasterScore: the uploader's CURRENT account master-mode score (SocialIdentity.MasterScore),
+// attached on every upload so the StellarLogs char page reflects a fresh dungeon clear promptly
+// (the server folds it into the char identity, decoupled from the throttled portraits feed).
+// Additive — 0/omitted when unknown. NOT covered by the upload signature (CanonicalPayload uses
+// only LocalUid + Nonce), so adding it never affects sig verification.
+internal sealed record Uploader(long LocalUid, string Sig, string Nonce, int MasterScore = 0);
 
 internal sealed record Actor(
     string Name, string Kind, long TeamId, bool IsLocal, long? Uid,

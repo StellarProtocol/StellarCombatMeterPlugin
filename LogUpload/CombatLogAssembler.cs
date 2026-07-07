@@ -60,11 +60,16 @@ internal sealed class CombatLogAssembler
         var encounter    = BuildEncounter(entry, bossConfigId);
 
         // --- Uploader ---
-        var localUid = _services.CombatSnapshot.LocalEntityId.Value;
+        var localEntityId = _services.CombatSnapshot.LocalEntityId;
+        var localUid = localEntityId.Value;
         var nonce    = GenerateNonce();
+        // Attach the uploader's CURRENT account master score (from the social snapshot the ID card /
+        // portraits feed populates for self) so the char page updates promptly after a dungeon clear.
+        // 0 when no snapshot yet — the server's >0 guard then leaves the last-known value untouched.
+        var masterScore = _services.EntityDetail.GetSocialSnapshot(localEntityId)?.Identity.MasterScore ?? 0;
 
         // Build a temporary uploader with empty sig, then compute the real sig over the assembled log.
-        var uploaderUnsigned = new Uploader(localUid, "", nonce);
+        var uploaderUnsigned = new Uploader(localUid, "", nonce, masterScore);
 
         // --- Actors from entity snapshots ---
         var actors = BuildActors(entry, localUid);
@@ -99,7 +104,7 @@ internal sealed class CombatLogAssembler
 
         // --- Signature ---
         var sig = ComputeSig(logUnsigned, signerKey);
-        var uploaderSigned = new Uploader(localUid, sig, nonce);
+        var uploaderSigned = new Uploader(localUid, sig, nonce, masterScore);
         var headerSigned   = header with { Uploader = uploaderSigned };
         return logUnsigned with { Header = headerSigned };
     }

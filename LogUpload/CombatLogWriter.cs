@@ -165,6 +165,8 @@ internal static class CombatLogWriter
         w.Name("localUid").Number(u.LocalUid);
         w.Name("sig").Str(u.Sig);
         w.Name("nonce").Str(u.Nonce);
+        // Additive — omitted when unknown (0), matching the server's optional `masterScore`.
+        if (u.MasterScore > 0) w.Name("masterScore").Number(u.MasterScore);
         w.EndObject();
     }
 
