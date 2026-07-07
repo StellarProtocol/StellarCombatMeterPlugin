@@ -117,14 +117,14 @@ public sealed class HistoryCaptureTests
         // Reproduces the reported bug: a stale settlement from an earlier segment of the same
         // run was already sitting in LastSettlement before this encounter's first hit, and never
         // changed — a manual archive here must NOT be tagged "kill".
-        var stale = new DungeonSettlementInfo(120, 500);
+        var stale = new DungeonSettlementInfo(120, 500, 0);
         Assert.False(Plugin.IsFreshKill(current: stale, baseline: stale));
     }
 
     [Fact]
     public void IsFreshKill_true_when_settlement_newly_appears_during_the_encounter()
     {
-        var fresh = new DungeonSettlementInfo(95, 800);
+        var fresh = new DungeonSettlementInfo(95, 800, 0);
         Assert.True(Plugin.IsFreshKill(current: fresh, baseline: null));
     }
 
@@ -133,8 +133,8 @@ public sealed class HistoryCaptureTests
     {
         // Multi-boss run: baseline already holds boss #1's settlement; boss #2's differing
         // settlement is genuine evidence that THIS encounter ended in a kill too.
-        var boss1 = new DungeonSettlementInfo(100, 400);
-        var boss2 = new DungeonSettlementInfo(140, 650);
+        var boss1 = new DungeonSettlementInfo(100, 400, 0);
+        var boss2 = new DungeonSettlementInfo(140, 650, 0);
         Assert.True(Plugin.IsFreshKill(current: boss2, baseline: boss1));
     }
 
@@ -152,7 +152,17 @@ public sealed class HistoryCaptureTests
     [InlineData(false, DungeonOutcome.None,    "partial")]
     public void ResolveVerdict_truth_table(bool hasSettlement, DungeonOutcome outcome, string expected)
     {
-        var s = hasSettlement ? new DungeonSettlementInfo(481, 425) : (DungeonSettlementInfo?)null;
+        var s = hasSettlement ? new DungeonSettlementInfo(481, 425, 0) : (DungeonSettlementInfo?)null;
         Assert.Equal(expected, Plugin.ResolveVerdict(s, outcome));
+    }
+
+    [Fact]
+    public void ResolveVerdict_partial_when_settlement_carries_only_total_score()
+    {
+        // Regression (686/700 capture): total_score is a LIVE progress score the game sends
+        // mid-run and on partials. A settlement with ONLY total_score (no pass_time / no
+        // master_mode_score) must NOT be promoted to "kill".
+        var scoreOnly = new DungeonSettlementInfo(0, 0, 340);
+        Assert.Equal("partial", Plugin.ResolveVerdict(scoreOnly, DungeonOutcome.None));
     }
 }

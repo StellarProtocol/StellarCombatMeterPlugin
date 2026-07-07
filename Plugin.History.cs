@@ -150,12 +150,16 @@ public sealed partial class Plugin
     internal static bool IsFreshKill(DungeonSettlementInfo? current, DungeonSettlementInfo? baseline)
         => current is not null && !current.Equals(baseline);
 
-    // 3-way run verdict. Fail wins outright (a wipe). Otherwise a fresh settlement OR a
-    // Success outcome = kill; neither = partial (left/abandoned mid-run).
+    // 3-way run verdict. Fail wins outright (a wipe). A Success outcome = kill. A fresh settlement
+    // counts as a kill ONLY when it carries a real CLEAR signal — pass_time (the settlement clear
+    // time) or master_mode_score (the max/par, set on clear). A bare total_score does NOT: it is a
+    // LIVE progress score the game sends mid-run and on partials too, so treating its mere presence
+    // as "kill" false-promoted partial runs (regression from the 686/700 total_score capture).
     internal static string ResolveVerdict(DungeonSettlementInfo? freshSettlement, DungeonOutcome outcome)
     {
         if (outcome == DungeonOutcome.Failed) return "fail";
-        if (freshSettlement is not null || outcome == DungeonOutcome.Success) return "kill";
+        if (outcome == DungeonOutcome.Success) return "kill";
+        if (freshSettlement is { PassTimeSeconds: > 0 } or { MasterModeScore: > 0 }) return "kill";
         return "partial";
     }
 
