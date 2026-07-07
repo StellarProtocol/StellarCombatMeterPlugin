@@ -20,6 +20,8 @@ public sealed partial class Plugin
 
     private const int MasterScorePollAttempts = 4;
     private const int MasterScorePollDelayMs = 1500;
+    private const string PrefMasterScoreLastSentPrefix = "masterScore.lastSent.";  // + self uid
+    private const int MasterScoreNeverSent = -1;                                    // sentinel: no persisted baseline yet
 
     private Dictionary<long, long>? _portraitStamps;                     // loaded lazily from prefs
     private readonly ConcurrentQueue<(List<long> Uids, long SentAtMs)> _portraitAcks = new();
@@ -237,15 +239,25 @@ public sealed partial class Plugin
     }
 
     /// <summary>Called from <c>SerializeAndUpload</c> right after a master-mode run's log upload
-    /// is fired (main thread), gated on <see cref="MasterScoreRefresh.IsMasterModeRun"/>. Refreshes
-    /// the account master score and pushes it via a self-only, identity-only batch — completely
-    /// decoupled from the throttled roster portrait feed above (does NOT read/write
+    /// is fired (main thread), gated on <see cref="MasterScoreRefresh.IsMasterModeRun"/>. ALWAYS
+    /// refreshes the account master score, then pushes it via a self-only, identity-only batch —
+    /// completely decoupled from the throttled roster portrait feed above (does NOT read/write
     /// <see cref="_portraitStamps"/>). Fire-and-forget; never throws into the caller.
+    ///
+    /// Send decision: compares the freshly-fetched score against the last score we actually SENT
+    /// to the server (persisted per self-uid via <c>_prefs</c>) — NOT the volatile in-memory
+    /// social-snapshot cache. Gating on the cache made correctness depend on whether the player
+    /// happened to have opened their ID card this session (which pre-warms the cache to the
+    /// current score and can suppress a send the char page still needs). Gating on the persisted
+    /// last-sent baseline means the first run after this change always uploads (baseline unknown,
+    /// sentinel <see cref="MasterScoreNeverSent"/>), and every run after that uploads only when the
+    /// score genuinely differs from what was last pushed.
     ///
     /// Threading: <c>RefreshSocialSnapshot</c> drives the game's Lua VM and is main-thread-only,
     /// so it — and the <c>LocalEntityId</c> read — MUST happen synchronously here, before the first
-    /// await. The poll that follows only reads the thread-safe social-snapshot cache, so it is
-    /// safe to resume off the main thread after the await hop.</summary>
+    /// await. The poll and pref read/write that follow only touch the thread-safe social-snapshot
+    /// cache and <see cref="IConfigSection"/> (internally lock-guarded), so it is safe to resume
+    /// off the main thread after the await hop.</summary>
     internal async void RefreshAndSendSelfMasterScore()
     {
         try
@@ -253,20 +265,29 @@ public sealed partial class Plugin
             var self = _services.CombatSnapshot.LocalEntityId;
             if (self.IsNone) return;
 
-            var before = _services.EntityDetail.GetSocialSnapshot(self)?.Identity.MasterScore ?? 0;
             _services.EntityDetail.RefreshSocialSnapshot(self);   // main-thread-only RPC; must run before any await
-            var score = await MasterScoreRefresh.PollForChangedScore(
+            var score = await MasterScoreRefresh.PollForScore(
                 () => _services.EntityDetail.GetSocialSnapshot(self)?.Identity.MasterScore ?? 0,
-                before, attempts: MasterScorePollAttempts, delayMs: MasterScorePollDelayMs).ConfigureAwait(false);
-            if (score <= 0) return;                                // unchanged, or never credited within the poll budget — nothing to send
+                attempts: MasterScorePollAttempts, delayMs: MasterScorePollDelayMs).ConfigureAwait(false);
+
+            var lastSentKey = MasterScoreLastSentKey(self);
+            var lastSent = _prefs.Get(lastSentKey, MasterScoreNeverSent);
+            if (!MasterScoreRefresh.ShouldSend(score, lastSent)) return;  // unpopulated, or unchanged from what we already pushed
 
             SendSelfMasterScoreEntry(self, score);
+            _prefs.Set(lastSentKey, score);
+            _prefs.Save();
         }
         catch (Exception ex)
         {
             _services.Log.Warning($"[CombatMeter.MasterScore] refresh threw: {ex.Message}");
         }
     }
+
+    /// <summary>Per-character pref key for the last master score actually pushed to the server —
+    /// keyed by self uid so alt characters on the same install don't clobber each other's baseline.</summary>
+    private static string MasterScoreLastSentKey(EntityId self)
+        => PrefMasterScoreLastSentPrefix + self.Value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>Builds + sends a self-only, identity-only portrait-batch entry carrying just the
     /// fresh master score, via the existing signed <see cref="PortraitUploader"/> path. Other

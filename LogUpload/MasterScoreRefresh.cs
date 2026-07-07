@@ -18,19 +18,26 @@ internal static class MasterScoreRefresh
         => masterModeScore > 0 || difficultyLevel > 0;
 
     /// <summary>Poll <paramref name="readScore"/> up to <paramref name="attempts"/> times, waiting
-    /// <paramref name="delayMs"/> between reads; return the first value that is both &gt; 0 and
-    /// different from <paramref name="before"/> (the pre-refresh baseline), else 0. This guards
-    /// against both a stale first read (still equal to <paramref name="before"/>) and a genuinely
-    /// unchanged master score — a master clear that doesn't improve the season score must not be
-    /// (re)sent.</summary>
-    internal static async Task<int> PollForChangedScore(Func<int> readScore, int before, int attempts, int delayMs)
+    /// <paramref name="delayMs"/> between reads; return the first value that is &gt; 0 (i.e. the
+    /// social-snapshot cache has been populated by the refresh), else 0. The send decision itself
+    /// is made separately by <see cref="ShouldSend"/> against the last-SENT baseline — this poll's
+    /// only job is to wait out the refresh RPC's latency.</summary>
+    internal static async Task<int> PollForScore(Func<int> readScore, int attempts, int delayMs)
     {
         for (int i = 0; i < attempts; i++)
         {
             var v = readScore();
-            if (v > 0 && v != before) return v;
+            if (v > 0) return v;
             if (i < attempts - 1) await Task.Delay(delayMs).ConfigureAwait(false);
         }
         return 0;
     }
+
+    /// <summary>True when <paramref name="fetched"/> is a real score and differs from
+    /// <paramref name="lastSent"/> — the persisted baseline of what we last actually pushed to the
+    /// server (NOT the volatile in-memory cache, which can be warm from an unrelated ID-card open
+    /// and mask a genuine change, or cold and mask a genuine no-op). <paramref name="lastSent"/>
+    /// should default to a sentinel such as -1 ("never sent") so the first real score always
+    /// qualifies.</summary>
+    internal static bool ShouldSend(int fetched, int lastSent) => fetched > 0 && fetched != lastSent;
 }
