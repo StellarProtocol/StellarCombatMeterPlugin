@@ -17,7 +17,10 @@ namespace Stellar.CombatMeter.LogUpload;
 /// </summary>
 internal static class LogUploader
 {
-    private const string UploadUrl = "https://stellar-logs.boshido.workers.dev/upload";
+    // Ingestion worker base — shared with ChunkUploader (POST {ApiBase}/run/{levelUuid}/events
+    // lives on the same worker as this /upload route).
+    internal const string ApiBase = "https://stellar-logs.boshido.workers.dev";
+    private const string UploadUrl = ApiBase + "/upload";
 
     // Single shared client (avoids socket exhaustion on repeated uploads).
     private static readonly HttpClient HttpClient = new()

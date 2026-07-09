@@ -131,6 +131,7 @@ internal static class CombatLogWriter
         w.Name("privacy").Str(h.Privacy);
         w.Name("encounter"); WriteEncounter(w, h.Encounter);
         w.Name("uploader"); WriteUploader(w, h.Uploader);
+        w.Name("eventChunks").Number(h.EventChunks);
         w.EndObject();
     }
 
@@ -318,6 +319,9 @@ internal sealed class JsonWriter
     internal JsonWriter Bool(bool v) { Pre(); _sb.Append(v ? "true" : "false"); _needComma = true; return this; }
     internal JsonWriter Null() { Pre(); _sb.Append("null"); _needComma = true; return this; }
     internal JsonWriter Str(string v) { Pre(); WriteString(v); _needComma = true; return this; }
+    // Appends an already-serialized JSON fragment verbatim (e.g. reusing EventsJsonWriter's
+    // output for a chunk envelope's `events` array) — caller guarantees it is valid JSON.
+    internal JsonWriter Raw(string json) { Pre(); _sb.Append(json); _needComma = true; return this; }
 
     public override string ToString() => _sb.ToString();
 

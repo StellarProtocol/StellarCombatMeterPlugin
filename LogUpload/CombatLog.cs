@@ -51,7 +51,11 @@ internal sealed record ActorSeries(IReadOnlyList<long> Dealt, IReadOnlyList<long
 internal sealed record LogHeader(
     string LogId, long CapturedAtMs, string GameVersion, string Region,
     string? FrameworkVer, string? PluginVer, string Privacy,
-    Encounter Encounter, Uploader Uploader);
+    Encounter Encounter, Uploader Uploader,
+    // Task 8: planned chunk count for the auto path's chunked-upload follow-up
+    // (POST .../run/{levelUuid}/events per chunk). 0 on the manual path (no chunks; events: []
+    // is the whole story). Always emitted (even 0) so the server knows whether to await chunks.
+    int EventChunks = 0);
 
 internal sealed record Encounter(
     string Kind, long LevelUuid, string? DungeonGuid, int MapId, int LineId,

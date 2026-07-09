@@ -28,7 +28,12 @@ internal sealed class CombatLogAssembler
     /// Builds the complete <see cref="CombatLog"/> ready for signing and upload.
     /// </summary>
     /// <param name="entry">The archived encounter history entry (stats + entity snapshots).</param>
-    /// <param name="events">Raw combat events flushed from <see cref="CombatEventBuffer"/>.</param>
+    /// <param name="events">
+    /// Raw combat events flushed from <see cref="CombatEventBuffer"/>. Task 8: no longer embedded
+    /// in the summary blob (which always ships <c>events: []</c>) — retained here only so callers
+    /// keep a single call site; the caller uploads the same list separately via
+    /// <see cref="EventChunker"/> + chunk uploads once this summary has landed.
+    /// </param>
     /// <param name="signerKey">
     /// Base64-PKCS#8 private key, or null/empty to produce an empty placeholder signature
     /// (upload will be rejected by the server if <c>UPLOAD_PUBKEY</c> is set).
@@ -44,12 +49,19 @@ internal sealed class CombatLogAssembler
     /// dead-cache <c>ResolveBossConfigId</c> fallback. Pass 0 when no snapshot is available
     /// (e.g. bossless runs or manual deferred upload of pre-fix entries).
     /// </param>
+    /// <param name="eventChunks">
+    /// Number of chunks <see cref="EventChunker"/> planned for the raw event stream (Task 8).
+    /// Written to <c>header.eventChunks</c>; the summary blob itself always ships
+    /// <c>events: []</c> — chunk uploads carry the raw stream separately, sequentially, after
+    /// this summary has landed. 0 on the manual path (no chunking).
+    /// </param>
     internal CombatLog Assemble(
         Plugin.EncounterHistoryEntry entry,
         IReadOnlyList<CombatLogEvent> events,
         string? signerKey,
         bool truncatedEvents,
-        int snapshotBossConfigId = 0)
+        int snapshotBossConfigId = 0,
+        int eventChunks = 0)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
@@ -96,11 +108,14 @@ internal sealed class CombatLogAssembler
             PluginVer:    pluginVer,
             Privacy:      "unlisted",              // default; TODO(SP1): expose per-user privacy pref in settings
             Encounter:    encounter,
-            Uploader:     uploaderUnsigned);
+            Uploader:     uploaderUnsigned,
+            EventChunks:  eventChunks);
 
         // Plugin-authoritative aggregates (uncapped) ride alongside the (capped) raw event detail track.
         var derived = DerivedBuilder.Build(entry, truncatedEvents);
-        var logUnsigned = new CombatLog(1, header, actors, events, derived);
+        // Task 8: the summary blob always ships events: [] — the raw stream (if any) uploads
+        // separately via sequential chunk POSTs once this summary lands (see ChunkUploader).
+        var logUnsigned = new CombatLog(1, header, actors, Array.Empty<CombatLogEvent>(), derived);
 
         // --- Signature ---
         var sig = ComputeSig(logUnsigned, signerKey);

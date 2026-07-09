@@ -152,23 +152,40 @@ public sealed partial class Plugin
                 }
             }
 
+            // Chunk the raw stream up front (auto path only — flushBuffer=false/manual passes
+            // an empty list, so Chunk() naturally yields zero chunks and eventChunks: 0).
+            var chunks = EventChunker.Chunk(events!);
+
             // Pass the capture-time boss config id so the assembler doesn't re-resolve from
             // wiped entity caches (ResetEntities fires before archive on scene change).
-            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0);
+            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count);
             var url = "https://stellar-logs-web.boshido.workers.dev/run/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-                $"({events!.Count} events, {entry.Entities.Count} actors).");
+                $"({events!.Count} events in {chunks.Count} chunk(s), {entry.Entities.Count} actors).");
 
             LogUploader.UploadFireAndForget(log, (ok, status, err) =>
             {
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
                 // call thread-safe log methods here — never touch uGUI.
                 _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
-                if (ok) _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId}");
-                else    _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
+                if (ok)
+                {
+                    _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId}");
+                    // Chunks upload only after the summary landed (ordering guarantee) — the
+                    // worker cannot associate orphaned chunks with a run it never saw.
+                    if (chunks.Count > 0)
+                        ChunkUploader.UploadChunksFireAndForget(
+                            LogUploader.ApiBase,
+                            log.Header.Encounter.LevelUuid, log.Header.LogId, chunks,
+                            msg => _services.Log.Warning(msg));
+                }
+                else
+                {
+                    _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
+                }
             });
 
             MaybeReportPortraits();
