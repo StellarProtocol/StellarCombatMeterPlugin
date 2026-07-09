@@ -21,11 +21,13 @@ namespace Stellar.CombatMeter.LogUpload;
 /// </remarks>
 internal sealed class CombatEventBuffer
 {
-    // Kept SMALL to bound the upload blob: the ingest worker JSON.parse+ajv-validates the whole event
-    // array, and a 70k-event (~10MB) blob exceeded the Worker resource limit (HTTP 503 / error 1102) in
-    // real raids. Totals/skills/series/deaths ride on the uncapped `derived` aggregates, so raw events are
-    // a forensic tail sample only — ~10k events ≈ ~1.5MB stays well under the limit.
-    internal const int MaxDamageEvents = 8_000;    // dmg+skill forensic ring (tail sample)
+    // The blob no longer carries events in one shot: uploads are chunked via EventChunker into
+    // ~4,000-event requests (see LogUpload/EventChunker.cs), so a single Worker JSON.parse+ajv-validate
+    // call only ever sees one chunk, not the whole ring. The ring bound is now about plugin memory
+    // (128k events x a small struct ~= a few MB) rather than upload-blob size, and lines up with the
+    // chunk protocol: 128,000 = 32 chunks x 4,000 (EventChunker.ChunkEvents). Totals/skills/series/deaths
+    // still ride on the uncapped `derived` aggregates, so raw events remain a forensic tail sample only.
+    internal const int MaxDamageEvents = 128_000;    // dmg+skill forensic ring (tail sample; 32 x 4,000-chunk protocol)
     internal const int MaxBuffEvents   = 2_000;    // buffs on their own budget (preserved for future buff features)
 
     private readonly Ring _dmg = new(MaxDamageEvents);
