@@ -32,11 +32,12 @@ internal static class LogUploader
     /// Serializes <paramref name="log"/> and posts it to the StellarLogs upload endpoint.
     /// Gzip-compresses the body. Any exception is swallowed — never crashes the game.
     /// <paramref name="onComplete"/> is invoked on a thread-pool thread (not Unity main thread)
-    /// with (success, httpStatus, errorMessage).
+    /// with (success, httpStatus, errorMessage, verdict).
     /// </summary>
     internal static void UploadFireAndForget(
         CombatLog log,
-        Action<bool, int, string?>? onComplete = null)
+        Action<bool, int, string?, UploadVerdict?>? onComplete = null,
+        int delayMs = 0)
     {
         // Serialize synchronously on the calling (main) thread — cheap; only called at archive.
         string json;
@@ -46,18 +47,20 @@ internal static class LogUploader
         }
         catch (Exception ex)
         {
-            onComplete?.Invoke(false, 0, $"serialize error: {ex.Message}");
+            onComplete?.Invoke(false, 0, $"serialize error: {ex.Message}", null);
             return;
         }
 
         // Fire off the actual HTTP on the thread-pool so the main thread is never blocked.
-        _ = Task.Run(() => UploadAsync(json, onComplete));
+        _ = Task.Run(() => UploadAsync(json, onComplete, delayMs));
     }
 
-    private static async Task UploadAsync(string json, Action<bool, int, string?>? onComplete)
+    private static async Task UploadAsync(string json, Action<bool, int, string?, UploadVerdict?>? onComplete, int delayMs = 0)
     {
         try
         {
+            if (delayMs > 0) await Task.Delay(delayMs).ConfigureAwait(false);
+
             var gzipped = Gzip(json);
             using var content = new ByteArrayContent(gzipped);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
@@ -68,17 +71,18 @@ internal static class LogUploader
             var status = (int)response.StatusCode;
             if (response.IsSuccessStatusCode)
             {
-                onComplete?.Invoke(true, status, null);
+                var okBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                onComplete?.Invoke(true, status, null, UploadVerdict.Parse(okBody));
             }
             else
             {
                 var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                onComplete?.Invoke(false, status, body);
+                onComplete?.Invoke(false, status, body, null);
             }
         }
         catch (Exception ex)
         {
-            onComplete?.Invoke(false, 0, ex.Message);
+            onComplete?.Invoke(false, 0, ex.Message, null);
         }
     }
 

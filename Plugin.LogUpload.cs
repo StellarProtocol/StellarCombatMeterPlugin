@@ -166,7 +166,7 @@ public sealed partial class Plugin
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
                 $"({events!.Count} events in {chunks.Count} chunk(s), {entry.Entities.Count} actors).");
 
-            LogUploader.UploadFireAndForget(log, (ok, status, err) =>
+            LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
             {
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
                 // call thread-safe log methods here — never touch uGUI.
