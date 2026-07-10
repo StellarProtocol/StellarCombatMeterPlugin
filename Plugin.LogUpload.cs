@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Stellar.CombatMeter.LogUpload;
+using Stellar.CombatMeter.Replay;
 using Stellar.Abstractions.Domain;
 
 namespace Stellar.CombatMeter;
@@ -42,6 +43,10 @@ public sealed partial class Plugin
 
     private const string PrefAutoUpload = "logUpload.autoUpload";
     private const string PrefSignerKey  = "logUpload.signerKey";
+
+    // P2: spread the party's simultaneous auto-uploads so arrival order is meaningful and the
+    // worker isn't hit by N summary POSTs in the same second (free plan). Manual is user-initiated.
+    private const int UploadJitterMaxMs = 8000;
 
     // -----------------------------------------------------------------------
     // Lazy initialisation (assembler is created once on first use)
@@ -101,23 +106,27 @@ public sealed partial class Plugin
 
     /// <summary>
     /// Auto path: serializes the captured raw event stream + actor snapshots and fires off a
-    /// fire-and-forget upload. Called once per archive when <see cref="AutoUpload"/> is on; never throws.
+    /// fire-and-forget upload. Called once per archive when <see cref="AutoUpload"/> is on; never
+    /// throws. Returns <c>true</c> iff a summary upload was fired — from that point the upload's
+    /// callback OWNS <paramref name="replayDoc"/> (uploads it per the merge verdict); <c>false</c>
+    /// means no upload fired and the caller must upload <paramref name="replayDoc"/> itself.
     /// </summary>
-    internal void MaybeUploadLog(EncounterHistoryEntry entry)
+    internal bool MaybeUploadLog(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc = null)
     {
-        if (!AutoUpload) { _logBuffer.Clear(); return; }
+        if (!AutoUpload) { _logBuffer.Clear(); return false; }
         if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
         {                           // path; uploading would collide every field fight on run:0
             _logBuffer.Clear();
             _services.Log.Info("[CombatMeter.SP1] Field fight (no run id) — not uploaded.");
-            return;
+            return false;
         }
 
-        AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true);
+        return AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true, replayDoc);
     }
 
     /// <summary>Manual per-run upload from history. Uses the entry's stored aggregates; no raw events
-    /// (the buffer was flushed at archive) — every rendered number rides on <c>derived</c>.</summary>
+    /// (the buffer was flushed at archive) — every rendered number rides on <c>derived</c>. No replay
+    /// doc exists for a past run (positions were already handled at that run's archive time).</summary>
     internal void UploadHistoryEntry(EncounterHistoryEntry entry)
     {
         if (UploadStateFor(entry) == UploadPhase.InFlight) return;   // debounce double-click
@@ -127,7 +136,7 @@ public sealed partial class Plugin
             _services.Log.Warning("[CombatMeter.SP1] Cannot upload: run has no levelUuid (archived before run-identity was persisted). Re-run the fight to upload it.");
             return;
         }
-        AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true, flushBuffer: false);
+        AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true, flushBuffer: false, replayDoc: null);
     }
 
     // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
@@ -135,8 +144,14 @@ public sealed partial class Plugin
     // flushBuffer=true (auto path) flushes _logBuffer INSIDE this try so a throw from the conversion
     // step can never escape uncaught; flushBuffer=false (manual path) uses the events/truncatedEvents
     // passed in as-is.
-    private void AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents, bool flushBuffer)
+    //
+    // Returns true iff a summary upload was fired (the code reached LogUploader.UploadFireAndForget)
+    // — from that point the callback OWNS replayDoc (P2 single-shot positions handoff). Returns false
+    // on the zero-events early-return, or when the catch below runs BEFORE the upload was fired —
+    // in either false case the CALLER is responsible for uploading replayDoc itself.
+    private bool AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents, bool flushBuffer, PositionUploadDoc? replayDoc)
     {
+        var fired = false;
         try
         {
             if (flushBuffer)
@@ -148,7 +163,7 @@ public sealed partial class Plugin
                 if (events.Count == 0)
                 {
                     _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
-                    return;
+                    return false;
                 }
             }
 
@@ -166,32 +181,53 @@ public sealed partial class Plugin
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
                 $"({events!.Count} events in {chunks.Count} chunk(s), {entry.Entities.Count} actors).");
 
+            // Auto uploads (flushBuffer) get spread across a window so the party's simultaneous
+            // archives don't all land on the worker in the same second; manual is user-initiated,
+            // so it goes immediately.
+            var delayMs = flushBuffer ? Random.Shared.Next(0, UploadJitterMaxMs) : 0;
+            fired = true;
             LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
             {
-                // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
-                // call thread-safe log methods here — never touch uGUI.
+                // Thread-pool thread; only the lock-free status dict + thread-safe log here.
                 _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
                 if (ok)
                 {
-                    _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId}");
+                    var v = verdict ?? new UploadVerdict(true, false);
+                    _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
                     // Chunks upload only after the summary landed (ordering guarantee) — the
-                    // worker cannot associate orphaned chunks with a run it never saw.
-                    if (chunks.Count > 0)
+                    // worker cannot associate orphaned chunks with a run it never saw. Skip when
+                    // this upload lost the multi-uploader merge (Kept=false): the logId is not a
+                    // segment's blob, so chunk POSTs would all 400 ("unknown-log").
+                    if (v.Kept && chunks.Count > 0)
                         ChunkUploader.UploadChunksFireAndForget(
                             LogUploader.ApiBase,
                             log.Header.Encounter.LevelUuid, log.Header.LogId, chunks,
                             msg => _services.Log.Warning(msg));
+                    else if (!v.Kept && chunks.Count > 0)
+                        _services.Log.Info($"[CombatMeter.SP1] Run already fully uploaded by a party member — skipping {chunks.Count} chunk upload(s).");
+                    if (replayDoc is not null)
+                    {
+                        if (!v.HavePositions) UploadReplayDoc(replayDoc);
+                        else _services.Log.Info("[CombatMeter.SP1] Positions already attached server-side — skipping positions upload.");
+                    }
                 }
                 else
                 {
                     _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
+                    // Summary failed — fall back to today's behavior: positions upload ungated
+                    // (they attach via the pending path even without a matching segment). The one
+                    // exception: a failed SUPPLEMENT still carried a verdict whose HavePositions
+                    // came from the 409 body — respect it (Task 10's path).
+                    if (replayDoc is not null && verdict?.HavePositions != true) UploadReplayDoc(replayDoc);
                 }
-            });
+            }, delayMs);
 
             MaybeReportPortraits();
 
             if (MasterScoreRefresh.IsMasterModeRun(entry.MasterModeScore, entry.DifficultyLevel))
                 RefreshAndSendSelfMasterScore();
+
+            return true;
         }
         catch (Exception ex)
         {
@@ -199,6 +235,7 @@ public sealed partial class Plugin
             _uploadStatus.Set(entry, UploadPhase.Failed, null);
             _logBuffer.Clear();
             _services.Log.Warning($"[CombatMeter.SP1] Log assembly/upload threw: {ex.Message}");
+            return fired;
         }
     }
 

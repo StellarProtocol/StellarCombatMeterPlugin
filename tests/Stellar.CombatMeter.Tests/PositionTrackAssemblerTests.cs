@@ -281,7 +281,7 @@ public class PositionTrackAssemblerTests
     [Fact]
     public void Assemble_WithNegativeOffset_ShiftsMs0EarlierAllowingNegativeTimes()
     {
-        // Sampling now starts at dungeon-enter, ahead of combat start — MaybeUploadReplay
+        // Sampling now starts at dungeon-enter, ahead of combat start — PrepareReplayDoc
         // computes a negative msOffset (capture start - combat start) so pre-combat samples land
         // at negative ms relative to the combat clock, extending the pre-fix "first sample is
         // always ms=0 at combat start" contract backward instead of breaking it.

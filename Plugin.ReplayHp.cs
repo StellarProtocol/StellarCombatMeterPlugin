@@ -50,7 +50,7 @@ public sealed partial class Plugin
     }
 
     // Shift a single HP track's Ms0 by the same capture->combat-start offset applied to the
-    // position tracks (see MaybeUploadReplay), so boss HP stays synced with the replay timeline.
+    // position tracks (see PrepareReplayDoc), so boss HP stays synced with the replay timeline.
     private static HpTrack? RebaseHpTrack(HpTrack? track, int msOffset)
         => track is null ? null : track with { Ms0 = track.Ms0 + msOffset };
 
