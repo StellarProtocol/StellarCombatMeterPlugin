@@ -19,7 +19,7 @@ internal static class LogUploader
 {
     // Ingestion worker base — shared with ChunkUploader (POST {ApiBase}/run/{levelUuid}/events
     // lives on the same worker as this /upload route).
-    internal const string ApiBase = "https://stellar-logs.boshido.workers.dev";
+    internal const string ApiBase = "https://api.stellarresonance.app";
     private const string UploadUrl = ApiBase + "/upload";
 
     // Single shared client (avoids socket exhaustion on repeated uploads).

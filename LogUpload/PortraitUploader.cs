@@ -10,7 +10,7 @@ namespace Stellar.CombatMeter.LogUpload;
 /// on the Unity main thread; onComplete fires on a thread-pool thread with (success, status).</summary>
 internal static class PortraitUploader
 {
-    private const string Url = "https://stellar-logs.boshido.workers.dev/char/portraits";
+    private const string Url = "https://api.stellarresonance.app/char/portraits";
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
 
     internal static void UploadFireAndForget(string bodyJson, Action<bool, int>? onComplete = null)

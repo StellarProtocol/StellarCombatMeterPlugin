@@ -18,7 +18,7 @@ namespace Stellar.CombatMeter.Replay;
 /// </summary>
 internal static class PositionUploader
 {
-    private const string BaseUrl = "https://stellar-logs.boshido.workers.dev/run/";
+    private const string BaseUrl = "https://api.stellarresonance.app/run/";
 
     // Single shared client (avoids socket exhaustion on repeated uploads).
     private static readonly HttpClient HttpClient = new()
