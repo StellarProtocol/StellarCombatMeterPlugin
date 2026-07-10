@@ -188,38 +188,11 @@ public sealed partial class Plugin
             fired = true;
             LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
             {
-                // Thread-pool thread; only the lock-free status dict + thread-safe log here.
+                // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
+                // call thread-safe log methods here — never touch uGUI.
                 _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
-                if (ok)
-                {
-                    var v = verdict ?? new UploadVerdict(true, false);
-                    _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
-                    // Chunks upload only after the summary landed (ordering guarantee) — the
-                    // worker cannot associate orphaned chunks with a run it never saw. Skip when
-                    // this upload lost the multi-uploader merge (Kept=false): the logId is not a
-                    // segment's blob, so chunk POSTs would all 400 ("unknown-log").
-                    if (v.Kept && chunks.Count > 0)
-                        ChunkUploader.UploadChunksFireAndForget(
-                            LogUploader.ApiBase,
-                            log.Header.Encounter.LevelUuid, log.Header.LogId, chunks,
-                            msg => _services.Log.Warning(msg));
-                    else if (!v.Kept && chunks.Count > 0)
-                        _services.Log.Info($"[CombatMeter.SP1] Run already fully uploaded by a party member — skipping {chunks.Count} chunk upload(s).");
-                    if (replayDoc is not null)
-                    {
-                        if (!v.HavePositions) UploadReplayDoc(replayDoc);
-                        else _services.Log.Info("[CombatMeter.SP1] Positions already attached server-side — skipping positions upload.");
-                    }
-                }
-                else
-                {
-                    _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
-                    // Summary failed — fall back to today's behavior: positions upload ungated
-                    // (they attach via the pending path even without a matching segment). The one
-                    // exception: a failed SUPPLEMENT still carried a verdict whose HavePositions
-                    // came from the 409 body — respect it (Task 10's path).
-                    if (replayDoc is not null && verdict?.HavePositions != true) UploadReplayDoc(replayDoc);
-                }
+                if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict);
+                else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
             }, delayMs);
 
             MaybeReportPortraits();
@@ -237,6 +210,42 @@ public sealed partial class Plugin
             _services.Log.Warning($"[CombatMeter.SP1] Log assembly/upload threw: {ex.Message}");
             return fired;
         }
+    }
+
+    // Success leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
+    // never touch uGUI). Gates chunk + positions uploads on the server's merge verdict.
+    private void OnSummaryUploadOk(CombatLog log, List<EventChunk> chunks, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict)
+    {
+        var v = verdict ?? new UploadVerdict(true, false);
+        _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
+        // Chunks upload only after the summary landed (ordering guarantee) — the
+        // worker cannot associate orphaned chunks with a run it never saw. Skip when
+        // this upload lost the multi-uploader merge (Kept=false): the logId is not a
+        // segment's blob, so chunk POSTs would all 400 ("unknown-log").
+        if (v.Kept && chunks.Count > 0)
+            ChunkUploader.UploadChunksFireAndForget(
+                LogUploader.ApiBase,
+                log.Header.Encounter.LevelUuid, log.Header.LogId, chunks,
+                msg => _services.Log.Warning(msg));
+        else if (!v.Kept && chunks.Count > 0)
+            _services.Log.Info($"[CombatMeter.SP1] Run already fully uploaded by a party member — skipping {chunks.Count} chunk upload(s).");
+        if (replayDoc is not null)
+        {
+            if (!v.HavePositions) UploadReplayDoc(replayDoc);
+            else _services.Log.Info("[CombatMeter.SP1] Positions already attached server-side — skipping positions upload.");
+        }
+    }
+
+    // Failure leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
+    // never touch uGUI).
+    private void OnSummaryUploadFailed(PositionUploadDoc? replayDoc, int status, string? err, UploadVerdict? verdict)
+    {
+        _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
+        // Summary failed — fall back to today's behavior: positions upload ungated
+        // (they attach via the pending path even without a matching segment). The one
+        // exception: a failed SUPPLEMENT still carried a verdict whose HavePositions
+        // came from the 409 body — respect it (Task 10's path).
+        if (replayDoc is not null && verdict?.HavePositions != true) UploadReplayDoc(replayDoc);
     }
 
     // -----------------------------------------------------------------------
