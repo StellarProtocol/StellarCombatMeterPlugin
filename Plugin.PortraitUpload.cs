@@ -33,6 +33,7 @@ public sealed partial class Plugin
     {
         try
         {
+            if (!RegionKnownOrWarn()) return;                            // Task 12: withhold — region rides the batch body
             var members = _services.PartyRoster.Members;                 // empty on solo/NPC runs — self is covered below
             _portraitStamps ??= LoadPortraitStamps();
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -54,7 +55,7 @@ public sealed partial class Plugin
             var nonce = Guid.NewGuid().ToString("N");
             var entriesJson = PortraitReport.WriteEntries(entries);
             var sig = SignPortraits(SignerKey, PortraitReport.CanonicalPayload(localUid, nonce, entriesJson));
-            var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson);
+            var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson, _services.GameEnvironment.RegionCode);
 
             _services.Log.Info($"[CombatMeter.Portraits] Reporting {entries.Count} roster portrait(s).");
             var sentAt = now;
@@ -293,6 +294,11 @@ public sealed partial class Plugin
     /// fresh master score, via the existing signed <see cref="PortraitUploader"/> path. Other
     /// identity fields are omitted (0) — the server's <c>mergeIdentity</c> <c>&gt;0</c> guard
     /// ignores them, so this cannot clobber previously-reported name/guild/etc.</summary>
+    // Not re-gated on RegionKnownOrWarn() here: the sole caller (RefreshAndSendSelfMasterScore,
+    // invoked from AssembleAndUpload) already passed that gate before reaching this method, and
+    // RefreshAndSendSelfMasterScore unconditionally persists lastSentKey right after this call —
+    // an unreachable early-return here would silently desync that bookkeeping if this method were
+    // ever reached ungated in the future. Region still rides the body (Task 12 wire requirement).
     private void SendSelfMasterScoreEntry(EntityId self, int score)
     {
         var entry = new PortraitEntry(
@@ -311,7 +317,7 @@ public sealed partial class Plugin
         var nonce = Guid.NewGuid().ToString("N");
         var entriesJson = PortraitReport.WriteEntries(new List<PortraitEntry> { entry });
         var sig = SignPortraits(SignerKey, PortraitReport.CanonicalPayload(localUid, nonce, entriesJson));
-        var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson);
+        var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson, _services.GameEnvironment.RegionCode);
 
         _services.Log.Info($"[CombatMeter.MasterScore] Sending refreshed master score {score} for self.");
         PortraitUploader.UploadFireAndForget(body, (ok, status) =>

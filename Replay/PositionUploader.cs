@@ -28,12 +28,13 @@ internal static class PositionUploader
 
     /// <summary>
     /// Serializes <paramref name="doc"/> and posts it to the replay positions endpoint.
-    /// Endpoint: <c>POST /run/{levelUuid}/positions</c>.
+    /// Endpoint: <c>POST /run/{region}/{levelUuid}/positions</c>.
     /// Gzip-compresses the body. Any exception is swallowed — never crashes the game.
     /// <paramref name="onComplete"/> is invoked on a thread-pool thread (not Unity main thread)
     /// with (success, httpStatus, errorMessage).
     /// </summary>
     internal static void UploadFireAndForget(
+        string region,
         PositionUploadDoc doc,
         Action<bool, int, string?>? onComplete = null)
     {
@@ -50,7 +51,7 @@ internal static class PositionUploader
         }
 
         var url = string.Concat(
-            BaseUrl,
+            BaseUrl, region, "/",
             doc.LevelUuid.ToString(CultureInfo.InvariantCulture),
             "/positions");
 

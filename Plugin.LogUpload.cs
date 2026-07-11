@@ -191,7 +191,7 @@ public sealed partial class Plugin
             // Pass the capture-time boss config id so the assembler doesn't re-resolve from
             // wiped entity caches (ResetEntities fires before archive on scene change).
             var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count);
-            var url = "https://logs.stellarresonance.app/run/" +
+            var url = "https://logs.stellarresonance.app/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
@@ -241,7 +241,7 @@ public sealed partial class Plugin
         // segment's blob, so chunk POSTs would all 400 ("unknown-log").
         if (v.Kept && chunks.Count > 0)
             ChunkUploader.UploadChunksFireAndForget(
-                LogUploader.ApiBase,
+                LogUploader.ApiBase, log.Header.Region,
                 log.Header.Encounter.LevelUuid, log.Header.LogId, chunks,
                 msg => _services.Log.Warning(msg));
         else if (!v.Kept && chunks.Count > 0)

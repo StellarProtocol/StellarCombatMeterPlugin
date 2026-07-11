@@ -48,6 +48,16 @@ public sealed class ChunkEnvelopeWriterTests
         Assert.Contains("\"events\":[]", json);
     }
 
+    // -------------------------------------------------------------------------
+    // Task 12: region-scoped chunk-upload URL (POST {base}/run/{region}/{levelUuid}/events).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ChunkUploader_BuildsRegionScopedUrl()
+    {
+        Assert.Equal("https://x/run/jp/42/events", ChunkUploader.BuildUrl("https://x", "jp", 42));
+    }
+
     // Pulls the raw `events` array substring out of the envelope so it can be compared
     // byte-for-byte against a standalone EventsJsonWriter.Write call.
     private static string ExtractEventsArray(string envelopeJson)
