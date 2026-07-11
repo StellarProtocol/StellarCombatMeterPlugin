@@ -27,7 +27,7 @@ internal static class PositionTrackAssembler
     /// <param name="meta">Optional per-entity metadata (kind, name, professionId).</param>
     /// <param name="msOffset">
     /// Added to each track's Ms0 to rebase the timeline zero point — see
-    /// <c>Plugin.Replay.cs</c> <c>MaybeUploadReplay</c> for why capture start and combat start
+    /// <c>Plugin.Replay.cs</c> <c>PrepareReplayDoc</c> for why capture start and combat start
     /// can differ (sampling now begins at dungeon-enter, ahead of the first pull).
     /// </param>
     public static PositionUploadDoc Assemble(

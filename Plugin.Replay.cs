@@ -81,7 +81,7 @@ public sealed partial class Plugin
     // NOT gated on _combatActive — the run-id latch (IsInstancedRun) fires on dungeon ENTER, well
     // before the first pull, so the replay's walk-in from the dungeon entrance to the first pack is
     // captured too (previously the track started at the first damage event, mid-dungeon). The DPS
-    // combat clock (_combatActive/_combatStartMs) is untouched by this — see MaybeUploadReplay's
+    // combat clock (_combatActive/_combatStartMs) is untouched by this — see PrepareReplayDoc's
     // msOffset rebase, which keeps the uploaded track's zero point at combat start regardless of how
     // early sampling actually began.
     private void TickReplayCapture(float deltaTimeSec)
@@ -94,7 +94,7 @@ public sealed partial class Plugin
             // Entering a NEW instanced run (incl. crash → re-enter): drop the prior run's
             // capture so its movement can't leak into this run's replay (Bug 2 source fix).
             // Only clear on a non-zero id so we never wipe a just-finished run's tracks
-            // before MaybeUploadReplay (fires at archive time, in-dungeon) has assembled them.
+            // before PrepareReplayDoc (fires at archive time, in-dungeon) has assembled them.
             if (runId != 0) ResetReplay();
             _replayRunId = runId;
         }
@@ -214,7 +214,7 @@ public sealed partial class Plugin
         var bossEntityId = new EntityId(bossId.Value);
 
         // Snapshot MonsterInfo NOW — caches are live at capture time but will be wiped by
-        // ResetEntities() before MaybeUploadReplay/archive fires (scene-change sequence).
+        // ResetEntities() before PrepareReplayDoc/archive fires (scene-change sequence).
         _bossMonsterInfo = _services.GameData.World.GetMonsterByEntity(bossEntityId);
 
         return bossEntityId;
@@ -224,13 +224,21 @@ public sealed partial class Plugin
     // Archive upload
     // -----------------------------------------------------------------------
 
-    // At archive: assemble + upload the track off-thread (PositionUploader uses Task.Run). Never throws.
-    internal void MaybeUploadReplay(EncounterHistoryEntry entry)
+    /// <summary>
+    /// At archive: assembles + signs the replay position doc for <paramref name="entry"/>, ALWAYS
+    /// resetting the capture buffers before returning (regardless of outcome) — the capture-buffer
+    /// reset must happen at archive time no matter what any later upload decision does. Returns
+    /// <c>null</c> when replay upload is off, no capture exists, the run has no level id, or
+    /// nothing was sampled. Never throws. Callers (Plugin.History.cs / Plugin.LogUpload.cs) decide
+    /// separately whether to fire <see cref="UploadReplayDoc"/> for the returned doc, based on the
+    /// summary upload's verdict (skip when the server already has positions for this run).
+    /// </summary>
+    internal PositionUploadDoc? PrepareReplayDoc(EncounterHistoryEntry entry)
     {
         try
         {
-            if (!_uploadReplay || _replay is null) { ResetReplay(); return; }
-            if (entry.LevelUuid == 0 || _replay.TotalSamples == 0) { ResetReplay(); return; }
+            if (!_uploadReplay || _replay is null) { ResetReplay(); return null; }
+            if (entry.LevelUuid == 0 || _replay.TotalSamples == 0) { ResetReplay(); return null; }
 
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
@@ -274,6 +282,24 @@ public sealed partial class Plugin
 
             ResetReplay();
 
+            return doc;
+        }
+        catch (Exception ex)
+        {
+            ResetReplay();
+            _services.Log.Warning($"[CombatMeter.Replay] threw: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Fires the fire-and-forget positions upload for an already-assembled <paramref name="doc"/>
+    /// (see <see cref="PrepareReplayDoc"/>). Never throws.
+    /// </summary>
+    internal void UploadReplayDoc(PositionUploadDoc doc)
+    {
+        try
+        {
             PositionUploader.UploadFireAndForget(doc, (ok, status, err) =>
             {
                 if (ok) _services.Log.Info(
@@ -284,8 +310,7 @@ public sealed partial class Plugin
         }
         catch (Exception ex)
         {
-            ResetReplay();
-            _services.Log.Warning($"[CombatMeter.Replay] threw: {ex.Message}");
+            _services.Log.Warning($"[CombatMeter.Replay] upload threw: {ex.Message}");
         }
     }
 

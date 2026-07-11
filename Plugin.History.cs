@@ -133,10 +133,13 @@ public sealed partial class Plugin
         foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
-        // SP1: fire-and-forget upload of the full event log (opt-in; never blocks/crashes).
-        MaybeUploadLog(entry);
-        // Replay R1: fire-and-forget position track upload (opt-in; separate toggle; never blocks/crashes).
-        MaybeUploadReplay(entry);
+        // SP1 + Replay R1 + P2 courtesy: assemble the replay doc FIRST (capture reset must happen
+        // at archive regardless), then let the summary upload's verdict decide whether the
+        // positions POST is needed (havePositions) — the callback owns the doc when a summary
+        // upload fires; otherwise (auto-upload off / no events) upload immediately as before.
+        var replayDoc = PrepareReplayDoc(entry);
+        var summaryFired = MaybeUploadLog(entry, replayDoc);
+        if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
 
         Clear();
     }

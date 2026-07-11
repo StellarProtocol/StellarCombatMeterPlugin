@@ -171,7 +171,9 @@ internal static class CombatLogWriter
         w.EndObject();
     }
 
-    private static void WriteActors(JsonWriter w, IReadOnlyDictionary<string, Actor> actors)
+    // internal: Task 10's SupplementWriter reuses this to emit the local-only actor map
+    // for the supplement POST body (same wire shape as the summary's `actors` object).
+    internal static void WriteActors(JsonWriter w, IReadOnlyDictionary<string, Actor> actors)
     {
         w.BeginObject();
         foreach (var kv in actors)
