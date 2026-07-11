@@ -630,4 +630,22 @@ public sealed class LogUploadTests
 
         Assert.Equal(without, with);
     }
+
+    // -------------------------------------------------------------------------
+    // Task 11: BuildPrecheckHeader carries the real region from the log header.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void PrecheckHeader_CarriesRegion()
+    {
+        var enc = new Encounter("dungeon", 77L, null, 100, 0, null, 0, null, null, 0,
+            "kill", 1000L, 2000L, 1000L, 0);
+        var header = new LogHeader("cm-region-test", 2000L, "2.11", "jp", null, null, "public",
+            enc, new Uploader(55L, "sig", "nonce"));
+        var log = new CombatLog(1, header, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+
+        var precheck = LogUploader.BuildPrecheckHeader(log);
+        Assert.Contains("region=jp", precheck);
+        Assert.Contains("levelUuid=", precheck);
+    }
 }

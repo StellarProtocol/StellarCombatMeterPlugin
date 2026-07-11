@@ -55,6 +55,20 @@ public sealed partial class Plugin
     private CombatLogAssembler LogAssembler
         => _logAssembler ??= new CombatLogAssembler(_services);
 
+    private bool _warnedUnknownRegion;
+
+    /// <summary>Spec §2: withhold uploads when the install's region is undetected; environment.region config rescues.</summary>
+    private bool RegionKnownOrWarn()
+    {
+        if (_services.GameEnvironment.Region != Stellar.Abstractions.Domain.GameRegion.Unknown) return true;
+        if (!_warnedUnknownRegion)
+        {
+            _warnedUnknownRegion = true;
+            _services.Log.Warning("[CombatMeter.SP1] Game region UNKNOWN — uploads withheld. Set environment.region (sea|jp) in stellar.framework.config.json to override.");
+        }
+        return false;
+    }
+
     // -----------------------------------------------------------------------
     // Settings accessors (expose to Plugin.Settings.cs if a UI toggle is added)
     // -----------------------------------------------------------------------
@@ -114,6 +128,7 @@ public sealed partial class Plugin
     internal bool MaybeUploadLog(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc = null)
     {
         if (!AutoUpload) { _logBuffer.Clear(); return false; }
+        if (!RegionKnownOrWarn()) { _logBuffer.Clear(); return false; }
         if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
         {                           // path; uploading would collide every field fight on run:0
             _logBuffer.Clear();
@@ -151,6 +166,8 @@ public sealed partial class Plugin
     // in either false case the CALLER is responsible for uploading replayDoc itself.
     private bool AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents, bool flushBuffer, PositionUploadDoc? replayDoc)
     {
+        if (!flushBuffer && !RegionKnownOrWarn()) return false;
+
         var fired = false;
         try
         {

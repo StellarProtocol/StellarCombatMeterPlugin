@@ -64,7 +64,8 @@ internal static class LogUploader
         var e = log.Header.Encounter;
         var truncated = log.Derived?.TruncatedEvents == true ? 1 : 0;
         return $"levelUuid={e.LevelUuid}; startMs={e.StartMs}; endMs={e.EndMs}; " +
-               $"eventCount={log.Events.Count}; truncated={truncated}; result={e.Result}";
+               $"eventCount={log.Events.Count}; truncated={truncated}; result={e.Result}; " +
+               $"region={log.Header.Region}";
     }
 
     private static async Task UploadAsync(CombatLog log, string json, Action<bool, int, string?, UploadVerdict?>? onComplete, int delayMs = 0)
