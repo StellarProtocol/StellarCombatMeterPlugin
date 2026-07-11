@@ -1,7 +1,7 @@
 // Task 8: chunk-upload envelope serialization. The HTTP posture (fire-and-forget, retries,
 // backoff) is plumbing copied from LogUploader and is not unit-testable without a live/mocked
 // endpoint; this file covers the testable core — the JSON envelope shape POSTed per chunk to
-// {base}/run/{levelUuid}/events, and that its `events` array is byte-identical to the same
+// {base}/run/{region}/{levelUuid}/events, and that its `events` array is byte-identical to the same
 // event serialization the summary blob used to carry (EventsJsonWriter — shared with CanonicalPayload).
 
 using System.Collections.Generic;

@@ -60,7 +60,7 @@ public sealed partial class Plugin
     /// <summary>Spec §2: withhold uploads when the install's region is undetected; environment.region config rescues.</summary>
     private bool RegionKnownOrWarn()
     {
-        if (_services.GameEnvironment.Region != Stellar.Abstractions.Domain.GameRegion.Unknown) return true;
+        if (_services.GameEnvironment.Region != GameRegion.Unknown) return true;
         if (!_warnedUnknownRegion)
         {
             _warnedUnknownRegion = true;
