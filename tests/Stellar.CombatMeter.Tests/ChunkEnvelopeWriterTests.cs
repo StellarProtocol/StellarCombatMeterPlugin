@@ -1,7 +1,7 @@
 // Task 8: chunk-upload envelope serialization. The HTTP posture (fire-and-forget, retries,
 // backoff) is plumbing copied from LogUploader and is not unit-testable without a live/mocked
 // endpoint; this file covers the testable core — the JSON envelope shape POSTed per chunk to
-// {base}/run/{levelUuid}/events, and that its `events` array is byte-identical to the same
+// {base}/run/{region}/{levelUuid}/events, and that its `events` array is byte-identical to the same
 // event serialization the summary blob used to carry (EventsJsonWriter — shared with CanonicalPayload).
 
 using System.Collections.Generic;
@@ -46,6 +46,16 @@ public sealed class ChunkEnvelopeWriterTests
         Assert.Contains("\"index\":2", json);
         Assert.Contains("\"count\":0", json);
         Assert.Contains("\"events\":[]", json);
+    }
+
+    // -------------------------------------------------------------------------
+    // Task 12: region-scoped chunk-upload URL (POST {base}/run/{region}/{levelUuid}/events).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ChunkUploader_BuildsRegionScopedUrl()
+    {
+        Assert.Equal("https://x/run/jp/42/events", ChunkUploader.BuildUrl("https://x", "jp", 42));
     }
 
     // Pulls the raw `events` array substring out of the envelope so it can be compared

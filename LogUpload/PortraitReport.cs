@@ -38,10 +38,14 @@ internal static class PortraitReport
         return sb.ToString();
     }
 
-    internal static string WriteBody(long localUid, string nonce, string sig, string entriesJson)
-        => new StringBuilder(entriesJson.Length + 128)
+    /// <summary>Task 12: <paramref name="region"/> rides top-level, OUTSIDE the signed
+    /// <paramref name="entriesJson"/> array — <see cref="CanonicalPayload"/> takes no region
+    /// parameter, so this field cannot affect the signature (cross-repo invariant above).</summary>
+    internal static string WriteBody(long localUid, string nonce, string sig, string entriesJson, string region)
+        => new StringBuilder(entriesJson.Length + 160)
             .Append("{\"localUid\":").Append(localUid.ToString(CultureInfo.InvariantCulture))
-            .Append(",\"nonce\":\"").Append(nonce)
+            .Append(",\"region\":\"").Append(region)
+            .Append("\",\"nonce\":\"").Append(nonce)
             .Append("\",\"sig\":\"").Append(sig)
             .Append("\",\"entries\":").Append(entriesJson).Append('}')
             .ToString();

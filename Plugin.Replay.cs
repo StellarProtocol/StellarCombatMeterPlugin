@@ -294,13 +294,18 @@ public sealed partial class Plugin
 
     /// <summary>
     /// Fires the fire-and-forget positions upload for an already-assembled <paramref name="doc"/>
-    /// (see <see cref="PrepareReplayDoc"/>). Never throws.
+    /// (see <see cref="PrepareReplayDoc"/>). Never throws. Region comes straight from
+    /// <see cref="Stellar.Abstractions.Services.IGameEnvironment"/> — <c>PositionUploadDoc</c>
+    /// carries no region of its own, and this call site has no <c>CombatLog</c> in scope
+    /// (both of <c>UploadReplayDoc</c>'s callers — the summary-upload callback legs in
+    /// Plugin.LogUpload.cs and the no-summary-fired path in Plugin.History.cs — only have
+    /// <c>replayDoc</c>, not the assembled log).
     /// </summary>
     internal void UploadReplayDoc(PositionUploadDoc doc)
     {
         try
         {
-            PositionUploader.UploadFireAndForget(doc, (ok, status, err) =>
+            PositionUploader.UploadFireAndForget(_services.GameEnvironment.RegionCode, doc, (ok, status, err) =>
             {
                 if (ok) _services.Log.Info(
                     $"[CombatMeter.Replay] positions OK (HTTP {status}) levelUuid={doc.LevelUuid}");

@@ -53,7 +53,7 @@ internal sealed record LogHeader(
     string? FrameworkVer, string? PluginVer, string Privacy,
     Encounter Encounter, Uploader Uploader,
     // Task 8: planned chunk count for the auto path's chunked-upload follow-up
-    // (POST .../run/{levelUuid}/events per chunk). 0 on the manual path (no chunks; events: []
+    // (POST .../run/{region}/{levelUuid}/events per chunk). 0 on the manual path (no chunks; events: []
     // is the whole story). Always emitted (even 0) so the server knows whether to await chunks.
     int EventChunks = 0);
 

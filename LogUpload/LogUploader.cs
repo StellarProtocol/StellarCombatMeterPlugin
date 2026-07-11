@@ -17,7 +17,7 @@ namespace Stellar.CombatMeter.LogUpload;
 /// </summary>
 internal static class LogUploader
 {
-    // Ingestion worker base — shared with ChunkUploader (POST {ApiBase}/run/{levelUuid}/events
+    // Ingestion worker base — shared with ChunkUploader (POST {ApiBase}/run/{region}/{levelUuid}/events
     // lives on the same worker as this /upload route).
     internal const string ApiBase = "https://api.stellarresonance.app";
     private const string UploadUrl = ApiBase + "/upload";
@@ -64,7 +64,8 @@ internal static class LogUploader
         var e = log.Header.Encounter;
         var truncated = log.Derived?.TruncatedEvents == true ? 1 : 0;
         return $"levelUuid={e.LevelUuid}; startMs={e.StartMs}; endMs={e.EndMs}; " +
-               $"eventCount={log.Events.Count}; truncated={truncated}; result={e.Result}";
+               $"eventCount={log.Events.Count}; truncated={truncated}; result={e.Result}; " +
+               $"region={log.Header.Region}";
     }
 
     private static async Task UploadAsync(CombatLog log, string json, Action<bool, int, string?, UploadVerdict?>? onComplete, int delayMs = 0)
@@ -117,7 +118,7 @@ internal static class LogUploader
     /// the member's detail is then absent and the site shows the gearless-actor fallback.</summary>
     private static async Task<int> PostSupplementAsync(CombatLog log)
     {
-        var url = $"{ApiBase}/run/{log.Header.Encounter.LevelUuid.ToString(System.Globalization.CultureInfo.InvariantCulture)}/supplement";
+        var url = $"{ApiBase}/run/{log.Header.Region}/{log.Header.Encounter.LevelUuid.ToString(System.Globalization.CultureInfo.InvariantCulture)}/supplement";
         var json = SupplementWriter.Write(log);
         for (var attempt = 0; ; attempt++)
         {

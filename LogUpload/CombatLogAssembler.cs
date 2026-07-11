@@ -102,8 +102,8 @@ internal sealed class CombatLogAssembler
         var header = new LogHeader(
             LogId:        logId,
             CapturedAtMs: nowMs,
-            GameVersion:  "2.11",                 // TODO(SP1): read live game version from IClientState once exposed
-            Region:       "SEA",                  // TODO(SP1): read from launcher config once exposed
+            GameVersion:  _services.GameEnvironment.GameVersion,
+            Region:       _services.GameEnvironment.RegionCode,
             FrameworkVer: frameworkVer,
             PluginVer:    pluginVer,
             Privacy:      "unlisted",              // default; TODO(SP1): expose per-user privacy pref in settings

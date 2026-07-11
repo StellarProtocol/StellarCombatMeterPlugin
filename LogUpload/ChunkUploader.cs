@@ -16,8 +16,8 @@ namespace Stellar.CombatMeter.LogUpload;
 
 /// <summary>
 /// Posts the raw event chunks produced by <see cref="EventChunker"/> to
-/// <c>{base}/run/{levelUuid}/events</c>, one at a time, after the summary blob has uploaded
-/// successfully. Fire-and-forget: never blocks or crashes the game.
+/// <c>{base}/run/{region}/{levelUuid}/events</c>, one at a time, after the summary blob has
+/// uploaded successfully. Fire-and-forget: never blocks or crashes the game.
 /// </summary>
 internal static class ChunkUploader
 {
@@ -37,19 +37,24 @@ internal static class ChunkUploader
     /// </summary>
     internal static void UploadChunksFireAndForget(
         string baseUrl,
+        string region,
         long levelUuid,
         string logId,
         List<EventChunk> chunks,
         Action<string> logWarn)
     {
         if (chunks.Count == 0) return;
-        _ = Task.Run(() => UploadSequentialAsync(baseUrl, levelUuid, logId, chunks, logWarn));
+        _ = Task.Run(() => UploadSequentialAsync(baseUrl, region, levelUuid, logId, chunks, logWarn));
     }
 
+    /// <summary>Builds the region-scoped chunk-upload URL: <c>{baseUrl}/run/{region}/{levelUuid}/events</c>.</summary>
+    internal static string BuildUrl(string baseUrl, string region, long levelUuid)
+        => $"{baseUrl}/run/{region}/{levelUuid.ToString(CultureInfo.InvariantCulture)}/events";
+
     private static async Task UploadSequentialAsync(
-        string baseUrl, long levelUuid, string logId, List<EventChunk> chunks, Action<string> logWarn)
+        string baseUrl, string region, long levelUuid, string logId, List<EventChunk> chunks, Action<string> logWarn)
     {
-        var url = $"{baseUrl}/run/{levelUuid.ToString(CultureInfo.InvariantCulture)}/events";
+        var url = BuildUrl(baseUrl, region, levelUuid);
         foreach (var chunk in chunks)
         {
             try
@@ -88,7 +93,7 @@ internal static class ChunkUploader
     }
 
     /// <summary>
-    /// Builds the per-chunk JSON envelope POSTed to <c>/run/{levelUuid}/events</c>:
+    /// Builds the per-chunk JSON envelope POSTed to <c>/run/{region}/{levelUuid}/events</c>:
     /// <c>{"logId":…,"index":…,"total":…,"startMs":…,"endMs":…,"count":…,"events":[…]}</c>.
     /// The <c>events</c> array rides <see cref="EventsJsonWriter"/> — the SAME event serialization
     /// the summary blob used to carry, so the wire shape of one event is byte-identical.
