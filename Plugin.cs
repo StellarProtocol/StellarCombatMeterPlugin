@@ -278,6 +278,7 @@ public sealed partial class Plugin : IStellarPlugin
         TickReadyCheckResult(deltaTime);
         TickReadyCheck(deltaTime);
         TickReplayCapture(deltaTime);
+        TickReplayDiagnostics(deltaTime);
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;

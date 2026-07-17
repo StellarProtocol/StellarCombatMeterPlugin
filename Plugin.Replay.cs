@@ -41,6 +41,15 @@ public sealed partial class Plugin
     // run's capture dropped before it leaks into the new run's replay (Bug 2 source fix).
     private long _replayRunId;
 
+    // One-shot latch for LogReplayTrackCapHit — set the first time this encounter's ReplayCapture
+    // reports TrackCapHit, so the diagnostics line fires once instead of every frame. Reset alongside
+    // the rest of the capture state in ResetReplay().
+    private bool _trackCapLogged;
+
+    // ~60 s throttle for the periodic LogReplayTrackCount field artifact (Task 4 gate).
+    private const float TrackDiagIntervalS = 60f;
+    private float _trackDiagAccumS;
+
     // Boss HP timeline — sampled in parallel with the position capture cadence.
     private EntityId   _bossEntityId;          // set when boss is identified at assembly time; zero = none
     private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
@@ -109,7 +118,19 @@ public sealed partial class Plugin
         var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
         _replay.Tick(nowMs, dtMs);
+        if (_replay.TrackCapHit && !_trackCapLogged) { _trackCapLogged = true; LogReplayTrackCapHit(); }
         TickHpTimelines(nowMs, dtMs);
+    }
+
+    // Called every frame from OnUpdate (throttled internally to ~60s). Emits the field-observable
+    // track-count line regardless of _replay.Active — in the open world this must read tracks=0,
+    // which is itself the proof that NoteEntity is correctly gated to instanced runs only.
+    private void TickReplayDiagnostics(float deltaTimeSec)
+    {
+        _trackDiagAccumS += deltaTimeSec;
+        if (_trackDiagAccumS < TrackDiagIntervalS) return;
+        _trackDiagAccumS = 0f;
+        LogReplayTrackCount();
     }
 
     // Seeds the replay's tracked-entity set with the local player + current party roster, so
@@ -157,6 +178,7 @@ public sealed partial class Plugin
         _replayMonsterInfo.Clear();
         _hpSampler?.Reset();
         _replaySpecs.Clear();
+        _trackCapLogged = false;
     }
 
     // -----------------------------------------------------------------------
