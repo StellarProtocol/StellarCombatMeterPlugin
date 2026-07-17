@@ -56,23 +56,40 @@ internal sealed class AutoArchiveEngine
 
     private long _lastArchiveMs;
 
-    // Wipe is edge-triggered (round 2 fix). allDead (roster-all-dead) is MOMENTARY — it clears the
+    // Wipe is a single episode-archived latch (round 3 fix — the "boss pattern" applied to wipe;
+    // <see cref="_bossSegmentActive"/> below is the same shape: a level-gated "already handled this
+    // episode" flag, not an edge detector). allDead (roster-all-dead) is MOMENTARY — it clears the
     // instant anyone revives — while OutcomeFailed (server LastOutcome==Failed) is STICKY at run
-    // level — it stays true until a brand-new run. A single boolean latch cannot reconcile a
-    // momentary signal and a sticky one: round 1's coupled AND re-arm (`!allDead &&
-    // !s.OutcomeFailed`) could never clear once OutcomeFailed stuck true for the rest of the run,
-    // wedging every later independent wipe (pinned by
-    // <see cref="AutoArchiveEngineTests.Wipe_second_independent_wipe_in_same_run_fires"/>). Rising-
-    // edge detection needs no manual re-arm: a fall-then-rise is a fresh edge on its own, and a
-    // signal that never falls simply never fires again. This gives fire-once-per-episode for
-    // allDead AND fire-once-per-run for OutcomeFailed, with no stuck state. Overlap between the two
-    // (they typically rise a tick apart for the same real-world wipe) is deduped by the shared
-    // cooldown below, not by latch coupling — a second edge landing inside the cooldown armed by
-    // the first is dropped, not deferred (pinned by
-    // <see cref="AutoArchiveEngineTests.Wipe_overlap_alldead_then_outcomefailed_fires_once"/> and
-    // its mirror).
-    private bool _prevAllDead;           // previous tick's allDead reading
-    private bool _prevOutcomeFailed;     // previous tick's OutcomeFailed reading
+    // level — it stays true until a brand-new run. Round 1's coupled AND re-arm wedged every later
+    // independent wipe once OutcomeFailed stuck true for the rest of the run (pinned by
+    // <see cref="AutoArchiveEngineTests.Wipe_second_independent_wipe_in_same_run_fires"/>). Round
+    // 2's pure rising-edge rewrite fixed that but had two defects of its own: (1) an allDead edge
+    // that rises DURING an unrelated cooldown gets stamped into "previous tick" before the fire can
+    // happen, so once the cooldown lifts there is no NEW edge and the wipe is lost forever even
+    // though allDead never stopped being true (pinned by
+    // <see cref="AutoArchiveEngineTests.Wipe_alldead_rises_during_unrelated_cooldown_then_fires_on_lift"/>);
+    // (2) allDead firing once, then — much later, past its cooldown, with the party never having
+    // recovered — OutcomeFailed's independent rising edge fires a SECOND time for what is still the
+    // same episode (pinned by
+    // <see cref="AutoArchiveEngineTests.Wipe_double_signal_wide_gap_party_stays_dead_fires_once"/>).
+    // Fix: stop asking "did a signal just rise" and instead ask "has THIS episode already been
+    // archived" (`_wipeArchived`). allDead is read as a LEVEL every tick, not an edge, so a fire
+    // that a cooldown swallows is never lost — the level condition simply persists and fires the
+    // instant the cooldown lifts. `_wipeArchived` is set true ONLY at the moment a fire actually
+    // returns (after the cooldown gate) — never while suppressed — so a cooldown-blocked tick
+    // leaves the episode still eligible next tick. OutcomeFailed alone still needs a one-shot edge
+    // (`_prevOutcomeFailed`, stamped every tick) — without it, its stickiness would re-fire every
+    // tick once true. Recovery (`!allDead` clears `_wipeArchived`) runs unconditionally every tick:
+    // the instant at least one member is alive the episode is over, and the next allDead-or-
+    // OutcomeFailed edge starts a fresh one. ACCEPTED RESIDUAL (documented, not fixed): an
+    // OutcomeFailed-only wipe (no allDead ever) whose edge rises during an unrelated cooldown is
+    // still lost — the every-tick `_prevOutcomeFailed` stamp consumes the edge while suppressed,
+    // and a sticky signal can't produce a second edge later to retry. This needs a no-allDead wipe
+    // landing within `CooldownMs` of an unrelated archive; allDead is the primary signal and is
+    // level-gated so it never suffers this loss (pinned by
+    // <see cref="AutoArchiveEngineTests.Wipe_outcomefailed_only_edge_lost_inside_unrelated_cooldown_is_accepted_residual"/>).
+    private bool _wipeArchived;          // this wipe episode has already been archived
+    private bool _prevOutcomeFailed;     // previous tick's OutcomeFailed reading (one-shot edge only)
 
     private bool _bossSegmentActive;    // a boss segment is running; re-arms on boss-gone / non-boss archive
     private bool _bossPending;          // a boss sighting the cooldown gate swallowed, banked for when it lifts;
@@ -83,21 +100,34 @@ internal sealed class AutoArchiveEngine
 
     /// <summary>Evaluate one tick. Returns the trigger to fire (caller runs ManualArchive(reason),
     /// which reports back via <see cref="OnArchived"/>), or null. Latch bookkeeping — including the
-    /// wipe edge detectors — runs every tick even when nothing can fire (cooldown-suppressed or
-    /// otherwise), so a disabled toggle / empty meter / cooldown window never banks a stale edge or
-    /// loses a real one.</summary>
+    /// wipe episode latch's recovery clear and the OutcomeFailed edge stamp — runs every tick even
+    /// when nothing can fire (cooldown-suppressed or otherwise), so a disabled toggle / empty meter
+    /// / cooldown window never banks a stale edge or loses a real one.</summary>
     public ArchiveReason? Evaluate(in AutoArchiveInputs s)
     {
         bool allDead = s.RosterSize > 0 && s.UnknownCount == 0 && s.DeadCount == s.RosterSize;
-        // Computed against the PREVIOUS tick's _prev* values, before UpdateLatches below
-        // overwrites them — a rising edge on either signal, this tick only.
-        bool wipeEdge = (allDead && !_prevAllDead) || (s.OutcomeFailed && !_prevOutcomeFailed);
-        UpdateLatches(in s, allDead);
+        // outcomeEdge is a one-shot edge (OutcomeFailed is sticky); allDead below is read as a
+        // level, not an edge — see the field-doc comment above for why the two need different
+        // treatment.
+        bool outcomeEdge = s.OutcomeFailed && !_prevOutcomeFailed;
+        bool wipeWanted = !_wipeArchived && (allDead || outcomeEdge);
+        if (!allDead) _wipeArchived = false;   // recovery re-arm: >=1 alive member => episode over
+        _prevOutcomeFailed = s.OutcomeFailed;  // stamp every tick regardless of fire/cooldown
+        UpdateLatches(in s);
 
         if (!s.HasStats) return null;   // ManualArchive would no-op anyway — don't consume the cooldown
         if (_lastArchiveMs != 0 && s.NowMs - _lastArchiveMs < CooldownMs) return null;
 
-        if (WipeEnabled && wipeEdge)                              { return ArchiveReason.Wipe; }
+        if (WipeEnabled && wipeWanted)
+        {
+            // Only latch the episode as archived HERE, after the cooldown gate above has already
+            // passed — never while a fire is being suppressed. This is what makes allDead
+            // LEVEL-gated: a wipe that rises during an unrelated cooldown is not lost, because
+            // `_wipeArchived` stays false and `wipeWanted` re-evaluates true again next tick, right
+            // up until a tick actually gets past the cooldown gate and fires.
+            _wipeArchived = true;
+            return ArchiveReason.Wipe;
+        }
         if (StageEnabled && _stagePending)                        { _stagePending = false;  return ArchiveReason.StageChange; }
         if (BossEnabled && !_bossSegmentActive && (s.BossPresent || _bossPending))
         {
@@ -127,8 +157,9 @@ internal sealed class AutoArchiveEngine
     /// pending stage transition (see <see cref="_stagePending"/>): the shared-cooldown spec intent
     /// ("prevents double-archives when triggers overlap") means an overlapping transition that lost
     /// the race to another trigger must not resurface as a stale StageChange archive later. Wipe
-    /// needs no re-arm bookkeeping here at all — it is edge-triggered (see <see cref="_prevAllDead"/>
-    /// doc) and re-arms itself the instant either signal falls.</summary>
+    /// needs no bookkeeping here at all — <c>_wipeArchived</c>'s recovery clear and
+    /// <c>_prevOutcomeFailed</c>'s edge stamp both live in <see cref="Evaluate"/> and run every
+    /// tick regardless of which path (if any) actually archived.</summary>
     public void OnArchived(long nowMs, ArchiveReason reason)
     {
         _lastArchiveMs = nowMs;
@@ -137,12 +168,10 @@ internal sealed class AutoArchiveEngine
     }
 
     // Re-arm / adoption bookkeeping that must run before the fire gates on EVERY tick — including
-    // ticks the cooldown is about to suppress, so no edge / banked sighting / transition is lost.
-    private void UpdateLatches(in AutoArchiveInputs s, bool allDead)
+    // ticks the cooldown is about to suppress, so no banked sighting / transition is lost. (The
+    // wipe latch's own recovery clear + edge stamp live directly in Evaluate — see its body.)
+    private void UpdateLatches(in AutoArchiveInputs s)
     {
-        _prevAllDead = allDead;
-        _prevOutcomeFailed = s.OutcomeFailed;
-
         if (s.BossGone) _bossSegmentActive = false;    // boss died/despawned — next boss is a new segment
         // Bank a boss sighting even if the cooldown gate below is about to swallow the fire this
         // tick, so a boss that starts AND ends entirely inside one cooldown window still gets cut
