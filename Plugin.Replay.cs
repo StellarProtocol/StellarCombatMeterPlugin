@@ -123,9 +123,13 @@ public sealed partial class Plugin
     }
 
     // Called from OnCombatEvent BEFORE the player-only early-out so boss/add targets enter the set.
+    // Gated on IsInstancedRun(): replay only ever records inside dungeon/raid runs (TickReplayCapture
+    // line ~102 sets Active from the same predicate), but this method used to allocate a ~72 KB
+    // PositionTrack per distinct mob id in the OPEN WORLD too — where no reset path (scene change /
+    // archive) ever fires during long farming sessions. That was the primary GC-pressure FPS leak.
     private void NoteReplayEntity(EntityId src, EntityId tgt)
     {
-        if (_replay is null) return;
+        if (_replay is null || !IsInstancedRun()) return;
         _replay.NoteEntity(src);
         _replay.NoteEntity(tgt);
         // Snapshot monster info NOW, while the AOI caches are live — BuildReplayMeta runs at
