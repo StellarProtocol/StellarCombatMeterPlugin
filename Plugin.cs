@@ -135,6 +135,7 @@ public sealed partial class Plugin : IStellarPlugin
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
         InitLogUpload();   // SP1: cache the auto-upload bool off the per-event hot path
         InitReplay();      // Replay R1: load pref + create capture instance
+        InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
 
         // Encounter history is persisted in its own config section (string[] of per-entry JSON). Load it before
         // the windows are built so the History window has its sessions on first show.
@@ -283,6 +284,7 @@ public sealed partial class Plugin : IStellarPlugin
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
+        TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         RebuildSnapshots();
     }
 
@@ -334,6 +336,7 @@ public sealed partial class Plugin : IStellarPlugin
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
         ResetReplay();
+        _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
     }
 
     private double EncounterElapsedSeconds()

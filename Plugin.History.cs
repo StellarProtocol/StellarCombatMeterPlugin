@@ -51,6 +51,8 @@ public sealed partial class Plugin
         public string    Result = "partial"; // "kill" once settled, else "partial"
         // IDungeonState.LastDefeatedCount snapshotted at archive — 0 until the attr feeding it is wired.
         public int       Defeated;
+        // Why this segment was archived ("manual"|"scene"|"wipe"|"boss"|"idle"|"stage") — v10.
+        public string   Trigger = "manual";
     }
 
     private void OnSceneChanged(string? newScene)
@@ -68,7 +70,7 @@ public sealed partial class Plugin
 
         // Auto-archive on scene change. ManualArchive() is the single source of
         // truth for the snapshot-and-clear flow; the Archive button calls it too.
-        ManualArchive();
+        ManualArchive(AutoArchive.ArchiveReason.SceneChange);
 
         // Unconditionally reset the replay capture at the scene boundary. ManualArchive()
         // early-returns (never Clear()s -> never ResetReplay()s) when the outgoing scene had no
@@ -83,52 +85,17 @@ public sealed partial class Plugin
         _lastSceneName = newScene;
     }
 
-    // Snapshot the active _stats into history and reset the live meter. No-op
-    // when there's nothing to archive so the button-press path doesn't push
-    // empty entries. Used by:
-    //   - OnSceneChanged (automatic, on scene transition)
-    //   - DrawHeaderBar's Archive button (manual, user-driven)
-    internal void ManualArchive()
+    internal void ManualArchive() => ManualArchive(AutoArchive.ArchiveReason.Manual);
+
+    // Snapshot the active _stats into history and reset the live meter. No-op when there's
+    // nothing to archive. Callers: OnSceneChanged (scene), the Archive button/hotkey (manual),
+    // and TickAutoArchiveTriggers (wipe/boss/idle/stage). Every archive — whatever the path —
+    // reports into the AutoArchiveEngine so the shared 10 s cooldown spans them all.
+    internal void ManualArchive(AutoArchive.ArchiveReason reason)
     {
         if (_stats.Count == 0) return;
 
-        // Snapshot run-identity from the live dungeon state AT ARCHIVE so a deferred
-        // (manual) upload of this entry uses the right levelUuid / settlement — not
-        // whatever run happens to be live when the user later clicks Upload.
-        //
-        // LastSettlement is sticky for the whole dungeon run (it survives the drop-to-0 on
-        // leave-scene, and a same-uuid re-entry never clears it), so its mere non-null-ness
-        // is NOT evidence that THIS encounter ended in a kill — it may be left over from an
-        // earlier boss/segment cleared earlier in the same run. Only count it as a genuine
-        // kill when it differs from the baseline snapshotted at THIS encounter's combat
-        // start (EnsureCombatStarted) — i.e. the settlement actually changed during this
-        // encounter. A manual archive mid-fight (no new settlement) correctly stays "partial".
-        var settlement = _services.Dungeon.LastSettlement;
-        var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
-        var entry = new EncounterHistoryEntry
-        {
-            SceneName        = _lastSceneName,
-            EnteredAtMs      = _combatStartMs,
-            ArchivedAtMs     = _services.CombatSnapshot.ServerNowMs,
-            CombatDurationMs = ComputeDurationMs(),
-            Stats            = DeepCopyStats(),
-            Series           = FreezeTimelines(),
-            DeathLog         = new List<DeathEntry>(_deaths),
-            ImagineCasts     = new List<ImagineCastEntry>(_imagineCasts),
-            Entities         = SnapshotEntities(),
-            PartyType        = _services.PartySnapshot.PartyType,
-            // Combatant count — every entity that participated, not just party.
-            // Guarded by _stats.Count == 0 early-return above, so >= 1 here.
-            MemberCount      = _stats.Count,
-            LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
-            PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
-            MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
-            TotalScore       = freshSettlement?.TotalScore ?? 0,
-            DifficultyLevel  = Math.Max(_difficultyAtCombatStart, _services.Dungeon.CurrentDifficulty),
-            DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
-            Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
-            Defeated         = _services.Dungeon.LastDefeatedCount,
-        };
+        var entry = BuildHistoryEntry(reason);
         _history.Add(entry);
         foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
@@ -141,8 +108,51 @@ public sealed partial class Plugin
         var summaryFired = MaybeUploadLog(entry, replayDoc);
         if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
 
+        _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
         Clear();
     }
+
+    // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
+    // snapshot rationale (sticky LastSettlement vs fresh-kill baseline) is documented on
+    // IsFreshKill below and _settlementAtCombatStart's declaration.
+    private EncounterHistoryEntry BuildHistoryEntry(AutoArchive.ArchiveReason reason)
+    {
+        var settlement = _services.Dungeon.LastSettlement;
+        var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
+        return new EncounterHistoryEntry
+        {
+            SceneName        = _lastSceneName,
+            EnteredAtMs      = _combatStartMs,
+            ArchivedAtMs     = _services.CombatSnapshot.ServerNowMs,
+            CombatDurationMs = ComputeDurationMs(),
+            Stats            = DeepCopyStats(),
+            Series           = FreezeTimelines(),
+            DeathLog         = new List<DeathEntry>(_deaths),
+            ImagineCasts     = new List<ImagineCastEntry>(_imagineCasts),
+            Entities         = SnapshotEntities(),
+            PartyType        = _services.PartySnapshot.PartyType,
+            MemberCount      = _stats.Count,
+            LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
+            PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
+            MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
+            TotalScore       = freshSettlement?.TotalScore ?? 0,
+            DifficultyLevel  = Math.Max(_difficultyAtCombatStart, _services.Dungeon.CurrentDifficulty),
+            DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
+            Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
+            Defeated         = _services.Dungeon.LastDefeatedCount,
+            Trigger          = ArchiveReasonTag(reason),
+        };
+    }
+
+    internal static string ArchiveReasonTag(AutoArchive.ArchiveReason r) => r switch
+    {
+        AutoArchive.ArchiveReason.SceneChange => "scene",
+        AutoArchive.ArchiveReason.Wipe        => "wipe",
+        AutoArchive.ArchiveReason.BossPhase   => "boss",
+        AutoArchive.ArchiveReason.Idle        => "idle",
+        AutoArchive.ArchiveReason.StageChange => "stage",
+        _                                     => "manual",
+    };
 
     /// <summary>
     /// True when <paramref name="current"/> is evidence of a kill genuinely earned by THIS

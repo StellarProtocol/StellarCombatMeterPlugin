@@ -118,4 +118,13 @@ public sealed partial class Plugin
         _skillUsedLogCount++;
         _services.Log.Info($"[CombatMeter][skill-used] caster={su.CasterId.Value} self={isSelf} skill={su.SkillId} phase={su.Phase} -> imagine={(img is { } i ? i.SkillId : 0)} now={su.TimestampMs}");
     }
+
+    // One line per auto-archive fire — the Task 10 verification artifact.
+    private void LogAutoArchiveFired(AutoArchive.ArchiveReason reason, in AutoArchive.AutoArchiveInputs s)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][auto-archive] fired reason={ArchiveReasonTag(reason)} dead={s.DeadCount}/{s.RosterSize} unknown={s.UnknownCount} " +
+            $"idleMs={(s.LastDamageMs > 0 ? s.NowMs - s.LastDamageMs : 0)} flowVer={s.FlowStateVersion} run={s.InstancedRun}");
+    }
 }

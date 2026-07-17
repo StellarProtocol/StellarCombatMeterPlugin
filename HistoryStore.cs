@@ -25,9 +25,13 @@ internal static partial class HistoryStore
     // "diff" (raw DungeonSceneInfo.difficulty / dungeon challenge level; semantic unconfirmed, 0 when absent).
     // v7 = + "dstart" (server epoch ms the dungeon run-timer started, IDungeonState.RunTimerStartMs; 0 when absent).
     // v8 = + "def" (IDungeonState.LastDefeatedCount snapshot; 0 when absent/not yet wired).
-    // The reader accepts v1..v8 — older entries just lack the newer keys and load with defaults, so
-    // writing v8 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
-    internal const int FormatVersion = 9;
+    // v9 = + "tscore". v10 = + "trig" (archive trigger reason, "manual" when absent). NOTE: the
+    // reader REJECTS unknown keys (HistoryStore.Read.cs field switch default), so this bump is
+    // mandatory — pre-v10 plugin builds skip v10 entries as malformed (downgrade-only concern; the
+    // release ships framework+plugin together).
+    // The reader accepts v1..v10 — older entries just lack the newer keys and load with defaults, so
+    // writing v10 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
+    internal const int FormatVersion = 10;
     internal const int MinSupportedVersion = 1;
 
     // ----- serialize -----
@@ -51,6 +55,7 @@ internal static partial class HistoryStore
         w.Name("dstart").Value(e.DungeonStartMs);  // v7: dungeon run-timer start (epoch ms, 0 when absent)
         w.Name("res").Value(e.Result);
         w.Name("def").Value(e.Defeated);           // v8: IDungeonState.LastDefeatedCount snapshot
+        w.Name("trig").Value(e.Trigger);           // v10: archive trigger reason
         w.Name("stats"); WriteStats(w, e.Stats);
         w.Name("series"); WriteSeries(w, e.Series);
         w.Name("entities"); WriteEntities(w, e.Entities);
