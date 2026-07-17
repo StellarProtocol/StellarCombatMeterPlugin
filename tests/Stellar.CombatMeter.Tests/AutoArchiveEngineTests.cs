@@ -49,18 +49,22 @@ public class AutoArchiveEngineTests
     }
 
     [Fact]
-    public void Wipe_latches_until_a_revive_then_rearms()
+    public void Wipe_does_not_refire_while_still_dead_then_refires_after_revive()
     {
+        // Renamed/adapted for round 2 (was Wipe_latches_until_a_revive_then_rearms): mechanism is
+        // now edge detection, not a manual latch — allDead staying true produces no NEW edge (no
+        // refire), a revive (allDead false) consumes the edge with no fire, and a fresh death after
+        // that IS a new rising edge and fires again. Same intent, edge semantics give it for free.
         var e = Armed(Live());
         var dead = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in dead));
         e.OnArchived(dead.NowMs, ArchiveReason.Wipe);
         var later = dead with { NowMs = dead.NowMs + AutoArchiveEngine.CooldownMs + 1 };
-        Assert.Null(e.Evaluate(in later));                       // still all dead — latched
+        Assert.Null(e.Evaluate(in later));                       // still all dead — no new edge
         var revived = later with { DeadCount = 3, NowMs = later.NowMs + 1000 };
-        Assert.Null(e.Evaluate(in revived));                     // re-armed, but nobody's wiped
+        Assert.Null(e.Evaluate(in revived));                     // revived — edge consumed, nobody's wiped
         var deadAgain = revived with { DeadCount = 4, NowMs = revived.NowMs + 1000 };
-        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in deadAgain));
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in deadAgain));   // fresh death — new edge fires
     }
 
     [Fact]
@@ -77,26 +81,55 @@ public class AutoArchiveEngineTests
     [Fact]
     public void Wipe_overlap_alldead_then_outcomefailed_fires_once()
     {
-        // allDead fires first; OutcomeFailed flips true a tick later while still all dead. Coupled
-        // latches (OnArchived forces BOTH true on any Wipe archive) must block the second path too.
+        // Adapted for round 2: allDead fires first; OutcomeFailed flips true a tick later while
+        // still all dead AND still inside the shared cooldown that first fire armed. Dedupe is no
+        // longer latch coupling (removed with the edge-trigger rewrite) but the shared cooldown —
+        // the OutcomeFailed rising edge is real, but lands inside the still-active window, so it's
+        // dropped (not deferred) -> single archive. (Was NowMs = s1.NowMs + CooldownMs + 1, i.e.
+        // past cooldown, under round 1's latch mechanism; moved inside the window since edge
+        // dedupe now only works via the cooldown gate.)
         var e = Armed(Live());
         var s1 = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
         e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
-        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, OutcomeFailed = true };
-        Assert.Null(e.Evaluate(in s2));   // still all dead, outcome now failed too — no duplicate archive
+        var s2 = s1 with { NowMs = s1.NowMs + 2_000, OutcomeFailed = true };   // still within the 10s cooldown
+        Assert.Null(e.Evaluate(in s2));   // outcome-failed edge cooldown-suppressed — no duplicate archive
     }
 
     [Fact]
     public void Wipe_overlap_outcomefailed_then_alldead_fires_once()
     {
-        // Mirror order: OutcomeFailed fires first; allDead catches up a tick later, past cooldown.
+        // Mirror order, same round-2 adaptation as above: OutcomeFailed fires first; allDead
+        // catches up a tick later, still inside the shared cooldown -> cooldown-suppressed, not a
+        // latch re-fire.
         var e = Armed(Live());
         var s1 = Live() with { OutcomeFailed = true };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
         e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
-        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, DeadCount = 4 };
-        Assert.Null(e.Evaluate(in s2));   // outcome still failed, now all dead too — no duplicate archive
+        var s2 = s1 with { NowMs = s1.NowMs + 2_000, DeadCount = 4 };   // still within the 10s cooldown
+        Assert.Null(e.Evaluate(in s2));   // allDead edge cooldown-suppressed — no duplicate archive
+    }
+
+    [Fact]
+    public void Wipe_second_independent_wipe_in_same_run_fires()
+    {
+        // RED-first pin (round 2): allDead is MOMENTARY (clears the instant anyone revives) while
+        // OutcomeFailed is STICKY at run level (stays true until a brand-new run). ea58a42's coupled
+        // AND re-arm (`!allDead && !OutcomeFailed`) can never clear once OutcomeFailed sticks true,
+        // wedging every later independent wipe in the same run. This FAILS on ea58a42.
+        var e = Armed(Live());
+        var wipe1 = Live() with { DeadCount = 4, OutcomeFailed = true };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in wipe1));
+        e.OnArchived(wipe1.NowMs, ArchiveReason.Wipe);
+
+        var revived = wipe1 with
+        {
+            DeadCount = 0, NowMs = wipe1.NowMs + AutoArchiveEngine.CooldownMs + 1_000,
+        };
+        Assert.Null(e.Evaluate(in revived));           // OutcomeFailed still true (sticky), nobody's dead
+
+        var wipe2 = revived with { DeadCount = 4, NowMs = revived.NowMs + 5_000 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in wipe2));   // second, independent wipe — must fire
     }
 
     // ---- boss phase ----
@@ -171,6 +204,35 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in later));                                  // no stale BossPhase resurfaces
     }
 
+    [Fact]
+    public void Boss_stale_banked_fire_does_not_wedge_next_real_boss()
+    {
+        // RED-first pin (round 2): firing off a stale banked _bossPending where BossPresent is
+        // ALREADY false (boss came and went entirely inside one cooldown window) must not mark a
+        // boss segment "active" — there is no live segment to close later. On ea58a42 the fire
+        // branch unconditionally sets _bossSegmentActive = true, and OnArchived's re-arm only
+        // clears it on a NON-boss archive — so a BossPhase archive never clears it, wedging every
+        // later real boss engagement behind the !_bossSegmentActive gate forever. This FAILS on
+        // ea58a42.
+        var e = Armed(Live());
+        e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);                 // arm the cooldown
+        var sighted = Live() with { BossPresent = true, NowMs = Live().NowMs + 2000 };
+        Assert.Null(e.Evaluate(in sighted));                                   // banks _bossPending, cooldown blocks
+        var goneAlready = sighted with { BossPresent = false, BossGone = true, NowMs = sighted.NowMs + 3000 };
+        Assert.Null(e.Evaluate(in goneAlready));                               // boss already left, still cooling down
+        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in cooldownLifted));  // stale banked sighting fires once able
+        e.OnArchived(cooldownLifted.NowMs, ArchiveReason.BossPhase);
+
+        // A genuinely new boss engagement, well after, must fire too — not wedged by a phantom
+        // "segment active" left over from the stale fire above.
+        var newBoss = cooldownLifted with
+        {
+            BossPresent = true, BossGone = false, NowMs = cooldownLifted.NowMs + AutoArchiveEngine.CooldownMs + 1,
+        };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newBoss));
+    }
+
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
 
     [Fact]
@@ -240,9 +302,15 @@ public class AutoArchiveEngineTests
     [Fact]
     public void Idle_blocked_when_no_damage_ever_recorded()
     {
+        // Fixed (reviewer minor, round 2): pre-fix this passed for the wrong reason — with the
+        // Live() baseline CombatStartMs (100_000), the content-guard math alone already failed
+        // (0 - 100_000 = -100_000, well under MinContentMs) regardless of the explicit
+        // `LastDamageMs == 0` guard. Override CombatStartMs so the content-guard math would PASS on
+        // its own (LastDamageMs - CombatStartMs >= MinContentMs), isolating the explicit guard as
+        // the ONLY thing that can be blocking the fire.
         var e = Armed(Live());
-        var s = Live() with { LastDamageMs = 0, NowMs = 300_000 };
-        Assert.Null(e.Evaluate(in s));             // LastDamageMs == 0 blocks regardless of elapsed time
+        var s = Live() with { LastDamageMs = 0, CombatStartMs = -40_000, NowMs = 300_000 };
+        Assert.Null(e.Evaluate(in s));             // LastDamageMs == 0 blocks even though content-guard math would pass
     }
 
     [Fact]
@@ -315,12 +383,18 @@ public class AutoArchiveEngineTests
     [Fact]
     public void Cooldown_spans_all_triggers_including_manual_archives()
     {
+        // Adapted for round 2: under edge detection, an allDead edge that rises INSIDE the cooldown
+        // window is consumed at that tick (dropped, not deferred) — the roster simply STAYING dead
+        // once the window lifts produces no NEW edge, so it would no longer refire (unlike round
+        // 1's level check, which re-evaluated `allDead && !_wipeLatched` fresh once cooldown lifted).
+        // Use a genuinely fresh edge past the window — OutcomeFailed's independent rise — to keep
+        // pinning "the shared cooldown gates Wipe like every other trigger" under the new mechanism.
         var e = Armed(Live());
         e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);    // scene archive arms the cooldown
         var s = Live() with { DeadCount = 4, NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs - 1 };
-        Assert.Null(e.Evaluate(in s));                            // wipe suppressed inside the window
-        var later = s with { NowMs = s.NowMs + 2 };
-        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in later));
+        Assert.Null(e.Evaluate(in s));                            // wipe edge suppressed inside the window
+        var later = s with { OutcomeFailed = true, NowMs = s.NowMs + 2 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in later));   // cooldown lifted + a fresh edge fires
     }
 
     [Fact]

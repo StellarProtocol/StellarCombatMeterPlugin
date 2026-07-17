@@ -55,8 +55,25 @@ internal sealed class AutoArchiveEngine
     public long IdleTimeoutMs = 60_000;
 
     private long _lastArchiveMs;
-    private bool _wipeLatched;          // fired-for-this-wipe; re-arms once BOTH signals below clear
-    private bool _outcomeLatched;       // fired-for-this-Failed-edge; re-arms once BOTH signals below clear
+
+    // Wipe is edge-triggered (round 2 fix). allDead (roster-all-dead) is MOMENTARY — it clears the
+    // instant anyone revives — while OutcomeFailed (server LastOutcome==Failed) is STICKY at run
+    // level — it stays true until a brand-new run. A single boolean latch cannot reconcile a
+    // momentary signal and a sticky one: round 1's coupled AND re-arm (`!allDead &&
+    // !s.OutcomeFailed`) could never clear once OutcomeFailed stuck true for the rest of the run,
+    // wedging every later independent wipe (pinned by
+    // <see cref="AutoArchiveEngineTests.Wipe_second_independent_wipe_in_same_run_fires"/>). Rising-
+    // edge detection needs no manual re-arm: a fall-then-rise is a fresh edge on its own, and a
+    // signal that never falls simply never fires again. This gives fire-once-per-episode for
+    // allDead AND fire-once-per-run for OutcomeFailed, with no stuck state. Overlap between the two
+    // (they typically rise a tick apart for the same real-world wipe) is deduped by the shared
+    // cooldown below, not by latch coupling — a second edge landing inside the cooldown armed by
+    // the first is dropped, not deferred (pinned by
+    // <see cref="AutoArchiveEngineTests.Wipe_overlap_alldead_then_outcomefailed_fires_once"/> and
+    // its mirror).
+    private bool _prevAllDead;           // previous tick's allDead reading
+    private bool _prevOutcomeFailed;     // previous tick's OutcomeFailed reading
+
     private bool _bossSegmentActive;    // a boss segment is running; re-arms on boss-gone / non-boss archive
     private bool _bossPending;          // a boss sighting the cooldown gate swallowed, banked for when it lifts;
                                          // cleared by OnArchived on any non-boss archive (see its doc)
@@ -65,58 +82,67 @@ internal sealed class AutoArchiveEngine
                                          // cleared by OnArchived (ANY archive consumes it — see its doc)
 
     /// <summary>Evaluate one tick. Returns the trigger to fire (caller runs ManualArchive(reason),
-    /// which reports back via <see cref="OnArchived"/>), or null. Latch bookkeeping runs every tick
-    /// even when nothing can fire, so a disabled toggle / empty meter never banks a stale edge.</summary>
+    /// which reports back via <see cref="OnArchived"/>), or null. Latch bookkeeping — including the
+    /// wipe edge detectors — runs every tick even when nothing can fire (cooldown-suppressed or
+    /// otherwise), so a disabled toggle / empty meter / cooldown window never banks a stale edge or
+    /// loses a real one.</summary>
     public ArchiveReason? Evaluate(in AutoArchiveInputs s)
     {
         bool allDead = s.RosterSize > 0 && s.UnknownCount == 0 && s.DeadCount == s.RosterSize;
+        // Computed against the PREVIOUS tick's _prev* values, before UpdateLatches below
+        // overwrites them — a rising edge on either signal, this tick only.
+        bool wipeEdge = (allDead && !_prevAllDead) || (s.OutcomeFailed && !_prevOutcomeFailed);
         UpdateLatches(in s, allDead);
 
         if (!s.HasStats) return null;   // ManualArchive would no-op anyway — don't consume the cooldown
         if (_lastArchiveMs != 0 && s.NowMs - _lastArchiveMs < CooldownMs) return null;
 
-        if (WipeEnabled && allDead && !_wipeLatched)              { _wipeLatched = true;    return ArchiveReason.Wipe; }
-        if (WipeEnabled && s.OutcomeFailed && !_outcomeLatched)   { _outcomeLatched = true; return ArchiveReason.Wipe; }
+        if (WipeEnabled && wipeEdge)                              { return ArchiveReason.Wipe; }
         if (StageEnabled && _stagePending)                        { _stagePending = false;  return ArchiveReason.StageChange; }
         if (BossEnabled && !_bossSegmentActive && (s.BossPresent || _bossPending))
-        { _bossSegmentActive = true; _bossPending = false; return ArchiveReason.BossPhase; }
+        {
+            // Only mark a segment active when firing off a boss that is genuinely present RIGHT
+            // NOW. A stale banked _bossPending firing after the boss already left (!s.BossPresent)
+            // archives the pre-boss segment but starts no live segment — there's nothing to close
+            // later, so marking one active here would wedge the NEXT real boss engagement behind
+            // this !_bossSegmentActive gate forever (round 2 fix; pinned by
+            // <see cref="AutoArchiveEngineTests.Boss_stale_banked_fire_does_not_wedge_next_real_boss"/>).
+            _bossSegmentActive = s.BossPresent;
+            _bossPending = false;
+            return ArchiveReason.BossPhase;
+        }
         if (IdleEnabled && IdleExpired(in s))                     { return ArchiveReason.Idle; }
         return null;
     }
 
     /// <summary>Every archive — ANY path, including manual, hotkey, and scene change — reports here:
     /// arms the shared cooldown, and a non-boss archive ends the running boss segment (so the next
-    /// boss sighting cuts a fresh pre-boss segment). A boss-phase archive STARTS its segment. This
-    /// re-arm-on-any-OTHER-archive reading is a deliberate spec-intent interpretation — a literal
-    /// "any archive re-arms" would make the boss-phase archive that STARTS a segment immediately
-    /// re-fire on the still-present boss every cooldown — controller-approved 2026-07-17, pinned by
+    /// boss sighting cuts a fresh pre-boss segment). A boss-phase archive STARTS its segment, unless
+    /// it fired off a stale banked sighting with no boss actually present (see <see cref="Evaluate"/>
+    /// — that case leaves no segment active to end). This re-arm-on-any-OTHER-archive reading is a
+    /// deliberate spec-intent interpretation — a literal "any archive re-arms" would make the boss-
+    /// phase archive that STARTS a segment immediately re-fire on the still-present boss every
+    /// cooldown — controller-approved 2026-07-17, pinned by
     /// <see cref="AutoArchiveEngineTests.NonBoss_archive_ends_the_boss_segment"/>. Also consumes any
     /// pending stage transition (see <see cref="_stagePending"/>): the shared-cooldown spec intent
     /// ("prevents double-archives when triggers overlap") means an overlapping transition that lost
-    /// the race to another trigger must not resurface as a stale StageChange archive later. The same
-    /// reasoning couples the wipe latches: <c>_wipeLatched</c> and <c>_outcomeLatched</c> both model
-    /// ONE conceptual wipe event (all-dead and server OutcomeFailed are two detectors for the same
-    /// thing, and OutcomeFailed typically flips a tick after all-dead), so a Wipe archive fired by
-    /// EITHER path arms BOTH latches — otherwise the path that didn't fire stays unarmed and fires a
-    /// duplicate archive once its own edge arrives. Pinned by
-    /// <see cref="AutoArchiveEngineTests.Wipe_overlap_alldead_then_outcomefailed_fires_once"/> and its
-    /// mirror-order counterpart.</summary>
+    /// the race to another trigger must not resurface as a stale StageChange archive later. Wipe
+    /// needs no re-arm bookkeeping here at all — it is edge-triggered (see <see cref="_prevAllDead"/>
+    /// doc) and re-arms itself the instant either signal falls.</summary>
     public void OnArchived(long nowMs, ArchiveReason reason)
     {
         _lastArchiveMs = nowMs;
-        if (reason == ArchiveReason.Wipe) { _wipeLatched = true; _outcomeLatched = true; }
         if (reason != ArchiveReason.BossPhase) { _bossSegmentActive = false; _bossPending = false; }
         _stagePending = false;
     }
 
-    // Re-arm / adoption bookkeeping that must run before the fire gates on EVERY tick.
+    // Re-arm / adoption bookkeeping that must run before the fire gates on EVERY tick — including
+    // ticks the cooldown is about to suppress, so no edge / banked sighting / transition is lost.
     private void UpdateLatches(in AutoArchiveInputs s, bool allDead)
     {
-        // Coupled re-arm: clearing on either signal alone (independently) would let the surviving
-        // latch drop out from under the still-true signal it was guarding — reopening the exact
-        // overlap race OnArchived's coupling above exists to close. Only clear once the whole wipe
-        // episode has genuinely ended (both signals false).
-        if (!allDead && !s.OutcomeFailed) { _wipeLatched = false; _outcomeLatched = false; }
+        _prevAllDead = allDead;
+        _prevOutcomeFailed = s.OutcomeFailed;
+
         if (s.BossGone) _bossSegmentActive = false;    // boss died/despawned — next boss is a new segment
         // Bank a boss sighting even if the cooldown gate below is about to swallow the fire this
         // tick, so a boss that starts AND ends entirely inside one cooldown window still gets cut
