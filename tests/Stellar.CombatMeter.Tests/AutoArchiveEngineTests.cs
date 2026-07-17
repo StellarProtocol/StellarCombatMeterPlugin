@@ -41,6 +41,14 @@ public class AutoArchiveEngineTests
     }
 
     [Fact]
+    public void RosterSize_zero_never_fires_wipe()
+    {
+        var e = Armed(Live());
+        var s = Live() with { RosterSize = 0, DeadCount = 0 };
+        Assert.Null(e.Evaluate(in s));
+    }
+
+    [Fact]
     public void Wipe_latches_until_a_revive_then_rearms()
     {
         var e = Armed(Live());
@@ -64,6 +72,31 @@ public class AutoArchiveEngineTests
         e.OnArchived(s.NowMs, ArchiveReason.Wipe);
         var later = s with { NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
         Assert.Null(e.Evaluate(in later));                       // edge consumed, sticky Failed doesn't refire
+    }
+
+    [Fact]
+    public void Wipe_overlap_alldead_then_outcomefailed_fires_once()
+    {
+        // allDead fires first; OutcomeFailed flips true a tick later while still all dead. Coupled
+        // latches (OnArchived forces BOTH true on any Wipe archive) must block the second path too.
+        var e = Armed(Live());
+        var s1 = Live() with { DeadCount = 4 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
+        e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
+        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, OutcomeFailed = true };
+        Assert.Null(e.Evaluate(in s2));   // still all dead, outcome now failed too — no duplicate archive
+    }
+
+    [Fact]
+    public void Wipe_overlap_outcomefailed_then_alldead_fires_once()
+    {
+        // Mirror order: OutcomeFailed fires first; allDead catches up a tick later, past cooldown.
+        var e = Armed(Live());
+        var s1 = Live() with { OutcomeFailed = true };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
+        e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
+        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, DeadCount = 4 };
+        Assert.Null(e.Evaluate(in s2));   // outcome still failed, now all dead too — no duplicate archive
     }
 
     // ---- boss phase ----
@@ -102,6 +135,40 @@ public class AutoArchiveEngineTests
         e.OnArchived(s.NowMs + 1000, ArchiveReason.Manual);      // user archived mid-boss — segment over
         var later = s with { NowMs = s.NowMs + 1000 + AutoArchiveEngine.CooldownMs + 1 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in later));
+    }
+
+    [Fact]
+    public void Boss_seen_and_gone_entirely_within_cooldown_still_cuts_once_lifted()
+    {
+        // Judgment call (Fix 3, review round): a boss that starts AND ends inside one cooldown
+        // window used to be lost entirely (fire branch unreachable while cooldown blocks, and
+        // BossPresent reads false again by the time cooldown lifts). Bank the sighting like
+        // _stagePending and consume it once the cooldown clears.
+        var e = Armed(Live());
+        e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);              // arm the cooldown
+        var sighted = Live() with { BossPresent = true, NowMs = Live().NowMs + 2000 };
+        Assert.Null(e.Evaluate(in sighted));                                // cooldown swallows the live fire
+        var goneAlready = sighted with { BossPresent = false, BossGone = true, NowMs = sighted.NowMs + 3000 };
+        Assert.Null(e.Evaluate(in goneAlready));                            // boss already left, still cooling down
+        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in cooldownLifted)); // banked sighting fires once able
+    }
+
+    [Fact]
+    public void Boss_pending_cleared_by_a_superseding_nonboss_archive()
+    {
+        // A banked boss sighting must not resurface once another trigger already cut a fresh
+        // segment boundary in the meantime — same "supersede" rule as _stagePending.
+        var e = Armed(Live());
+        e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);
+        var sighted = Live() with { BossPresent = true, NowMs = Live().NowMs + 2000 };
+        Assert.Null(e.Evaluate(in sighted));                                // banks _bossPending
+        e.OnArchived(sighted.NowMs, ArchiveReason.Manual);                  // manual archive supersedes it
+        var later = sighted with
+        {
+            BossPresent = false, NowMs = sighted.NowMs + AutoArchiveEngine.CooldownMs + 1,
+        };
+        Assert.Null(e.Evaluate(in later));                                  // no stale BossPhase resurfaces
     }
 
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
@@ -152,6 +219,49 @@ public class AutoArchiveEngineTests
         Assert.Equal(ArchiveReason.Idle, e.Evaluate(in s));
     }
 
+    // ---- idle re-fire guard (Fix 2, review round): the ONLY thing stopping Idle from refiring
+    // every cooldown window is `!s.CombatActive` — the real re-arm happens out-of-engine (caller's
+    // archive -> Clear() -> CombatActive false). Pin that this single guard actually holds, and
+    // that it's genuinely re-armable rather than a one-way latch. ----
+
+    [Fact]
+    public void Idle_does_not_refire_while_combat_stays_inactive_after_archive()
+    {
+        var e = Armed(Live());
+        var s = Live() with { NowMs = 221_000 };   // 61s after last damage, 60s of content — idle fires
+        Assert.Equal(ArchiveReason.Idle, e.Evaluate(in s));
+        e.OnArchived(s.NowMs, ArchiveReason.Idle);
+        var cleared = s with { CombatActive = false, NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Null(e.Evaluate(in cleared));       // past cooldown, but CombatActive=false blocks
+        var stillInactive = cleared with { NowMs = cleared.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Null(e.Evaluate(in stillInactive)); // a second window later — still no refire
+    }
+
+    [Fact]
+    public void Idle_blocked_when_no_damage_ever_recorded()
+    {
+        var e = Armed(Live());
+        var s = Live() with { LastDamageMs = 0, NowMs = 300_000 };
+        Assert.Null(e.Evaluate(in s));             // LastDamageMs == 0 blocks regardless of elapsed time
+    }
+
+    [Fact]
+    public void Idle_refires_after_fresh_combat_following_the_clear()
+    {
+        var e = Armed(Live());
+        var s = Live() with { NowMs = 221_000 };
+        Assert.Equal(ArchiveReason.Idle, e.Evaluate(in s));
+        e.OnArchived(s.NowMs, ArchiveReason.Idle);
+        var cleared = s with { CombatActive = false, NowMs = s.NowMs + 1000 };
+        Assert.Null(e.Evaluate(in cleared));
+        // Fresh combat starts: CombatActive true again with a new span, well past cooldown + idle timeout.
+        var fresh = cleared with
+        {
+            CombatActive = true, CombatStartMs = 225_000, LastDamageMs = 256_000, NowMs = 316_001,
+        };
+        Assert.Equal(ArchiveReason.Idle, e.Evaluate(in fresh)); // fresh combat re-enables a later idle fire
+    }
+
     // ---- stage change ----
 
     [Fact]
@@ -178,6 +288,26 @@ public class AutoArchiveEngineTests
         var e = Armed(Live());
         var s = Live() with { FlowStateVersion = 2, InstancedRun = false };
         Assert.Null(e.Evaluate(in s));
+    }
+
+    [Fact]
+    public void Stage_pending_discarded_by_flowversion_decrease_mid_cooldown()
+    {
+        // Pin current behavior (accepted as correct new-run-reset semantics): a _stagePending
+        // banked mid-cooldown is unconditionally overwritten — not merely superseded — by the next
+        // version change. If that next change is a DECREASE (a new run resetting the service's
+        // counter), the banked transition is silently discarded rather than surviving to fire once
+        // the cooldown lifts. This is intentional: a version decrease means "new run", and a stale
+        // pre-reset transition archive would be meaningless in the new run's context.
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));                                      // adopt version 1
+        e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);                // arm the cooldown
+        var banked = Live() with { FlowStateVersion = 2, NowMs = Live().NowMs + 2000 };
+        Assert.Null(e.Evaluate(in banked));                                   // banks _stagePending, cooldown blocks
+        var reset = banked with { FlowStateVersion = 1, NowMs = banked.NowMs + 1000 };
+        Assert.Null(e.Evaluate(in reset));                                    // decrease discards the banked pending
+        var cooldownLifted = reset with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Null(e.Evaluate(in cooldownLifted));                           // no stale StageChange resurfaces
     }
 
     // ---- shared gates ----
