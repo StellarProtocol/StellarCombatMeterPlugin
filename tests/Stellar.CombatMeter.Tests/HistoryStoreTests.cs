@@ -302,11 +302,23 @@ public sealed class HistoryStoreTests
     [InlineData("[]")]                                 // array, not the expected object
     [InlineData("{\"v\":1,\"bogus\":5}")]             // unknown key
     [InlineData("{\"scene\":\"x\"}")]                 // missing version marker
-    [InlineData("{\"v\":9,\"scene\":\"x\"}")]         // unsupported FUTURE version (>FormatVersion)
     public void Malformed_or_legacy_input_is_skipped_without_throwing(string garbage)
     {
         // Must never throw, and must report failure (entry skipped) for unsupported shapes.
         Assert.False(HistoryStore.TryDeserializeEntry(garbage, out var got));
+        Assert.Null(got);
+    }
+
+    // An unsupported FUTURE version (>FormatVersion) must still be skipped, not throw. Computed from the live
+    // FormatVersion constant (not a hardcoded literal) so this case can never go stale the way a fixed "v9" did
+    // once FormatVersion itself reached 9 (the version-bump trap, spec §3.3 — same trap this test exists to guard
+    // against elsewhere in this file).
+    [Fact]
+    public void Future_version_beyond_current_format_is_skipped_without_throwing()
+    {
+        var future = "{\"v\":" + (HistoryStore.FormatVersion + 1) + ",\"scene\":\"x\"}";
+
+        Assert.False(HistoryStore.TryDeserializeEntry(future, out var got));
         Assert.Null(got);
     }
 
