@@ -14,6 +14,10 @@ internal delegate bool TryGetTransform(EntityId id, out Position3D position, out
 /// </summary>
 internal sealed class ReplayCapture
 {
+    /// <summary>Hard cap on distinct tracked entities per encounter. Real instanced runs
+    /// see far fewer; the cap is a backstop against unexpected entity-id churn.</summary>
+    internal const int MaxTracks = 512;
+
     private readonly TryGetTransform _tryGet;
     private readonly int _maxSamplesPerTrack, _maxTotalSamples, _sampleIntervalMs;
     private readonly Dictionary<EntityId, PositionTrack> _tracks = new();
@@ -40,10 +44,17 @@ internal sealed class ReplayCapture
     public IReadOnlyDictionary<EntityId, PositionTrack> Tracks => _tracks;
     public int CombatStartMs => _combatStartMs;
 
+    /// <summary>True once <see cref="NoteEntity"/> refused an id because <see cref="MaxTracks"/>
+    /// was reached. Cleared by <see cref="Reset"/>.</summary>
+    public bool TrackCapHit { get; private set; }
+
     public void NoteEntity(EntityId id)
     {
         if (id.Value == 0) return;
-        if (!_tracks.ContainsKey(id)) { _tracks[id] = new PositionTrack(_maxSamplesPerTrack); _order.Add(id); }
+        if (_tracks.ContainsKey(id)) return;
+        if (_tracks.Count >= MaxTracks) { TrackCapHit = true; return; }
+        _tracks[id] = new PositionTrack(_maxSamplesPerTrack);
+        _order.Add(id);
     }
 
     public void Tick(int nowMs, float dtMs)
@@ -81,5 +92,6 @@ internal sealed class ReplayCapture
         TotalSamples = 0;
         _startStamped = false;
         _combatStartMs = 0;
+        TrackCapHit = false;
     }
 }

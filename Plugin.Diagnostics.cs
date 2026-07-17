@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Diagnostics;
 using Stellar.Abstractions.Domain;
+using Stellar.CombatMeter.Replay;
 
 namespace Stellar.CombatMeter;
 
@@ -35,6 +36,26 @@ public sealed partial class Plugin
         _services.Log.Info(
             $"[CombatMeter.Replay][scene] reset '{outgoing}' -> '{incoming}' " +
             $"runId={_services.Dungeon.CurrentRunId} samplesAtReset={samplesAtReset} outgoingArchived={archived}");
+    }
+
+    // One-shot per encounter: fires the first time TickReplayCapture observes ReplayCapture.TrackCapHit
+    // (the 512-track hard cap was reached), so an unexpected id-churn scenario is visible in the log
+    // without flooding it every subsequent frame. Latch (_trackCapLogged) lives in Plugin.Replay.cs,
+    // reset by ResetReplay().
+    private void LogReplayTrackCapHit()
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter.Replay][diag] track cap hit — refusing new tracks beyond {ReplayCapture.MaxTracks}");
+    }
+
+    // Periodic (~60s, throttled in OnUpdate) field artifact for the FPS cache-leak fix: makes the live
+    // ReplayCapture track count directly observable without an in-game debugger. In open world this must
+    // read tracks=0 — TickReplayCapture only ever calls NoteEntity while IsInstancedRun() is true.
+    private void LogReplayTrackCount()
+    {
+        if (!StellarDiagnostics.IsEnabled || _replay is null) return;
+        _services.Log.Info($"[CombatMeter.Replay][diag] tracks={_replay.Tracks.Count} capHit={_replay.TrackCapHit}");
     }
     // TEMP cast-time-redesign capture: wire cd row vs what we render for a SELF imagine, on change + every
     // ~0.5s. Pins the multi-charge recharge model (does `begin` reset per cast? parallel vs sequential?) and

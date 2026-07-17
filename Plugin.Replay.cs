@@ -41,6 +41,15 @@ public sealed partial class Plugin
     // run's capture dropped before it leaks into the new run's replay (Bug 2 source fix).
     private long _replayRunId;
 
+    // One-shot latch for LogReplayTrackCapHit — set the first time this encounter's ReplayCapture
+    // reports TrackCapHit, so the diagnostics line fires once instead of every frame. Reset alongside
+    // the rest of the capture state in ResetReplay().
+    private bool _trackCapLogged;
+
+    // ~60 s throttle for the periodic LogReplayTrackCount field artifact (Task 4 gate).
+    private const float TrackDiagIntervalS = 60f;
+    private float _trackDiagAccumS;
+
     // Boss HP timeline — sampled in parallel with the position capture cadence.
     private EntityId   _bossEntityId;          // set when boss is identified at assembly time; zero = none
     private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
@@ -109,7 +118,19 @@ public sealed partial class Plugin
         var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
         _replay.Tick(nowMs, dtMs);
+        if (_replay.TrackCapHit && !_trackCapLogged) { _trackCapLogged = true; LogReplayTrackCapHit(); }
         TickHpTimelines(nowMs, dtMs);
+    }
+
+    // Called every frame from OnUpdate (throttled internally to ~60s). Emits the field-observable
+    // track-count line regardless of _replay.Active — in the open world this must read tracks=0,
+    // which is itself the proof that NoteEntity is correctly gated to instanced runs only.
+    private void TickReplayDiagnostics(float deltaTimeSec)
+    {
+        _trackDiagAccumS += deltaTimeSec;
+        if (_trackDiagAccumS < TrackDiagIntervalS) return;
+        _trackDiagAccumS = 0f;
+        LogReplayTrackCount();
     }
 
     // Seeds the replay's tracked-entity set with the local player + current party roster, so
@@ -123,9 +144,13 @@ public sealed partial class Plugin
     }
 
     // Called from OnCombatEvent BEFORE the player-only early-out so boss/add targets enter the set.
+    // Gated on IsInstancedRun(): replay only ever records inside dungeon/raid runs (TickReplayCapture
+    // line ~102 sets Active from the same predicate), but this method used to allocate a ~72 KB
+    // PositionTrack per distinct mob id in the OPEN WORLD too — where no reset path (scene change /
+    // archive) ever fires during long farming sessions. That was the primary GC-pressure FPS leak.
     private void NoteReplayEntity(EntityId src, EntityId tgt)
     {
-        if (_replay is null) return;
+        if (_replay is null || !IsInstancedRun()) return;
         _replay.NoteEntity(src);
         _replay.NoteEntity(tgt);
         // Snapshot monster info NOW, while the AOI caches are live — BuildReplayMeta runs at
@@ -153,6 +178,7 @@ public sealed partial class Plugin
         _replayMonsterInfo.Clear();
         _hpSampler?.Reset();
         _replaySpecs.Clear();
+        _trackCapLogged = false;
     }
 
     // -----------------------------------------------------------------------
