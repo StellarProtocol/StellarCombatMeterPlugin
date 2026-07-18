@@ -29,6 +29,11 @@ public sealed partial class Plugin
     private const int    ReplayMaxSamplesPerTrack = 3600;
     private const int    ReplayMaxTotalSamples    = 200_000;
 
+    // Skip ALL live-transform probing for this long after a scene change (line-switch / dungeon-
+    // enter): the game mass-frees and re-streams nearby entities and the framework's AOI-disappear
+    // bookkeeping can lag the native teardown by a few frames. See IsWithinReplaySettle.
+    internal const long  ReplaySettleMs           = 2_000;
+
     // -----------------------------------------------------------------------
     // State
     // -----------------------------------------------------------------------
@@ -40,6 +45,10 @@ public sealed partial class Plugin
     // DIFFERENT run (including via 0, e.g. a crash → re-enter) can be detected and the prior
     // run's capture dropped before it leaks into the new run's replay (Bug 2 source fix).
     private long _replayRunId;
+
+    // Server clock at the last scene change (ClientState.SceneChanged -> OnSceneChanged). Feeds the
+    // post-transition settle gate in TickReplayCapture. 0 = no scene change seen yet (boot).
+    private long _lastSceneChangeMs;
 
     // One-shot latch for LogReplayTrackCapHit — set the first time this encounter's ReplayCapture
     // reports TrackCapHit, so the diagnostics line fires once instead of every frame. Reset alongside
@@ -78,12 +87,55 @@ public sealed partial class Plugin
     {
         _uploadReplay = _prefs.Get(PrefUploadReplay, ReplayDefaults.UploadReplayDefault);
         _replay = new ReplayCapture(
-            tryGet: (EntityId id, out Position3D p, out float yaw) =>
-                _services.EntityTransforms.TryGetTransform(id, out p, out yaw),
+            tryGet: SafeTryGetTransform,
             maxSamplesPerTrack:  ReplayMaxSamplesPerTrack,
             maxTotalSamples:     ReplayMaxTotalSamples,
             sampleIntervalMs:    ReplaySampleIntervalMs);
         _hpSampler = new HpTimelineSampler(ReadHpPair);
+    }
+
+    // The replay position probe reads a LIVE IL2CPP entity model (ZModel.GetAttrGoPosition via
+    // reflection). If that model is freed — an entity torn down during a scene/line teardown, or a
+    // party member who walked out of AOI on a wide map — the reflected call is an UNCATCHABLE native
+    // access violation (a managed try/catch does NOT stop a c0000005). That is the crash-on-line-
+    // switch / crash-on-dungeon-enter fault. Two pure gates make the probe safe.
+
+    /// <summary>Liveness gate: probe SELF (the local player, never freed while in-world), a PARTY
+    /// member (present with you from dungeon-enter — must be probed so the pre-combat walk-in is
+    /// captured, and NOT gated on combat vitals which only arrive on the first hit), or any other
+    /// entity the framework currently confirms AOI-present (<paramref name="aoiKnown"/>). A
+    /// not-yet-engaged / despawned non-party mob is skipped. An out-of-AOI party member stays safe
+    /// even though probed: the game's <c>GetEntity</c> returns null for culled ids, so the probe
+    /// yields a clean GAP, never a deref of a freed model. Pure, so it is unit-tested.</summary>
+    internal static bool ShouldProbeTransform(EntityId id, EntityId self, bool isPartyMember, bool aoiKnown)
+        => id.Value == self.Value || isPartyMember || aoiKnown;
+
+    /// <summary>Settle gate: skip the whole sample pass for <see cref="ReplaySettleMs"/> after a
+    /// scene change, covering the mass teardown/rebuild window where AOI bookkeeping lags the native
+    /// free. 0 lastSceneChangeMs = boot (not settling); a backwards clock does not wedge it.</summary>
+    internal static bool IsWithinReplaySettle(long nowMs, long lastSceneChangeMs)
+        => lastSceneChangeMs != 0 && nowMs >= lastSceneChangeMs && nowMs - lastSceneChangeMs < ReplaySettleMs;
+
+    // Delegate handed to ReplayCapture — gates the live-transform probe on entity liveness so it can
+    // never dereference a freed IL2CPP model. GetVitals is a managed cache read (no IL2CPP), so the
+    // gate itself is always safe to evaluate even mid-teardown.
+    private bool SafeTryGetTransform(EntityId id, out Position3D position, out float yaw)
+    {
+        position = Position3D.Zero;
+        yaw = 0f;
+        if (!ShouldProbeTransform(id, _services.CombatSnapshot.LocalEntityId,
+                IsRosterMember(id), _services.CombatLookup.GetVitals(id).IsKnown))
+            return false;
+        return _services.EntityTransforms.TryGetTransform(id, out position, out yaw);
+    }
+
+    // Is this id the local player's current party roster? Cheap linear scan (roster is <= 20). Used
+    // by the probe liveness gate so party members are captured during the pre-combat walk-in.
+    private bool IsRosterMember(EntityId id)
+    {
+        foreach (var m in _services.PartyRoster.Members)
+            if (m.EntityId.Value == id.Value) return true;
+        return false;
     }
 
     // Called every frame from OnUpdate. Gate: toggle on + dungeon/raid run in progress. Deliberately
@@ -117,6 +169,10 @@ public sealed partial class Plugin
         NoteRosterEntities();
         var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
+        // Post-scene-change settle gate — skip probing while the mass entity teardown/rebuild after a
+        // line-switch / dungeon-enter is still in flight (see SafeTryGetTransform's crash rationale).
+        // NoteRosterEntities above already registered the tracks, so sampling resumes cleanly after.
+        if (IsWithinReplaySettle(_services.CombatSnapshot.ServerNowMs, _lastSceneChangeMs)) return;
         _replay.Tick(nowMs, dtMs);
         if (_replay.TrackCapHit && !_trackCapLogged) { _trackCapLogged = true; LogReplayTrackCapHit(); }
         TickHpTimelines(nowMs, dtMs);
