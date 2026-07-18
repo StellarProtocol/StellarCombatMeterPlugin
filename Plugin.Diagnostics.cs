@@ -30,12 +30,12 @@ public sealed partial class Plugin
     // scene, the current run id, samples held at reset, and whether the outgoing scene archived —
     // so an in-game diagnostics pass can confirm the reset fires on a no-combat scene change (the
     // path that previously leaked pre-dungeon samples into the next run's replay upload).
-    private void LogReplaySceneReset(string? outgoing, string? incoming, int samplesAtReset, bool archived)
+    private void LogReplaySceneReset(string? outgoing, string? incoming, int samplesAtReset, bool archived, bool kept)
     {
         if (!StellarDiagnostics.IsEnabled) return;
         _services.Log.Info(
             $"[CombatMeter.Replay][scene] reset '{outgoing}' -> '{incoming}' " +
-            $"runId={_services.Dungeon.CurrentRunId} samplesAtReset={samplesAtReset} outgoingArchived={archived}");
+            $"runId={_services.Dungeon.CurrentRunId} samplesAtReset={samplesAtReset} outgoingArchived={archived} kept={kept}");
     }
 
     // One-shot per encounter: fires the first time TickReplayCapture observes ReplayCapture.TrackCapHit

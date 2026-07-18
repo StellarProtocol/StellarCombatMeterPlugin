@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
+using Stellar.CombatMeter.Replay;
 
 namespace Stellar.CombatMeter;
 
@@ -75,15 +76,19 @@ public sealed partial class Plugin
         // truth for the snapshot-and-clear flow; the Archive button calls it too.
         ManualArchive(AutoArchive.ArchiveReason.SceneChange);
 
-        // Unconditionally reset the replay capture at the scene boundary. ManualArchive()
-        // early-returns (never Clear()s -> never ResetReplay()s) when the outgoing scene had no
-        // combat (_stats.Count == 0) — so a no-combat instanced scene's position samples would
-        // otherwise linger and concatenate onto the NEXT run's replay upload (the 93:53
-        // cross-scene-carryover bug). When the outgoing scene DID have combat, ManualArchive
-        // already uploaded + reset the replay, so this call is a harmless no-op. Everything
-        // WITHIN a single scene (walk-in, long in-dungeon idle) is untouched.
-        ResetReplay();
-        LogReplaySceneReset(_lastSceneName, newScene, samplesAtReset, archived);
+        // Scene-boundary replay reset — now CONDITIONAL (spec 2026-07-19): the provisional
+        // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps
+        // the buffer so the lobby movement survives into the run's replay. Every other
+        // boundary resets, preserving the 93:53 cross-scene-carryover protection: entering a
+        // candidate from town starts fresh, leaving to town discards, and committed runs keep
+        // per-segment archives. When the outgoing scene HAD combat, ManualArchive above
+        // already uploaded + reset — this is then a harmless no-op either way.
+        var incomingCandidate = ResolveSceneCandidate(newScene);
+        var reset = ReplayCaptureGate.ShouldResetOnSceneChange(
+            _services.Dungeon.CurrentRunId, _sceneIsCandidate, incomingCandidate);
+        if (reset) ResetReplay();
+        LogReplaySceneReset(_lastSceneName, newScene, samplesAtReset, archived, kept: !reset);
+        _sceneIsCandidate = incomingCandidate;
 
         _lastSceneName = newScene;
     }

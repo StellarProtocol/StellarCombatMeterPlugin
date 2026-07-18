@@ -158,6 +158,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
         _lastSceneName = _services.ClientState.CurrentSceneName;
+        _sceneIsCandidate = ResolveSceneCandidate(_lastSceneName);
 
         OnSkillBreakdownRequested += HandleSkillBreakdownRequested;
         OnInspectRequested += HandleInspectRequested;

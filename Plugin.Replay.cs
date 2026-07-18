@@ -50,6 +50,22 @@ public sealed partial class Plugin
     // post-transition settle gate in TickReplayCapture. 0 = no scene change seen yet (boot).
     private long _lastSceneChangeMs;
 
+    // Is the CURRENT scene instanced-candidate content (dungeon approach / raid lobby)?
+    // Drives provisional capture (ReplayCaptureGate.ShouldCapture) before the run-id
+    // latches. Resolved on scene change from the game scene table's SceneKind; false when
+    // the scene name doesn't parse or the table row is missing (safe default: Off).
+    private bool _sceneIsCandidate;
+
+    // Resolves whether a scene (IClientState.CurrentSceneName — the scene-table id as a
+    // string, same parse CombatLogAssembler uses for MapId) is instanced-candidate content.
+    private bool ResolveSceneCandidate(string? sceneName)
+    {
+        if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneId))
+            return false;
+        var info = _services.GameData.World.GetScene(sceneId);
+        return info.HasValue && ReplayCaptureGate.IsCandidateScene(info.Value.SceneKind);
+    }
+
     // One-shot latch for LogReplayTrackCapHit — set the first time this encounter's ReplayCapture
     // reports TrackCapHit, so the diagnostics line fires once instead of every frame. Reset alongside
     // the rest of the capture state in ResetReplay().
@@ -152,15 +168,14 @@ public sealed partial class Plugin
         var runId = _services.Dungeon.CurrentRunId;
         if (runId != _replayRunId)
         {
-            // Entering a NEW instanced run (incl. crash → re-enter): drop the prior run's
-            // capture so its movement can't leak into this run's replay (Bug 2 source fix).
-            // Only clear on a non-zero id so we never wipe a just-finished run's tracks
-            // before PrepareReplayDoc (fires at archive time, in-dungeon) has assembled them.
-            if (runId != 0) ResetReplay();
+            // 0 -> snowflake ADOPTS the provisional walk-in/lobby buffer (no reset);
+            // snowflake -> different-snowflake still wipes (Bug-2 crash-re-enter fix);
+            // snowflake -> 0 keeps the buffer for the dungeon->town archive window.
+            if (ReplayCaptureGate.ShouldResetOnRunIdChange(_replayRunId, runId)) ResetReplay();
             _replayRunId = runId;
         }
 
-        _replay.Active = IsInstancedRun();
+        _replay.Active = ReplayCaptureGate.ShouldCapture(runId, _sceneIsCandidate);
         if (!_replay.Active) return;
         // Register local + party entities up front so their pre-combat movement (before any of them
         // has dealt/taken damage) is sampled too — NoteReplayEntity below only fires from combat
@@ -248,6 +263,9 @@ public sealed partial class Plugin
     private void TickHpTimelines(int nowMs, float dtMs)
     {
         if (_hpSampler is null || _replay is null) return;
+        // HP timelines stay committed-only: pre-combat vitals are unknown/absent (no boss
+        // exists yet), and the provisional walk-in needs positions only.
+        if (!IsInstancedRun()) return;
 
         // Lazy boss identification — unchanged semantics from the boss-HP feature.
         if (_bossEntityId.Value == 0 && _replay.Tracks.Count > 0)
