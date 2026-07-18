@@ -119,12 +119,26 @@ public sealed partial class Plugin
         _services.Log.Info($"[CombatMeter][skill-used] caster={su.CasterId.Value} self={isSelf} skill={su.SkillId} phase={su.Phase} -> imagine={(img is { } i ? i.SkillId : 0)} now={su.TimestampMs}");
     }
 
-    // One line per auto-archive fire — the Task 10 verification artifact.
+    // One line per auto-archive fire — the Task 10 verification artifact. With the idle-settle delay
+    // this marks the moment the engine DECIDED (the pending was armed); the commit lands once combat
+    // goes quiet — see LogAutoArchiveCommit. The gap between the two lines is the trailing-damage
+    // settle window (the pending waits out ArchiveIdleSettleMs of no combat events).
     private void LogAutoArchiveFired(AutoArchive.ArchiveReason reason, in AutoArchive.AutoArchiveInputs s)
     {
         if (!StellarDiagnostics.IsEnabled) return;
         _services.Log.Info(
             $"[CombatMeter][auto-archive] fired reason={ArchiveReasonTag(reason)} dead={s.DeadCount}/{s.RosterSize} unknown={s.UnknownCount} " +
             $"idleMs={(s.LastDamageMs > 0 ? s.NowMs - s.LastDamageMs : 0)} flowVer={s.FlowStateVersion} run={s.InstancedRun}");
+    }
+
+    // One line per deferred AUTO archive that actually commits after the idle-settle wait — pair it
+    // with the preceding [auto-archive] fired line to confirm the quiet-window gap in-game. quietMs is
+    // how long combat had been silent (all channels) at commit; armedMs is the wait since the trigger.
+    private void LogAutoArchiveCommit(AutoArchive.ArchiveReason reason, long nowMs)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][auto-archive] commit reason={ArchiveReasonTag(reason)} now={nowMs} " +
+            $"quietMs={nowMs - _lastCombatEventMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={ArchiveIdleSettleMs}");
     }
 }

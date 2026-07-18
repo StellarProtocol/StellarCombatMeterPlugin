@@ -12,6 +12,31 @@ public sealed partial class Plugin
 {
     private readonly AutoArchiveEngine _autoArchive = new();
 
+    // Idle-settle delay (2026-07-18): an AUTO trigger fires the INSTANT the engine decides a segment
+    // ended (a floor clear bumps EDungeonState, a wipe reads all-dead, etc.), but the mobs' corpses
+    // are still present and trailing damage (DoTs, the killing-blow tick) is still landing — so
+    // committing the snapshot immediately loses those last hits from the archived record. Rather than
+    // wait a fixed interval, hold an AUTO archive until combat has gone QUIET: no combat event of any
+    // channel for this long (every dealt/heal/taken event resets the window via _lastCombatEventMs).
+    // If it's already been this quiet when the trigger fires, the archive commits immediately. There
+    // is a comfortable window: after a floor clear the game shows "Enter the next floor in 5s". A
+    // MANUAL (button/hotkey) archive and the SceneChange archive (which must beat the entity teardown)
+    // stay IMMEDIATE.
+    internal const long ArchiveIdleSettleMs = 2_000;
+
+    // Backstop: sustained combat that never goes quiet (and no scene change to supersede the pending)
+    // would defer the archive forever. Commit anyway once this long has elapsed since the trigger
+    // armed. A scene change already supersedes the pending, so this is only a rare-case safety net.
+    internal const long ArchiveIdleCapMs = 15_000;
+
+    // The single pending deferred-archive slot. Set when the engine returns a deferrable reason;
+    // committed once combat has been quiet for ArchiveIdleSettleMs (or the cap elapses); cleared by
+    // ManualArchive on ANY commit (so a manual/scene archive during the wait supersedes it — never a
+    // stale double-fire). While set, TickAutoArchiveTriggers holds off evaluating new triggers so the
+    // engine can't re-fire. _pendingArchiveArmedMs is the server clock when the trigger armed (cap base).
+    private AutoArchive.ArchiveReason? _pendingArchiveReason;
+    private long                       _pendingArchiveArmedMs;
+
     // Boss observation cache: entity id -> IsBoss, resolved at most once per distinct entity
     // (mirrors _replayMonsterInfo's contains-guard, Plugin.Replay.cs:163-169). BOUNDED: hard cap
     // + cleared by Clear() — the FPS-leak lesson (never an unbounded per-mob dict in the field).
@@ -71,17 +96,58 @@ public sealed partial class Plugin
         _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 60) * 1000L;
     }
 
-    // ~10 Hz from OnUpdate's throttled region (Plugin.cs).
+    // ~10 Hz from OnUpdate's throttled region (Plugin.cs). An AUTO trigger is deferred until combat
+    // goes quiet for ArchiveIdleSettleMs so trailing damage lands before the snapshot (see the field
+    // docs); during the wait we stop evaluating new triggers so the engine can't re-fire/duplicate.
     private void TickAutoArchiveTriggers()
     {
         if (_paused) return;
-        var inputs = BuildAutoArchiveInputs();
-        if (_autoArchive.Evaluate(in inputs) is { } reason)
+
+        // Arm a fresh pending only when none is outstanding — while one waits, the engine is skipped.
+        if (_pendingArchiveReason is null)
         {
+            var inputs = BuildAutoArchiveInputs();
+            if (_autoArchive.Evaluate(in inputs) is not { } reason) return;
             LogAutoArchiveFired(reason, inputs);
-            ManualArchive(reason);
+            if (!IsDeferrableArchive(reason)) { ManualArchive(reason); return; }
+            _pendingArchiveReason  = reason;
+            _pendingArchiveArmedMs = inputs.NowMs;
+            // fall through to the due-check below so an already-quiet arm commits this same tick
         }
+
+        if (_pendingArchiveReason is not { } pending) return;
+        var now = _services.CombatSnapshot.ServerNowMs;
+        if (!PendingArchiveDue(now, _lastCombatEventMs, ArchiveIdleSettleMs) &&
+            !PendingArchiveCapped(now, _pendingArchiveArmedMs, ArchiveIdleCapMs)) return;
+        LogAutoArchiveCommit(pending, now);
+        ManualArchive(pending);   // ManualArchive clears _pendingArchiveReason on commit
     }
+
+    /// <summary>True once combat has been quiet for <paramref name="idleSettleMs"/> — no combat event
+    /// (any dealt/heal/taken channel, tracked by <c>_lastCombatEventMs</c>) in that window, so trailing
+    /// DoTs / the killing-blow tick have landed. Pure so it unit-tests headless (the AutoArchiveEngine
+    /// precedent).</summary>
+    internal static bool PendingArchiveDue(long nowMs, long lastCombatEventMs, long idleSettleMs)
+        => nowMs - lastCombatEventMs >= idleSettleMs;
+
+    /// <summary>Backstop for the idle wait: true once <paramref name="capMs"/> has elapsed since the
+    /// trigger armed, so sustained combat with no scene change can't defer the archive forever.</summary>
+    internal static bool PendingArchiveCapped(long nowMs, long armedMs, long capMs)
+        => nowMs - armedMs >= capMs;
+
+    /// <summary>True for the engine-driven AUTO reasons that should wait out the settle delay
+    /// (a floor-clear <see cref="AutoArchive.ArchiveReason.StageChange"/>, wipe, boss, idle). A
+    /// <see cref="AutoArchive.ArchiveReason.Manual"/> button/hotkey archive stays immediate, and
+    /// <see cref="AutoArchive.ArchiveReason.SceneChange"/> must beat the entity teardown at the
+    /// boundary — neither defers. Pure so it unit-tests headless.</summary>
+    internal static bool IsDeferrableArchive(AutoArchive.ArchiveReason reason) => reason switch
+    {
+        AutoArchive.ArchiveReason.Wipe        => true,
+        AutoArchive.ArchiveReason.BossPhase   => true,
+        AutoArchive.ArchiveReason.Idle        => true,
+        AutoArchive.ArchiveReason.StageChange => true,
+        _                                     => false,   // Manual + SceneChange stay immediate
+    };
 
     private AutoArchiveInputs BuildAutoArchiveInputs()
     {

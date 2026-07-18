@@ -57,6 +57,9 @@ public sealed partial class Plugin
 
     private void OnSceneChanged(string? newScene)
     {
+        // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
+        // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
+        _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;
@@ -93,7 +96,27 @@ public sealed partial class Plugin
     // reports into the AutoArchiveEngine so the shared 10 s cooldown spans them all.
     internal void ManualArchive(AutoArchive.ArchiveReason reason)
     {
+        // Any archive that actually enters this method — the manual button/hotkey, a scene change,
+        // OR the deferred AUTO fire itself — supersedes a still-pending settle-delayed auto archive
+        // (Plugin.AutoArchive.cs). Clearing here means a manual/scene archive during the ~1 s wait
+        // wins outright and a stale deferred StageChange can never double-fire on already-cleared
+        // stats afterward. The deferred fire calls ManualArchive too, so it self-clears the slot.
+        _pendingArchiveReason = null;
+
         if (_stats.Count == 0) return;
+
+        // Suppress the "0s · 1p" junk. Every AUTO trigger (scene-enter, dungeon flow-state bump,
+        // false-start wipe, boss, idle) fires while a stray taken-hit / single instant hit sits in
+        // _stats — content the old _stats.Count>0 gate wrongly treated as an encounter. Skip the
+        // history push + upload when there's no real combat span, but keep every side effect
+        // (shared-cooldown/latch bookkeeping via OnArchived, meter reset via Clear) identical to a
+        // real archive, so nothing else changes. A MANUAL (button/hotkey) archive is never suppressed.
+        if (ShouldSuppressAutoArchive(reason, ComputeDurationMs()))
+        {
+            _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
+            Clear();
+            return;
+        }
 
         var entry = BuildHistoryEntry(reason);
         _history.Add(entry);
@@ -153,6 +176,23 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.StageChange => "stage",
         _                                     => "manual",
     };
+
+    // Minimum real combat SPAN (dealt-damage FirstHit→LastHit, via ComputeDurationMs) for an AUTO
+    // archive to be worth a history entry + upload. The old eligibility gate (_stats.Count > 0)
+    // counted a taken-only phantom row — a player who took a hit but dealt nothing — as an encounter,
+    // so a stray hit caught by a hub scene-enter, a dungeon flow-state bump, or a false-start wipe
+    // banked a "0s · 1p" junk entry (and uploaded it). ComputeDurationMs is ~0 for such content
+    // (taken-only rows never set FirstHit/LastHit; a single instant hit gives First==Last) but tens
+    // of seconds for a real run, so this span gate cleanly separates junk (all 0s) from real runs
+    // (5s+). Applies to EVERY auto trigger (scene/stage/wipe/boss/idle); a MANUAL button/hotkey
+    // archive is always honored.
+    internal const long MinAutoArchiveMs = 3_000;
+
+    /// <summary>True when an AUTO-triggered archive should be skipped for lack of a real combat span.
+    /// Every reason except <see cref="AutoArchive.ArchiveReason.Manual"/> is subject to the span gate;
+    /// a manual (button/hotkey) archive is always kept.</summary>
+    internal static bool ShouldSuppressAutoArchive(AutoArchive.ArchiveReason reason, long durationMs)
+        => reason != AutoArchive.ArchiveReason.Manual && durationMs < MinAutoArchiveMs;
 
     /// <summary>
     /// True when <paramref name="current"/> is evidence of a kill genuinely earned by THIS

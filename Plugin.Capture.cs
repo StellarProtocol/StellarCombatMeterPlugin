@@ -19,6 +19,12 @@ public sealed partial class Plugin
         if (evt is CombatEvent.EntitySummonAppeared sa) { ObserveSummonAppeared(sa); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
+        // All-channel combat-activity clock (dealt / heal / taken are all DamageDealt) — feeds the
+        // auto-archive idle-settle delay so a deferred AUTO archive waits out trailing DoTs / the
+        // killing-blow tick before snapshotting. Distinct from _lastDamageMs (dealt-only, set in
+        // AccumulateDamage) which the Idle trigger depends on — do not conflate the two.
+        _lastCombatEventMs = d.TimestampMs;
+
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
         // the latch lived in AccumulateDamage, so an encounter that opened with a heal or an incoming hit
         // dropped those events from the timeline (the `if (_combatActive)` guards were unsatisfied) and
