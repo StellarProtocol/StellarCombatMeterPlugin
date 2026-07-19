@@ -422,6 +422,38 @@ public sealed partial class Plugin
         }
     }
 
+    // Replay-upload span floor: the HISTORY side no longer suppresses short real-combat archives
+    // (owner ruling 2026-07-19), but the REPLAY side keeps a floor — a positions doc covering less
+    // than this is a tiny fragment (a short kill-tail's recording), and tiny fragments broke
+    // multi-segment site rendering on 2026-07-19. Below it, the doc is prepared (so the capture still
+    // resets) but not uploaded.
+    internal const long MinReplayUploadMs = 3_000;
+
+    /// <summary>The wall-clock span (ms) an assembled replay doc covers: from the earliest track's
+    /// first sample to the latest track's last sample, where each track's last sample lands at
+    /// <c>Ms0 + (sampleCount-1) * 1000/Hz</c> (fixed-cadence stride). 0 for an empty doc. Pure so it
+    /// unit-tests headless.</summary>
+    internal static long ReplayCapturedSpanMs(PositionUploadDoc doc)
+    {
+        if (doc.Hz <= 0) return 0;
+        long stride = 1000L / doc.Hz;
+        long minStart = long.MaxValue, maxEnd = long.MinValue;
+        foreach (var t in doc.Tracks.Values)
+        {
+            if (t.Dx.Length == 0) continue;
+            long start = t.Ms0;
+            long end = t.Ms0 + (long)(t.Dx.Length - 1) * stride;
+            if (start < minStart) minStart = start;
+            if (end > maxEnd) maxEnd = end;
+        }
+        return maxEnd < minStart ? 0 : maxEnd - minStart;
+    }
+
+    /// <summary>True when an assembled replay doc covers at least <see cref="MinReplayUploadMs"/> of
+    /// wall-clock and is worth uploading; false for a tiny fragment (skip the positions upload — the
+    /// damage segment uploads without a linked recording). Pure so it unit-tests headless.</summary>
+    internal static bool ShouldUploadReplay(PositionUploadDoc doc) => ReplayCapturedSpanMs(doc) >= MinReplayUploadMs;
+
     /// <summary>
     /// Fires the fire-and-forget positions upload for an already-assembled <paramref name="doc"/>
     /// (see <see cref="PrepareReplayDoc"/>). Never throws. Region comes straight from

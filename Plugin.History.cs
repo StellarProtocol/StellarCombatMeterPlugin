@@ -110,14 +110,19 @@ public sealed partial class Plugin
 
         if (_stats.Count == 0) { LogArchiveOutcome(reason, "skip-empty", 0, 0); return; }
 
-        // Suppress the "0s · 1p" junk. Every AUTO trigger (scene-enter, dungeon flow-state bump,
-        // false-start wipe, boss, idle) fires while a stray taken-hit / single instant hit sits in
-        // _stats — content the old _stats.Count>0 gate wrongly treated as an encounter. Skip the
-        // history push + upload when there's no real combat span, but keep every side effect
-        // (shared-cooldown/latch bookkeeping via OnArchived, meter reset via Clear) identical to a
-        // real archive, so nothing else changes. A MANUAL (button/hotkey) archive is never suppressed.
+        // Content-based junk suppression (owner ruling 2026-07-19). Bin an AUTO archive ONLY when it
+        // carries no fresh run result AND its content is junk — every stat row 0/0/0, or a lone
+        // single-participant instant hit. A short REAL fight (2+ participants, or non-zero content
+        // beyond an instant) SAVES even without a settlement ("even 1-2 secs after archive it still
+        // should save"); a fresh kill/settlement tail ALWAYS saves (the destroyed-kill-tail bug this
+        // fixes). Suppression keeps every side effect (shared-cooldown/latch bookkeeping via
+        // OnArchived, meter reset via Clear) identical to a real archive. A MANUAL (button/hotkey)
+        // archive is never suppressed. carriesFreshResult uses IsFreshKill (baseline-relative — a
+        // stale run-level result from an earlier segment does NOT count), so a post-settlement stray
+        // hit is still binned as the "0s · 1p" junk the guard was built for.
         var spanMs = ComputeDurationMs();
-        if (ShouldSuppressAutoArchive(reason, spanMs))
+        var carriesFreshResult = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart);
+        if (ShouldSuppressAutoArchive(reason, carriesFreshResult, AllRowsZero(), _stats.Count, spanMs))
         {
             LogArchiveOutcome(reason, "suppressed", _stats.Count, spanMs);
             _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
@@ -130,22 +135,38 @@ public sealed partial class Plugin
         foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
-        // SP1 + Replay R1 + P2 courtesy: assemble the replay doc FIRST (capture reset must happen
-        // at archive regardless), then let the summary upload's verdict decide whether the
-        // positions POST is needed (havePositions) — the callback owns the doc when a summary
-        // upload fires; otherwise (auto-upload off / no events) upload immediately as before.
-        // The position replay is ONE continuous track per dungeon RUN. Only a run-TERMINAL archive
-        // assembles + uploads + resets it (ShouldFinalizeReplay); a mid-run non-kill stage/boss/idle
-        // archive banks its DAMAGE segment but leaves the replay accumulating, so the whole-run track
-        // survives to the terminal upload. (Previously EVERY archive reset the replay, truncating the
-        // dungeon to just its final slice — the uploaded replay was shorter than the game's clear time.)
-        var replayDoc = ShouldFinalizeReplay(reason, entry.Result == "kill") ? PrepareReplayDoc(entry) : null;
-        var summaryFired = MaybeUploadLog(entry, replayDoc);
-        if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
+        var summaryFired = FinalizeAndMaybeUploadReplay(entry, reason);
         LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
+        if (reason == AutoArchive.ArchiveReason.Manual) NotifyManualArchived(entry.CombatDurationMs);
 
         _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
         Clear();
+    }
+
+    // Replay finalize + fragment-gate + upload wiring, extracted so ManualArchive stays under the
+    // 50-LoC cap. Returns whether a SUMMARY upload fired (which then owns the replay doc) so the
+    // caller can log the banked/banked+upload outcome. Pure extraction — behavior byte-identical.
+    //
+    // SP1 + Replay R1 + P2 courtesy: assemble the replay doc FIRST (capture reset must happen at
+    // archive regardless), then let the summary upload's verdict decide whether the positions POST is
+    // needed (havePositions) — the callback owns the doc when a summary upload fires; otherwise
+    // (auto-upload off / no events) upload immediately as before. The position replay is ONE
+    // continuous track per dungeon RUN. Only a run-TERMINAL archive assembles + uploads + resets it
+    // (ShouldFinalizeReplay); a mid-run non-kill stage/boss/idle archive banks its DAMAGE segment but
+    // leaves the replay accumulating, so the whole-run track survives to the terminal upload.
+    private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry, AutoArchive.ArchiveReason reason)
+    {
+        var replayDoc = ShouldFinalizeReplay(reason, entry.Result == "kill") ? PrepareReplayDoc(entry) : null;
+        // No tiny replay fragments (owner ruling 2026-07-19): now that short kill-tails SAVE, a
+        // kill-carrying tail is run-terminal and PrepareReplayDoc assembles a ~1.4s positions doc —
+        // exactly the fragment that broke multi-segment site rendering. PrepareReplayDoc has ALREADY
+        // reset the capture buffers (unconditional, inside it), so dropping the doc here skips only
+        // the UPLOAD: the damage segment + settlement still upload; the site tolerates a segment with
+        // no linked recording ("play what's present" — ReplayViewer).
+        if (replayDoc is not null && !ShouldUploadReplay(replayDoc)) { LogReplayFragmentSkipped(replayDoc); replayDoc = null; }
+        var summaryFired = MaybeUploadLog(entry, replayDoc);
+        if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
+        return summaryFired;
     }
 
     // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
@@ -190,22 +211,38 @@ public sealed partial class Plugin
         _                                     => "manual",
     };
 
-    // Minimum real combat SPAN (dealt-damage FirstHit→LastHit, via ComputeDurationMs) for an AUTO
-    // archive to be worth a history entry + upload. The old eligibility gate (_stats.Count > 0)
-    // counted a taken-only phantom row — a player who took a hit but dealt nothing — as an encounter,
-    // so a stray hit caught by a hub scene-enter, a dungeon flow-state bump, or a false-start wipe
-    // banked a "0s · 1p" junk entry (and uploaded it). ComputeDurationMs is ~0 for such content
-    // (taken-only rows never set FirstHit/LastHit; a single instant hit gives First==Last) but tens
-    // of seconds for a real run, so this span gate cleanly separates junk (all 0s) from real runs
-    // (5s+). Applies to EVERY auto trigger (scene/stage/wipe/boss/idle); a MANUAL button/hotkey
-    // archive is always honored.
-    internal const long MinAutoArchiveMs = 3_000;
+    // A lone single-participant row shorter than this is a trivial instant-hit tail (a stray taken
+    // hit / one instant hit caught by a hub scene-enter, dungeon flow bump, or false-start wipe) —
+    // the "0s · 1p" junk the guard exists for. A short MULTI-participant fight, or a genuine solo
+    // fight longer than this, is real combat and is NOT junk regardless of span (owner ruling
+    // 2026-07-19: "even 1-2 secs after archive it still should save").
+    internal const long TrivialTailMs = 500;
 
-    /// <summary>True when an AUTO-triggered archive should be skipped for lack of a real combat span.
-    /// Every reason except <see cref="AutoArchive.ArchiveReason.Manual"/> is subject to the span gate;
-    /// a manual (button/hotkey) archive is always kept.</summary>
-    internal static bool ShouldSuppressAutoArchive(AutoArchive.ArchiveReason reason, long durationMs)
-        => reason != AutoArchive.ArchiveReason.Manual && durationMs < MinAutoArchiveMs;
+    /// <summary>True when an AUTO-triggered archive is junk and should be skipped. Suppressed iff it
+    /// is NOT a <see cref="AutoArchive.ArchiveReason.Manual"/> archive (manual is always kept),
+    /// carries no fresh run result (<paramref name="carriesFreshResult"/> — a fresh kill/settlement
+    /// earned by THIS encounter always saves, e.g. the short kill tail this ruling restores), AND its
+    /// content is junk: every stat row is 0/0/0 (<paramref name="allRowsZero"/> — "shouldn't save
+    /// empty"), or a lone single participant (<paramref name="statsCount"/> ≤ 1) whose span is below
+    /// <see cref="TrivialTailMs"/>. A short real fight (2+ participants, or a solo fight past the
+    /// trivial floor) SAVES even without a result.</summary>
+    internal static bool ShouldSuppressAutoArchive(
+        AutoArchive.ArchiveReason reason, bool carriesFreshResult, bool allRowsZero,
+        int statsCount, long durationMs)
+        => reason != AutoArchive.ArchiveReason.Manual
+        && !carriesFreshResult
+        && (allRowsZero || (statsCount <= 1 && durationMs < TrivialTailMs));
+
+    // True when every archived stat row is empty — no damage dealt, no healing, no damage taken —
+    // i.e. a genuinely empty encounter that must not be saved (owner: "shouldn't save empty into
+    // history"). Only reached with _stats.Count > 0 (the skip-empty early-out handles the zero-row
+    // case). A rare per-archive scan, not a hot-path frame.
+    private bool AllRowsZero()
+    {
+        foreach (var s in _stats.Values)
+            if (s.TotalDamage != 0 || s.TotalHealing != 0 || s.TotalTaken != 0) return false;
+        return true;
+    }
 
     /// <summary>
     /// True when <paramref name="current"/> is evidence of a kill genuinely earned by THIS
