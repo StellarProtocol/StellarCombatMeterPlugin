@@ -212,7 +212,7 @@ public sealed partial class Plugin
             // Pass the capture-time boss config id so the assembler doesn't re-resolve from
             // wiped entity caches (ResetEntities fires before archive on scene change).
             var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count);
-            var url = "https://logs.stellarresonance.app/run/" + log.Header.Region + "/" +
+            var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
@@ -229,7 +229,11 @@ public sealed partial class Plugin
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
                 // call thread-safe log methods here — never touch uGUI. Flag the terminal phase change
                 // so the main thread re-persists it (drained in PersistUploadStateIfDirty via OnUpdate).
-                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+                // On success prefer the server's short run URL when the response carried one (a relative
+                // "/run/…" is absolutized against the same SiteBase as `url`); otherwise (old server,
+                // failure, or 409-resolved path whose body has no shortUrl) keep the constructed `url`.
+                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
+                    UploadVerdict.PreferredUrl(verdict, url));
                 _uploadStateDirty = true;
                 if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict);
                 else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
