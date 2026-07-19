@@ -110,23 +110,27 @@ public sealed partial class Plugin
 
         if (_stats.Count == 0) { LogArchiveOutcome(reason, "skip-empty", 0, 0); return; }
 
-        // Content-based junk suppression (owner ruling 2026-07-19). Bin an AUTO archive ONLY when it
-        // carries no fresh run result AND its content is junk — every stat row 0/0/0, or a lone
-        // single-participant instant hit. A short REAL fight (2+ participants, or non-zero content
-        // beyond an instant) SAVES even without a settlement ("even 1-2 secs after archive it still
-        // should save"); a fresh kill/settlement tail ALWAYS saves (the destroyed-kill-tail bug this
-        // fixes). Suppression keeps every side effect (shared-cooldown/latch bookkeeping via
-        // OnArchived, meter reset via Clear) identical to a real archive. A MANUAL (button/hotkey)
-        // archive is never suppressed. carriesFreshResult uses IsFreshKill (baseline-relative — a
-        // stale run-level result from an earlier segment does NOT count), so a post-settlement stray
-        // hit is still binned as the "0s · 1p" junk the guard was built for.
-        var spanMs = ComputeDurationMs();
+        // Content-based junk suppression (owner ruling 2026-07-19, verbatim: "junk = when nothing
+        // happen DPS=0, HPS=0, TAKEN=0. and even I do nothing and all other player keep having
+        // DPS/HPS/TAKEN update it's not junk too"). Bin an AUTO archive ONLY when it carries no fresh
+        // run result AND every stat row is all-zero. ANY nonzero activity — even a lone single-
+        // participant instant hit — BANKS as its own entry (no participant-count / span floor); a
+        // fresh kill/settlement tail ALWAYS saves (the destroyed-kill-tail bug this guards). A MANUAL
+        // (button/hotkey) archive is never suppressed. carriesFreshResult uses IsFreshKill (baseline-
+        // relative — a stale run-level result from an earlier segment does NOT count).
         var carriesFreshResult = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart);
-        if (ShouldSuppressAutoArchive(reason, carriesFreshResult, AllRowsZero(), _stats.Count, spanMs))
+        if (ShouldSuppressAutoArchive(reason, carriesFreshResult, AllRowsZero()))
         {
-            LogArchiveOutcome(reason, "suppressed", _stats.Count, spanMs);
+            // Suppression BINS the entry but is now a total no-op on state (owner ruling 2026-07-19,
+            // run 206630597437685760): the old Clear() here erased accumulated state before the real
+            // fight → the local player showed 0 damage for the whole run. Everything (rows/actors +
+            // combat clocks + baselines) CARRIES forward unconditionally and folds into the next
+            // banked entry (all-zero pre-fight actors then appear there — the owner's intent). Because
+            // _combatActive stays true, EnsureCombatStarted's guard keeps _settlementAtCombatStart
+            // anchored at the true combat start (no re-snapshot, no stale-kill misattribution). The
+            // shared-cooldown OnArchived bookkeeping + the ungated outcome log still fire as before.
+            LogArchiveOutcome(reason, "suppressed", _stats.Count, ComputeDurationMs());
             _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
-            Clear();
             return;
         }
 
@@ -205,27 +209,22 @@ public sealed partial class Plugin
         _                                     => "manual",
     };
 
-    // A lone single-participant row shorter than this is a trivial instant-hit tail (a stray taken
-    // hit / one instant hit caught by a hub scene-enter, dungeon flow bump, or false-start wipe) —
-    // the "0s · 1p" junk the guard exists for. A short MULTI-participant fight, or a genuine solo
-    // fight longer than this, is real combat and is NOT junk regardless of span (owner ruling
-    // 2026-07-19: "even 1-2 secs after archive it still should save").
-    internal const long TrivialTailMs = 500;
-
     /// <summary>True when an AUTO-triggered archive is junk and should be skipped. Suppressed iff it
     /// is NOT a <see cref="AutoArchive.ArchiveReason.Manual"/> archive (manual is always kept),
     /// carries no fresh run result (<paramref name="carriesFreshResult"/> — a fresh kill/settlement
-    /// earned by THIS encounter always saves, e.g. the short kill tail this ruling restores), AND its
-    /// content is junk: every stat row is 0/0/0 (<paramref name="allRowsZero"/> — "shouldn't save
-    /// empty"), or a lone single participant (<paramref name="statsCount"/> ≤ 1) whose span is below
-    /// <see cref="TrivialTailMs"/>. A short real fight (2+ participants, or a solo fight past the
-    /// trivial floor) SAVES even without a result.</summary>
+    /// earned by THIS encounter always saves), AND every stat row is 0/0/0
+    /// (<paramref name="allRowsZero"/>). Junk is defined by CONTENT alone (owner ruling 2026-07-19,
+    /// verbatim): "junk = when nothing happen DPS=0, HPS=0, TAKEN=0. and even I do nothing and all
+    /// other player keep having DPS/HPS/TAKEN update it's not junk too." ANY nonzero row — even a
+    /// single participant with a lone instant hit — is real activity and BANKS as its own entry
+    /// (there is no participant-count or span floor). Combined with the suppressed-archives-never-
+    /// wipe rule, an all-zero suppressed archive is a total no-op: its zero rows/actors carry
+    /// untouched into the next banked entry.</summary>
     internal static bool ShouldSuppressAutoArchive(
-        AutoArchive.ArchiveReason reason, bool carriesFreshResult, bool allRowsZero,
-        int statsCount, long durationMs)
+        AutoArchive.ArchiveReason reason, bool carriesFreshResult, bool allRowsZero)
         => reason != AutoArchive.ArchiveReason.Manual
         && !carriesFreshResult
-        && (allRowsZero || (statsCount <= 1 && durationMs < TrivialTailMs));
+        && allRowsZero;
 
     // True when every archived stat row is empty — no damage dealt, no healing, no damage taken —
     // i.e. a genuinely empty encounter that must not be saved (owner: "shouldn't save empty into
