@@ -77,6 +77,23 @@ internal sealed class HpTimelineSampler
 
     internal IEnumerable<long> TrackedIds => _entries.Keys;
 
+    /// <summary>Frees the leading samples of every tracked entity whose grid time
+    /// (<c>Ms0 + i*cadenceMs</c>) is &lt;= <paramref name="ms"/> — an uploaded window's samples — and
+    /// advances that entity's <see cref="Entry.Ms0"/> by the dropped count so <c>Ms0 + i*cadence</c>
+    /// still names the correct grid slot for later slicing. Lifecycle op (runs at archive when the
+    /// watermark advances); the shared accumulator and future appends are untouched.</summary>
+    internal void TrimBelow(long ms, int cadenceMs)
+    {
+        foreach (var e in _entries.Values)
+        {
+            var drop = 0;
+            while (drop < e.Pct.Count && e.Ms0 + (long)drop * cadenceMs <= ms) drop++;
+            if (drop == 0) continue;
+            e.Pct.RemoveRange(0, drop);
+            e.Ms0 += (long)drop * cadenceMs;
+        }
+    }
+
     internal void Reset()
     {
         _entries.Clear();

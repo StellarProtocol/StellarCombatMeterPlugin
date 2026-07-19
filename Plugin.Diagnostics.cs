@@ -150,12 +150,4 @@ public sealed partial class Plugin
     private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
         => _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs}");
-
-    // One line when a run-terminal archive's assembled replay doc was too short to upload (below the
-    // MinReplayUploadMs floor) — the damage segment still uploaded, just without a linked recording.
-    // Ungated like LogArchiveOutcome: a rare per-run event whose SILENT variant is exactly what field
-    // debugging needs (tiny replay fragments broke multi-segment rendering on 2026-07-19).
-    private void LogReplayFragmentSkipped(PositionUploadDoc doc)
-        => _services.Log.Info(
-            $"[CombatMeter][archive] replay-fragment skipped spanMs={ReplayCapturedSpanMs(doc)} floor={MinReplayUploadMs}");
 }

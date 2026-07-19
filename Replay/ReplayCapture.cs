@@ -84,6 +84,19 @@ internal sealed class ReplayCapture
         }
     }
 
+    /// <summary>Frees every track's samples with <c>Ms &lt;= ms</c> (an uploaded window's footage) and
+    /// keeps <see cref="TotalSamples"/> accurate so the <c>maxTotalSamples</c> cap still accounts only
+    /// for retained samples. Called at archive time when the watermark advances — the delta-window
+    /// replacement for the old whole-buffer <see cref="Reset"/> at every archive. Track objects (and
+    /// their entity ids / stable order) survive so sampling continues seamlessly into the next window.</summary>
+    public void TrimBelow(long ms)
+    {
+        var freed = 0;
+        foreach (var track in _tracks.Values) freed += track.TrimBelow(ms);
+        TotalSamples -= freed;
+        if (TotalSamples < 0) TotalSamples = 0;
+    }
+
     public void Reset()
     {
         _tracks.Clear();

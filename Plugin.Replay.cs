@@ -84,6 +84,19 @@ public sealed partial class Plugin
     // (see HpTimelineSampler.MarkDead)? Reset alongside the rest of the capture state in ResetReplay().
     private bool _bossDeathMarked;
 
+    // Delta-window upload watermark (owner design 2026-07-19): capture-relative ms through which the
+    // replay has already been uploaded. Each banked archive serializes only (watermark, now] and — on
+    // a successful upload hand-off — advances the watermark to that archive's cut and frees the
+    // consumed samples. The recorder NEVER stops or resets mid-run; the buffers reset only at true run
+    // end (scene-leave / run-id change) via ResetReplay. Started below zero so window 1 carries the
+    // walk-in lead (position sample ms=0). A suppressed / empty / failed-hand-off window leaves the
+    // watermark unchanged, so its samples merge into the next window (at-least-once, owner default 2).
+    private const long ReplayWatermarkUnset = -1;
+    private long _replayWatermarkMs = ReplayWatermarkUnset;
+    // Upper bound of the window PrepareReplayDoc just serialized; consumed by AdvanceReplayWatermark
+    // once the caller confirms the upload was handed off. Only meaningful between those two calls.
+    private long _replayWindowUpperMs;
+
     // Player sub-profession (spec), snapshotted DURING capture — spec is cast/loadout-inferred
     // from live caches that ResetEntities() wipes before archive, so resolving it at upload
     // time always yielded 0 (same timing bug as the boss name). Sticky: first non-zero wins.
@@ -258,6 +271,9 @@ public sealed partial class Plugin
 
     private bool IsInstancedRun() => _services.Dungeon.CurrentRunId != 0;
 
+    // Full reset — fired ONLY at true run end (scene-leave out of the run / run-id change), never at
+    // archive time anymore (delta-window model): the recorder accumulates across the whole run and each
+    // banked archive uploads a window + advances the watermark instead. See _replayWatermarkMs.
     private void ResetReplay()
     {
         _replay?.Reset();
@@ -268,6 +284,8 @@ public sealed partial class Plugin
         _replaySpecs.Clear();
         _trackCapLogged = false;
         _bossDeathMarked = false;
+        _replayWatermarkMs  = ReplayWatermarkUnset;
+        _replayWindowUpperMs = 0;
     }
 
     // -----------------------------------------------------------------------
@@ -355,47 +373,44 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// At archive: assembles + signs the replay position doc for <paramref name="entry"/>, ALWAYS
-    /// resetting the capture buffers before returning (regardless of outcome) — the capture-buffer
-    /// reset must happen at archive time no matter what any later upload decision does. Returns
-    /// <c>null</c> when replay upload is off, no capture exists, the run has no level id, or
-    /// nothing was sampled. Never throws. Callers (Plugin.History.cs / Plugin.LogUpload.cs) decide
-    /// separately whether to fire <see cref="UploadReplayDoc"/> for the returned doc, based on the
-    /// summary upload's verdict (skip when the server already has positions for this run).
+    /// Delta-window serializer (owner design 2026-07-19): assembles + signs the replay doc for the
+    /// window <c>(watermark, now]</c> — the samples captured since the last uploaded window — linked to
+    /// <paramref name="entry"/>'s damage segment. Does NOT reset or advance anything: the recorder
+    /// keeps accumulating, and the watermark advances only once the caller confirms the upload was
+    /// handed off (see <see cref="AdvanceReplayWatermark"/> / <c>FinalizeAndMaybeUploadReplay</c>).
+    /// Returns <c>null</c> — leaving the watermark and buffers untouched — when replay upload is off,
+    /// there is no capture, the run has no level id, or the window is EMPTY (no samples since the
+    /// watermark, e.g. a suppressed-junk or between-pull archive). Never throws.
     /// </summary>
     internal PositionUploadDoc? PrepareReplayDoc(EncounterHistoryEntry entry)
     {
         try
         {
-            if (!_uploadReplay || _replay is null) { ResetReplay(); return null; }
-            if (entry.LevelUuid == 0 || _replay.TotalSamples == 0) { ResetReplay(); return null; }
+            if (!_uploadReplay || _replay is null) return null;      // Clear-decouple: NEVER reset here
+            if (entry.LevelUuid == 0) return null;
 
+            // upperMs = capture-relative "now" (the samples' own clock) — covers every buffered sample
+            // above the watermark, incl. a late MarkDead 0-stamp. See _replayWatermarkMs for the model.
+            var upperMs = (long)((int)_services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs);
+            var windowTracks = SliceWindowPositions(_replayWatermarkMs, upperMs);
+            if (windowTracks.Count == 0) return null;                // empty window → no upload, watermark unchanged
+            _replayWindowUpperMs = upperMs;
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
-
-            // Sampling now starts at dungeon-enter (TickReplayCapture), not at first damage, so
-            // _replay.CombatStartMs (the capture's own zero point) usually PRECEDES the DPS combat
-            // clock's encounter.StartMs. Rebase every track's Ms0 by this offset so the uploaded
-            // doc's zero point stays exactly at combat start (matching StartMs below) — pre-combat
-            // samples land at negative ms, which the codec/viewer already tolerate (plain signed
-            // ints; the site's death/imagine-cast markers are converted the same way and only ever
-            // occur at/after combat start, so they stay aligned with the extended position timeline).
+            // Per-doc contract unchanged: rebase Ms0 onto THIS segment's combat start (capture zero is run-constant).
             var msOffset = _replay.CombatStartMs - (int)encounter.StartMs;
 
-            // Resolve boss info for meta + upload fields using capture-time snapshot.
-            var (bossEntityIdStr, bossMonsterInfo) = ResolveBossUploadFields();
-            var bossHpTrack = RebaseHpTrack(BuildBossHpTrack(), msOffset);
+            var boss = ResolveWindowBossFields(windowTracks, upperMs, msOffset);
 
             var doc = PositionTrackAssembler.Assemble(
-                tracks: _replay.Tracks,
+                samplesByEntity: windowTracks,
                 hz:     2,
                 mapId:  encounter.MapId,
                 origin: (0f, 0f),
                 scale:  0.1f,
                 msOffset: msOffset,
-                meta:   BuildReplayMeta(bossEntityIdStr, bossMonsterInfo));
+                meta:   BuildReplayMeta(WindowMetaIds(windowTracks, boss.inWindow), boss.idStr, boss.info));
 
-            var nonce = GenerateReplayNonce();
             doc = doc with
             {
                 LogId        = GenerateReplayLogId(),
@@ -403,67 +418,32 @@ public sealed partial class Plugin
                 LocalUid     = localUid,
                 StartMs      = encounter.StartMs,
                 EndMs        = encounter.EndMs,
-                Nonce        = nonce,
-                BossEntityId = bossEntityIdStr,
-                BossHp       = bossHpTrack,
-                PlayerHp     = RebasePlayerHpTracks(BuildPlayerHpTracks(), msOffset),
+                Nonce        = GenerateReplayNonce(),
+                BossEntityId = boss.idStr,
+                BossHp       = boss.hp,
+                PlayerHp     = RebasePlayerHpTracks(SlicePlayerHpWindow(upperMs), msOffset),
             };
-            doc = doc with { Sig = SignReplay(doc) };
-
-            ResetReplay();
-
-            return doc;
+            return doc with { Sig = SignReplay(doc) };
         }
         catch (Exception ex)
         {
-            ResetReplay();
             _services.Log.Warning($"[CombatMeter.Replay] threw: {ex.Message}");
-            return null;
+            return null;   // no reset — samples survive to the next window (watermark unchanged)
         }
     }
-
-    // Replay-upload span floor: the HISTORY side no longer suppresses short real-combat archives
-    // (owner ruling 2026-07-19), but the REPLAY side keeps a floor — a positions doc covering less
-    // than this is a tiny fragment (a short kill-tail's recording), and tiny fragments broke
-    // multi-segment site rendering on 2026-07-19. Below it, the doc is prepared (so the capture still
-    // resets) but not uploaded.
-    internal const long MinReplayUploadMs = 3_000;
-
-    /// <summary>The wall-clock span (ms) an assembled replay doc covers: from the earliest track's
-    /// first sample to the latest track's last sample, where each track's last sample lands at
-    /// <c>Ms0 + (sampleCount-1) * 1000/Hz</c> (fixed-cadence stride). 0 for an empty doc. Pure so it
-    /// unit-tests headless.</summary>
-    internal static long ReplayCapturedSpanMs(PositionUploadDoc doc)
-    {
-        if (doc.Hz <= 0) return 0;
-        long stride = 1000L / doc.Hz;
-        long minStart = long.MaxValue, maxEnd = long.MinValue;
-        foreach (var t in doc.Tracks.Values)
-        {
-            if (t.Dx.Length == 0) continue;
-            long start = t.Ms0;
-            long end = t.Ms0 + (long)(t.Dx.Length - 1) * stride;
-            if (start < minStart) minStart = start;
-            if (end > maxEnd) maxEnd = end;
-        }
-        return maxEnd < minStart ? 0 : maxEnd - minStart;
-    }
-
-    /// <summary>True when an assembled replay doc covers at least <see cref="MinReplayUploadMs"/> of
-    /// wall-clock and is worth uploading; false for a tiny fragment (skip the positions upload — the
-    /// damage segment uploads without a linked recording). Pure so it unit-tests headless.</summary>
-    internal static bool ShouldUploadReplay(PositionUploadDoc doc) => ReplayCapturedSpanMs(doc) >= MinReplayUploadMs;
 
     /// <summary>
     /// Fires the fire-and-forget positions upload for an already-assembled <paramref name="doc"/>
-    /// (see <see cref="PrepareReplayDoc"/>). Never throws. Region comes straight from
-    /// <see cref="Stellar.Abstractions.Services.IGameEnvironment"/> — <c>PositionUploadDoc</c>
-    /// carries no region of its own, and this call site has no <c>CombatLog</c> in scope
-    /// (both of <c>UploadReplayDoc</c>'s callers — the summary-upload callback legs in
-    /// Plugin.LogUpload.cs and the no-summary-fired path in Plugin.History.cs — only have
-    /// <c>replayDoc</c>, not the assembled log).
+    /// (see <see cref="PrepareReplayDoc"/>). Never throws. Returns <c>true</c> when the doc was handed
+    /// off to the upload queue (the synchronous dispatch did not throw) — the signal that gates the
+    /// watermark advance (owner default 2); <c>false</c> only when the dispatch itself threw, in which
+    /// case the caller keeps the watermark so the window re-uploads next time. Region comes straight
+    /// from <see cref="Stellar.Abstractions.Services.IGameEnvironment"/> — <c>PositionUploadDoc</c>
+    /// carries no region of its own, and this call site has no <c>CombatLog</c> in scope (both of
+    /// <c>UploadReplayDoc</c>'s callers — the summary-upload callback legs in Plugin.LogUpload.cs and
+    /// the no-summary-fired path in Plugin.History.cs — only have <c>replayDoc</c>, not the log).
     /// </summary>
-    internal void UploadReplayDoc(PositionUploadDoc doc)
+    internal bool UploadReplayDoc(PositionUploadDoc doc)
     {
         try
         {
@@ -474,10 +454,12 @@ public sealed partial class Plugin
                 else    _services.Log.Warning(
                     $"[CombatMeter.Replay] positions FAILED (HTTP {status}): {err}");
             });
+            return true;
         }
         catch (Exception ex)
         {
             _services.Log.Warning($"[CombatMeter.Replay] upload threw: {ex.Message}");
+            return false;
         }
     }
 
@@ -507,11 +489,14 @@ public sealed partial class Plugin
     // Helpers
     // -----------------------------------------------------------------------
 
+    // Meta covers the entities PRESENT IN THIS WINDOW (ids = the windowed track keys), per the
+    // delta-window design — a boss present across windows is described in each; the site's
+    // first-write-wins name capture + per-segment bossId mapping already handle the repetition.
     private Dictionary<EntityId, PositionMetaDto> BuildReplayMeta(
-        string bossEntityIdStr, MonsterInfo? bossMonsterInfo)
+        ICollection<EntityId> ids, string bossEntityIdStr, MonsterInfo? bossMonsterInfo)
     {
-        var meta = new Dictionary<EntityId, PositionMetaDto>(_replay!.Tracks.Count);
-        foreach (var id in _replay.Tracks.Keys)
+        var meta = new Dictionary<EntityId, PositionMetaDto>(ids.Count);
+        foreach (var id in ids)
         {
             MonsterInfo? monsterInfo;
             if (!id.IsPlayer && !string.IsNullOrEmpty(bossEntityIdStr) &&

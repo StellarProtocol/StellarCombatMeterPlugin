@@ -342,7 +342,12 @@ public sealed partial class Plugin : IStellarPlugin
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
-        ResetReplay();
+        // NOTE: Clear() no longer resets the replay (delta-window decouple, owner design 2026-07-19).
+        // Clear() runs at the end of EVERY archive (incl. suppressed junk) and on the Reset button —
+        // wiping the replay here destroyed the accumulating walk-in at a suppressed archive (THE
+        // walk-in-clip root cause, proven 2026-07-19). The recorder is a per-RUN capture: it resets
+        // ONLY at true run end (scene-leave / run-id change) via ResetReplay, and each banked archive
+        // uploads a watermark window without stopping it. See _replayWatermarkMs / ResetReplay.
         _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
     }
 

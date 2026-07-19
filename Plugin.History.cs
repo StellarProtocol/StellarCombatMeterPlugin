@@ -135,7 +135,7 @@ public sealed partial class Plugin
         foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
-        var summaryFired = FinalizeAndMaybeUploadReplay(entry, reason);
+        var summaryFired = FinalizeAndMaybeUploadReplay(entry);
         LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
         if (reason == AutoArchive.ArchiveReason.Manual) NotifyManualArchived(entry.CombatDurationMs);
 
@@ -143,29 +143,23 @@ public sealed partial class Plugin
         Clear();
     }
 
-    // Replay finalize + fragment-gate + upload wiring, extracted so ManualArchive stays under the
-    // 50-LoC cap. Returns whether a SUMMARY upload fired (which then owns the replay doc) so the
-    // caller can log the banked/banked+upload outcome. Pure extraction — behavior byte-identical.
-    //
-    // SP1 + Replay R1 + P2 courtesy: assemble the replay doc FIRST (capture reset must happen at
-    // archive regardless), then let the summary upload's verdict decide whether the positions POST is
-    // needed (havePositions) — the callback owns the doc when a summary upload fires; otherwise
-    // (auto-upload off / no events) upload immediately as before. The position replay is ONE
-    // continuous track per dungeon RUN. Only a run-TERMINAL archive assembles + uploads + resets it
-    // (ShouldFinalizeReplay); a mid-run non-kill stage/boss/idle archive banks its DAMAGE segment but
-    // leaves the replay accumulating, so the whole-run track survives to the terminal upload.
-    private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry, AutoArchive.ArchiveReason reason)
+    // Replay delta-window upload wiring (owner design 2026-07-19), extracted so ManualArchive stays
+    // under the 50-LoC cap. EVERY banked archive ships the window (watermark, now]: there is no
+    // ShouldFinalizeReplay gate (retired — the recorder never stops, so no run-terminal concept) and
+    // no sub-3s fragment gate (retired — contiguous windows stitch on the site, short tails are safe).
+    // PrepareReplayDoc returns null for an off / no-level / EMPTY window, in which case nothing uploads
+    // and the watermark holds. On a successful hand-off to the upload queue the watermark advances and
+    // the window's samples are freed; a failed hand-off keeps them so they merge into the next window
+    // (at-least-once, owner default 2). Returns whether a SUMMARY upload fired.
+    private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry)
     {
-        var replayDoc = ShouldFinalizeReplay(reason, entry.Result == "kill") ? PrepareReplayDoc(entry) : null;
-        // No tiny replay fragments (owner ruling 2026-07-19): now that short kill-tails SAVE, a
-        // kill-carrying tail is run-terminal and PrepareReplayDoc assembles a ~1.4s positions doc —
-        // exactly the fragment that broke multi-segment site rendering. PrepareReplayDoc has ALREADY
-        // reset the capture buffers (unconditional, inside it), so dropping the doc here skips only
-        // the UPLOAD: the damage segment + settlement still upload; the site tolerates a segment with
-        // no linked recording ("play what's present" — ReplayViewer).
-        if (replayDoc is not null && !ShouldUploadReplay(replayDoc)) { LogReplayFragmentSkipped(replayDoc); replayDoc = null; }
+        var replayDoc = PrepareReplayDoc(entry);
+        if (replayDoc is null) return false;   // empty/off/no-level window — watermark unchanged
         var summaryFired = MaybeUploadLog(entry, replayDoc);
-        if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
+        // summaryFired → the summary callback OWNS + uploads the doc (synchronous hand-off complete);
+        // otherwise upload it directly here. A non-throwing hand-off (either path) advances the watermark.
+        var handedOff = summaryFired || UploadReplayDoc(replayDoc);
+        if (handedOff) AdvanceReplayWatermark();
         return summaryFired;
     }
 
