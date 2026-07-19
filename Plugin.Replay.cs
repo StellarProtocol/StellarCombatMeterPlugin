@@ -200,11 +200,22 @@ public sealed partial class Plugin
         // Post-scene-change settle gate — skip probing while the mass entity teardown/rebuild after a
         // line-switch / dungeon-enter is still in flight (see SafeTryGetTransform's crash rationale).
         // NoteRosterEntities above already registered the tracks, so sampling resumes cleanly after.
-        if (IsWithinReplaySettle(_services.CombatSnapshot.ServerNowMs, _lastSceneChangeMs)) return;
+        var settling = IsWithinReplaySettle(_services.CombatSnapshot.ServerNowMs, _lastSceneChangeMs);
+        // Diagnostic (walk-in-loss investigation 2026-07-19): throttled capture-state so a run where the
+        // walk-in never gets sampled shows WHY (Active off? stuck settling? sample count not growing?).
+        _captureDiagAccumS += deltaTimeSec;
+        if (_captureDiagAccumS >= 3f)
+        {
+            _captureDiagAccumS = 0f;
+            LogReplayCaptureState(runId, _sceneIsCandidate, _replay.Active, settling, _replay.TotalSamples);
+        }
+        if (settling) return;
         _replay.Tick(nowMs, dtMs);
         if (_replay.TrackCapHit && !_trackCapLogged) { _trackCapLogged = true; LogReplayTrackCapHit(); }
         TickHpTimelines(nowMs, dtMs);
     }
+
+    private float _captureDiagAccumS;
 
     // Called every frame from OnUpdate (throttled internally to ~60s). Emits the field-observable
     // track-count line regardless of _replay.Active — in the open world this must read tracks=0,
@@ -364,6 +375,11 @@ public sealed partial class Plugin
             // ints; the site's death/imagine-cast markers are converted the same way and only ever
             // occur at/after combat start, so they stay aligned with the extended position timeline).
             var msOffset = _replay.CombatStartMs - (int)encounter.StartMs;
+
+            // Diagnostic (walk-in-loss investigation 2026-07-19): what this finalized segment actually
+            // held — sample count, the capture's own zero, the DPS combat start, and the resulting
+            // offset. A first segment with few samples + msOffset≈0 = the walk-in never entered _replay.
+            LogReplayFinalize(_replay.TotalSamples, _replay.CombatStartMs, (int)encounter.StartMs, msOffset);
 
             // Resolve boss info for meta + upload fields using capture-time snapshot.
             var (bossEntityIdStr, bossMonsterInfo) = ResolveBossUploadFields();

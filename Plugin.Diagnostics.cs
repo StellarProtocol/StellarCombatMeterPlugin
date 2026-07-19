@@ -57,6 +57,27 @@ public sealed partial class Plugin
         if (!StellarDiagnostics.IsEnabled || _replay is null) return;
         _services.Log.Info($"[CombatMeter.Replay][diag] tracks={_replay.Tracks.Count} capHit={_replay.TrackCapHit}");
     }
+
+    // Walk-in-loss investigation 2026-07-19: throttled per-tick capture state — proves whether the
+    // walk-in is being SAMPLED during the approach (Active + settled + totalSamples climbing) or not.
+    private void LogReplayCaptureState(long runId, bool sceneCandidate, bool active, bool settling, int totalSamples)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter.Replay][cap] runId={(runId != 0 ? 1 : 0)} candidate={sceneCandidate} active={active} " +
+            $"settling={settling} samples={totalSamples}");
+    }
+
+    // Walk-in-loss investigation: what a finalized replay segment actually held. A first segment with a
+    // handful of samples + msOffset≈0 means the pre-combat walk-in never entered _replay (vs. a large
+    // negative msOffset + many samples = walk-in present and correctly rebased).
+    private void LogReplayFinalize(int totalSamples, int replayCombatStartMs, int encounterStartMs, int msOffset)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter.Replay][finalize] samples={totalSamples} replayStart={replayCombatStartMs} " +
+            $"combatStart={encounterStartMs} msOffset={msOffset}");
+    }
     // TEMP cast-time-redesign capture: wire cd row vs what we render for a SELF imagine, on change + every
     // ~0.5s. Pins the multi-charge recharge model (does `begin` reset per cast? parallel vs sequential?) and
     // shows where our seconds/charges diverge from the game's own [Z]/[X]. Remove before the next commit.
