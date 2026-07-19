@@ -220,7 +220,7 @@ public sealed partial class Plugin : IStellarPlugin
         // Action hotkeys for the meter's header controls. Unbound by default (SuggestedDefault: null) so they
         // never collide with game keys out of the box — they appear in Settings → Hotkeys for the user to bind.
         _resetAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.reset", "Reset CombatMeter", null), callback: Clear);
+            new HotkeyAction("combatmeter.reset", "Reset CombatMeter", null), callback: () => Clear());
         _archiveAction = _services.Hotkeys.DeclareAction(
             new HotkeyAction("combatmeter.archive", "Archive CombatMeter encounter", null), callback: ManualArchive);
         _pauseAction = _services.Hotkeys.DeclareAction(
@@ -314,7 +314,14 @@ public sealed partial class Plugin : IStellarPlugin
         if (_snapshotWindow.IsShown) RebuildSnapshotRows();
     }
 
-    private void Clear()
+    // resetReplay: true = the user's Reset button/hotkey (wipe everything incl. the position replay);
+    // false = an archive-driven clear, where the position replay must SURVIVE across the damage-meter
+    // reset so a mid-run archive (suppressed junk, or a non-terminal stage/boss segment) can't wipe the
+    // accumulated walk-in — the replay is reset only by its own finalize (PrepareReplayDoc), a scene
+    // boundary (OnSceneChanged), or a run-id change. This is THE walk-in-clip fix (2026-07-19): Clear()
+    // used to always ResetReplay(), so the early suppressed boss archive wiped a 284-sample walk-in
+    // before the first Manual archive could upload it.
+    private void Clear(bool resetReplay = true)
     {
         _stats.Clear();
         _timelines.Clear();
@@ -342,7 +349,7 @@ public sealed partial class Plugin : IStellarPlugin
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
-        ResetReplay();
+        if (resetReplay) ResetReplay();
         _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
     }
 

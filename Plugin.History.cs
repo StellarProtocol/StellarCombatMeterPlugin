@@ -121,7 +121,7 @@ public sealed partial class Plugin
         {
             LogArchiveOutcome(reason, "suppressed", _stats.Count, spanMs);
             _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
-            Clear();
+            Clear(resetReplay: false);   // a suppressed junk archive must NOT wipe the accumulating walk-in
             return;
         }
 
@@ -145,7 +145,9 @@ public sealed partial class Plugin
         LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
 
         _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
-        Clear();
+        // A finalize archive already reset the replay inside PrepareReplayDoc; a non-finalize (mid-run,
+        // non-kill) archive must KEEP the replay accumulating — so never let Clear() reset it here.
+        Clear(resetReplay: false);
     }
 
     // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity

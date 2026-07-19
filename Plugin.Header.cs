@@ -31,7 +31,7 @@ public sealed partial class Plugin
     private HudElement BuildHeaderBar() => new RowElement(new HudElement[]
     {
         new TextElement(() => "Meter", Emphasis: true),
-        new ButtonElement(() => "Reset", Clear),
+        new ButtonElement(() => "Reset", () => Clear()),
         new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
             new ButtonElement(() => "", TogglePunctuate, Icon: () => _locationPinPng)), Width: 28f),
         new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
