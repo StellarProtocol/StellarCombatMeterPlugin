@@ -191,7 +191,8 @@ internal sealed class AutoArchiveEngine
     // Idle: no player damage for IdleTimeoutMs, guarded by minimum content (>= MinContentMs of
     // combat span AND >= 1 player damage event — LastDamageMs is only ever set by a player-source
     // hit) so field farming can't churn the 50-entry history FIFO with trivial segments.
-    // Self re-arms via the archive itself: ManualArchive -> Clear() -> CombatActive false.
+    // Self re-arms via a BANKED archive: ManualArchive -> Clear() -> CombatActive false. (A
+    // suppressed all-zero archive keeps CombatActive true — it wipes nothing by owner ruling.)
     private bool IdleExpired(in AutoArchiveInputs s)
     {
         if (!s.CombatActive || s.LastDamageMs == 0) return false;
