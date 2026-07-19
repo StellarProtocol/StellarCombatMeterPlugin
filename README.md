@@ -10,3 +10,10 @@ dotnet build -c Release
 
 Published to the launcher via the [plugin registry](https://github.com/StellarProtocol/StellarResonancePlugins)
 (manifest pins this repo + commit; CI builds it from source). AGPL-3.0-or-later.
+
+## Hard product requirements (owner-stated, non-negotiable)
+
+1. **The position replay covers the ENTIRE run — dungeon entry to run end.** Acceptance criterion (owner, verbatim): *"the movement suppose to be send from get inside the dungeon to archive event triggered."* Window 1 = entry → first banked archive (walk-in and opener included), then archive→archive windows; suppressed/junk archives neither upload nor advance the window; nothing resets the recording mid-run (buffers reset only at true run end). Any start/end clip in a replay is a **P0 defect** — this was reported 5+ times before the delta-window model fixed it. The tests that pin this invariant (`ReplayWindowTests`: window-concatenation-equals-baseline; suppressed-archive-no-touch) must never be weakened or deleted.
+2. **A manual archive is always saved** (never suppressed) and always acknowledged (toast + `manual-press` log line). Auto archives are suppressed only when genuinely empty (all-zero records, or zero-span single-stray); never by span alone; anything carrying real combat or a run result/settlement saves.
+
+Any change touching `Plugin.Replay.cs`, `Plugin.History.cs`, `Plugin.ReplayWindow.cs`, or the archive/suppression paths must re-verify both requirements explicitly.
