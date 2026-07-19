@@ -123,6 +123,48 @@ public sealed partial class Plugin
         finally { Object.Destroy(tex); }
     }
 
+    // ── Stopwatch icon (Countdown) ───────────────────────────────────────────
+
+    private byte[]? _countdownPng;
+
+    private static byte[]? BuildCountdownPng()
+    {
+        const int n = 64;
+        var tex = new Texture2D(n, n, TextureFormat.RGBA32, mipChain: false);
+        var px  = new Color[n * n];
+        const float aa = 1.5f;
+
+        // Main dial: a ring (annulus) — the stopwatch body.
+        var   c        = new Vector2(n * 0.50f, n * 0.44f);
+        float dialR    = n * 0.30f;
+        float ringHalf = n * 0.055f;
+
+        // Crown/button: short stem centred on top of the dial (the press button).
+        var stemBot = new Vector2(n * 0.50f, n * 0.74f);
+        var stemTop = new Vector2(n * 0.50f, n * 0.92f);
+        float stemW = n * 0.05f;
+
+        // Hand: from the dial centre pointing up-right.
+        var handEnd = new Vector2(n * 0.66f, n * 0.61f);
+        float handW = n * 0.045f;
+
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            var   p     = new Vector2(x + 0.5f, y + 0.5f);
+            float dRing = Mathf.Abs((p - c).magnitude - dialR) - ringHalf;
+            float dStem = DistToSegment(p, stemBot, stemTop) - stemW;
+            float dHand = DistToSegment(p, c, handEnd) - handW;
+            float d     = Mathf.Min(Mathf.Min(dRing, dStem), dHand);
+            px[y * n + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(0.5f - d / aa));
+        }
+
+        tex.SetPixels(px);
+        tex.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+        try   { return ImageConversion.EncodeToPNG(tex); }
+        finally { Object.Destroy(tex); }
+    }
+
     // Shared segment-distance helper (also used by InspectIcon, defined there).
 
     private static float SdfTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)

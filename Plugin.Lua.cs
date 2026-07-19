@@ -123,6 +123,13 @@ public sealed partial class Plugin
     private void LeaderConvene()
         => CallLua("pcall(function() (Z.CoroUtil).create_coro_xpcall(function() local vm=(Z.VMMgr).GetVM('team') if vm then local cs=(Z.CancelSource).Rent() vm.AsyncTeamLeaderCall(cs:CreateToken()) end end, function() end)() end)");
 
+    // Leader-initiated team countdown (the game's own "pull timer"). Mirrors the game's
+    // team_view btn_countdown → TeamVM.AsyncStartCountDown → WorldProxy.StartCountDown
+    // (net msg zproto.World.StartCountDown, empty request). Plain fire-and-forget async
+    // click, same shape as LeaderConvene — no cooldown, server broadcasts the countdown.
+    private void LeaderCountdown()
+        => CallLua("pcall(function() (Z.CoroUtil).create_coro_xpcall(function() local vm=(Z.VMMgr).GetVM('team') if vm then local cs=(Z.CancelSource).Rent() vm.AsyncStartCountDown(cs:CreateToken()) end end, function() end)() end)");
+
     private bool  _readyCheckResultPending;
     private float _readyCheckResultTimeoutS;
     private const float ReadyCheckResultTimeoutS = 5f;
