@@ -1,3 +1,5 @@
+using Stellar.Abstractions.Domain;
+
 namespace Stellar.CombatMeter.AutoArchive;
 
 /// <summary>Why an encounter segment was archived. Persisted on the history entry (JSON key "trig").</summary>
@@ -34,6 +36,8 @@ internal readonly record struct AutoArchiveInputs
     public bool BossGone { get; init; }          // the previously resolved boss died / despawned / evicted
     public bool InstancedRun { get; init; }      // IDungeonState.CurrentRunId != 0
     public int FlowStateVersion { get; init; }   // IDungeonState.FlowStateVersion
+    public DungeonFlowState CurrentFlowState { get; init; }  // IDungeonState.CurrentFlowState — the run
+                                                             // lifecycle value the version counter points at
 }
 
 /// <summary>
@@ -180,13 +184,25 @@ internal sealed class AutoArchiveEngine
 
         if (_lastFlowVersion != s.FlowStateVersion)
         {
-            // Strictly-increasing = a real transition (bank ONE pending). First-ever observation
-            // (-1) and a version DECREASE (service reset on a new run) adopt silently.
-            _stagePending = _lastFlowVersion >= 0 && s.FlowStateVersion > _lastFlowVersion;
+            // Strictly-increasing = a real transition; first-ever observation (-1) and a version
+            // DECREASE (service reset on a new run) adopt silently. Owner ruling 2026-07-20: arm ONLY
+            // when that transition lands in a run-END state (End/Settlement/Vote). Entry-side
+            // transitions (into Active/Ready/Playing, or any other value) never arm — a player poking
+            // a boss bumps the flow to Playing, and cutting an archive of just the opener there is
+            // wrong. Combined with the carry rules, a pre-pull opener simply stays accumulated and
+            // lands inside the next real segment.
+            bool realTransition = _lastFlowVersion >= 0 && s.FlowStateVersion > _lastFlowVersion;
+            _stagePending = realTransition && IsRunEndState(s.CurrentFlowState);
             _lastFlowVersion = s.FlowStateVersion;
         }
         if (!s.InstancedRun || !StageEnabled) _stagePending = false;
     }
+
+    // Run-END flow states: only a transition INTO one of these arms the stage trigger (owner ruling
+    // 2026-07-20). Values mirror zproto EDungeonState; the enum tolerates unknown future wire values
+    // (cast) so this is an explicit allow-list, not a "not-an-entry-state" negation.
+    private static bool IsRunEndState(DungeonFlowState state) =>
+        state is DungeonFlowState.End or DungeonFlowState.Settlement or DungeonFlowState.Vote;
 
     // Idle: no player damage for IdleTimeoutMs, guarded by minimum content (>= MinContentMs of
     // combat span AND >= 1 player damage event — LastDamageMs is only ever set by a player-source
