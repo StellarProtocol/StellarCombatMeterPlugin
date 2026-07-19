@@ -134,7 +134,12 @@ public sealed partial class Plugin
         // at archive regardless), then let the summary upload's verdict decide whether the
         // positions POST is needed (havePositions) — the callback owns the doc when a summary
         // upload fires; otherwise (auto-upload off / no events) upload immediately as before.
-        var replayDoc = PrepareReplayDoc(entry);
+        // The position replay is ONE continuous track per dungeon RUN. Only a run-TERMINAL archive
+        // assembles + uploads + resets it (ShouldFinalizeReplay); a mid-run non-kill stage/boss/idle
+        // archive banks its DAMAGE segment but leaves the replay accumulating, so the whole-run track
+        // survives to the terminal upload. (Previously EVERY archive reset the replay, truncating the
+        // dungeon to just its final slice — the uploaded replay was shorter than the game's clear time.)
+        var replayDoc = ShouldFinalizeReplay(reason, entry.Result == "kill") ? PrepareReplayDoc(entry) : null;
         var summaryFired = MaybeUploadLog(entry, replayDoc);
         if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
         LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);

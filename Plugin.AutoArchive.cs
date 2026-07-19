@@ -149,6 +149,20 @@ public sealed partial class Plugin
         _                                     => false,   // Manual + SceneChange stay immediate
     };
 
+    /// <summary>Should this archive FINALIZE the position replay — assemble + upload the whole-run
+    /// track and reset it? The replay is ONE continuous capture per dungeon run; mid-run auto
+    /// archives (stage change / boss phase / idle) bank their DAMAGE segment but must NOT truncate
+    /// the replay, or one dungeon splits into slices and the upload is only the final slice
+    /// (shorter than the game's clear time — owner report 2026-07-19). Finalize only on a
+    /// run-TERMINAL archive: the user's manual archive, a scene change out of the run, a wipe, or
+    /// the kill/settlement that ends the run. A non-kill mid-run auto trigger leaves the replay
+    /// accumulating. Pure, unit-tested (ReplayFinalizeGateTests).</summary>
+    internal static bool ShouldFinalizeReplay(AutoArchive.ArchiveReason reason, bool isKill)
+        => reason == AutoArchive.ArchiveReason.Manual
+        || reason == AutoArchive.ArchiveReason.SceneChange
+        || reason == AutoArchive.ArchiveReason.Wipe
+        || isKill;
+
     private AutoArchiveInputs BuildAutoArchiveInputs()
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
