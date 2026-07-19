@@ -108,7 +108,7 @@ public sealed partial class Plugin
         // stats afterward. The deferred fire calls ManualArchive too, so it self-clears the slot.
         _pendingArchiveReason = null;
 
-        if (_stats.Count == 0) return;
+        if (_stats.Count == 0) { LogArchiveOutcome(reason, "skip-empty", 0, 0); return; }
 
         // Suppress the "0s · 1p" junk. Every AUTO trigger (scene-enter, dungeon flow-state bump,
         // false-start wipe, boss, idle) fires while a stray taken-hit / single instant hit sits in
@@ -116,8 +116,10 @@ public sealed partial class Plugin
         // history push + upload when there's no real combat span, but keep every side effect
         // (shared-cooldown/latch bookkeeping via OnArchived, meter reset via Clear) identical to a
         // real archive, so nothing else changes. A MANUAL (button/hotkey) archive is never suppressed.
-        if (ShouldSuppressAutoArchive(reason, ComputeDurationMs()))
+        var spanMs = ComputeDurationMs();
+        if (ShouldSuppressAutoArchive(reason, spanMs))
         {
+            LogArchiveOutcome(reason, "suppressed", _stats.Count, spanMs);
             _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
             Clear();
             return;
@@ -135,6 +137,7 @@ public sealed partial class Plugin
         var replayDoc = PrepareReplayDoc(entry);
         var summaryFired = MaybeUploadLog(entry, replayDoc);
         if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
+        LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
 
         _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
         Clear();

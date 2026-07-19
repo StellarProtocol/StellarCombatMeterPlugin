@@ -141,4 +141,13 @@ public sealed partial class Plugin
             $"[CombatMeter][auto-archive] commit reason={ArchiveReasonTag(reason)} now={nowMs} " +
             $"quietMs={nowMs - _lastCombatEventMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={ArchiveIdleSettleMs}");
     }
+
+    // One line per ManualArchive ATTEMPT with its outcome (skip-empty | suppressed | banked |
+    // banked+upload) — deliberately UNGATED Info, like the SP1 "Uploading log" line: archives are
+    // rare per-run lifecycle events, and their SILENT skip variants are exactly what field
+    // debugging needs (2026-07-19: a full dungeon run produced no history entry and no upload
+    // with zero log evidence; the overwritten-on-boot BepInEx log then destroyed the trail).
+    private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
+        => _services.Log.Info(
+            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs}");
 }
