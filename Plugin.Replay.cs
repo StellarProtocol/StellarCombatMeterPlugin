@@ -161,9 +161,22 @@ public sealed partial class Plugin
     // combat clock (_combatActive/_combatStartMs) is untouched by this — see PrepareReplayDoc's
     // msOffset rebase, which keeps the uploaded track's zero point at combat start regardless of how
     // early sampling actually began.
+    // Server clock at this method's previous invocation — a gap >= TickGapRearmMs means the
+    // framework tick was gated off (loading screen / world connect); see the re-arm below.
+    private long _lastReplayTickMs;
+
     private void TickReplayCapture(float deltaTimeSec)
     {
         if (_replay is null || !_uploadReplay) return;
+
+        // Loading-screen hardening (2026-07-19 silent-crash follow-up): the settle gate arms on
+        // the SceneChanged EVENT (load START); a load longer than ReplaySettleMs left the first
+        // resumed frames unguarded. A large gap between our own ticks IS the load — re-arm the
+        // settle from the resume moment so probing never starts on freshly-streaming entities.
+        var serverNowMs = _services.CombatSnapshot.ServerNowMs;
+        if (ReplayCaptureGate.ShouldRearmSettleAfterTickGap(serverNowMs, _lastReplayTickMs))
+            _lastSceneChangeMs = serverNowMs;
+        _lastReplayTickMs = serverNowMs;
 
         var runId = _services.Dungeon.CurrentRunId;
         if (runId != _replayRunId)

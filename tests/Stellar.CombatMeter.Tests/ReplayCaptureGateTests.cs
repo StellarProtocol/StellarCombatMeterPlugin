@@ -47,6 +47,23 @@ public class ReplayCaptureGateTests
     [Fact] public void Committed_scene_change_keeps_todays_per_segment_reset()
         => Assert.True(ReplayCaptureGate.ShouldResetOnSceneChange(Run, outgoingCandidate: true, incomingCandidate: true));
 
+    // --- loading-screen settle re-arm (tick gap = the framework tick was gated off) ---
+
+    [Fact] public void Long_tick_gap_rearms_settle()          // loading screen resume
+        => Assert.True(ReplayCaptureGate.ShouldRearmSettleAfterTickGap(nowMs: 10_000, lastTickMs: 2_000));
+
+    [Fact] public void Normal_frame_interval_does_not_rearm()
+        => Assert.False(ReplayCaptureGate.ShouldRearmSettleAfterTickGap(nowMs: 10_033, lastTickMs: 10_000));
+
+    [Fact] public void First_ever_tick_rearms()               // lastTickMs=0 at boot — harmless 2s settle
+        => Assert.True(ReplayCaptureGate.ShouldRearmSettleAfterTickGap(nowMs: 10_000, lastTickMs: 0));
+
+    [Fact] public void Backwards_clock_does_not_rearm()       // never wedge on a clock step
+        => Assert.False(ReplayCaptureGate.ShouldRearmSettleAfterTickGap(nowMs: 5_000, lastTickMs: 10_000));
+
+    [Fact] public void Gap_exactly_at_threshold_rearms()
+        => Assert.True(ReplayCaptureGate.ShouldRearmSettleAfterTickGap(nowMs: 3_000, lastTickMs: 2_000));
+
     // --- classification ---
 
     [Fact] public void Unknown_kind_is_not_candidate()
