@@ -289,6 +289,7 @@ public sealed partial class Plugin : IStellarPlugin
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
+        PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         RebuildSnapshots();

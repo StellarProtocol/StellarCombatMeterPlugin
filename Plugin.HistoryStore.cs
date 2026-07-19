@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Services;
+using Stellar.CombatMeter.LogUpload;   // UploadPhase / UploadStatusTable
 
 namespace Stellar.CombatMeter;
 
@@ -15,6 +16,11 @@ namespace Stellar.CombatMeter;
 public sealed partial class Plugin
 {
     private const string HistoryEntriesKey = "entries";
+    // Sidecar: per-entry upload state (phase + run URL) persisted next to "entries" in the SAME history
+    // config section. Kept OUT of the entry JSON so entries stay byte-identical to prior (v10) builds — a
+    // rollback DLL reads history intact and simply ignores + round-trips this key (PluginConfigService saves
+    // the whole config tree, so an unread key is preserved, not dropped).
+    private const string HistoryUploadStatesKey = "uploadStates";
     private readonly IConfigSection _historyPrefs;
 
     // Populate _history from the persisted string[] (entries are oldest→newest). Malformed/legacy entries are
@@ -32,8 +38,24 @@ public sealed partial class Plugin
             if (HistoryStore.TryDeserializeEntry(s, out var entry) && entry is not null) _history.Add(entry);
             else skipped++;
         }
-        TrimToCapacity(_history);
+        // Enforce the cap BEFORE hydrating so evicted runs are never rooted by _uploadStatus; the Forget loop
+        // matches the archive path (ManualArchive) and stays correct even if hydration order ever changes.
+        foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);
+        HydrateUploadStatesFromSidecar();   // restore "✓ Uploaded" + URL for the surviving entries
         if (skipped > 0) _services.Log.Info($"[CombatMeter] history: skipped {skipped} malformed entr{(skipped == 1 ? "y" : "ies")} on load");
+    }
+
+    // Match the persisted sidecar records back to the loaded entries by their stable (LevelUuid, ArchivedAtMs)
+    // composite and re-root the live upload state into _uploadStatus — this is what restores "✓ Uploaded" + the
+    // run URL after a relaunch. Orphaned records (no matching entry — an evicted/deleted run) are never applied
+    // and drop away on the next SaveHistory (the sidecar is rebuilt from live _history).
+    private void HydrateUploadStatesFromSidecar()
+    {
+        var byKey = HistoryStore.IndexUploadStates(_historyPrefs.Get<string[]>(HistoryUploadStatesKey, null));
+        if (byKey.Count == 0) return;
+        foreach (var e in _history)
+            if (byKey.TryGetValue((e.LevelUuid, e.ArchivedAtMs), out var rec))
+                _uploadStatus.Set(e, rec.Phase, rec.Url);
     }
 
     // Cap the history to HistoryCapacity, evicting oldest-first (front of the list). Single source of truth for
@@ -52,13 +74,30 @@ public sealed partial class Plugin
 
     private static readonly List<EncounterHistoryEntry> EmptyEntries = new();
 
-    // Serialize the whole _history list and persist it. Called after archive/eviction and after any clear.
+    // Serialize the whole _history list + the upload-state sidecar and persist them. Called after
+    // archive/eviction, after any clear, and (via PersistUploadStateIfDirty) once an async upload settles.
     private void SaveHistory()
     {
         var arr = new string[_history.Count];
         for (var i = 0; i < _history.Count; i++) arr[i] = HistoryStore.SerializeEntry(_history[i]);
         _historyPrefs.Set(HistoryEntriesKey, arr);
+        _historyPrefs.Set(HistoryUploadStatesKey, BuildUploadStateSidecar());
         _historyPrefs.Save();
+    }
+
+    // Gather the sidecar for the CURRENT live history: one record per entry that carries a durable (non-Idle)
+    // upload phase, keyed by (LevelUuid, ArchivedAtMs). A transient InFlight collapses to Idle (never
+    // persisted). Entries evicted/deleted since the last save aren't in _history, so their records fall away.
+    private string[] BuildUploadStateSidecar()
+    {
+        var live = new List<HistoryStore.UploadStateRecord>(_history.Count);
+        foreach (var e in _history)
+        {
+            var phase = UploadStatusTable.Persistable(_uploadStatus.PhaseFor(e));
+            if (phase == UploadPhase.Idle) continue;
+            live.Add(new HistoryStore.UploadStateRecord(e.LevelUuid, e.ArchivedAtMs, phase, _uploadStatus.UrlFor(e)));
+        }
+        return HistoryStore.SerializeUploadStates(live);
     }
 
     // ----- clear controls -----

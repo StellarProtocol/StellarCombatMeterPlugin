@@ -25,12 +25,15 @@ internal static partial class HistoryStore
     // "diff" (raw DungeonSceneInfo.difficulty / dungeon challenge level; semantic unconfirmed, 0 when absent).
     // v7 = + "dstart" (server epoch ms the dungeon run-timer started, IDungeonState.RunTimerStartMs; 0 when absent).
     // v8 = + "def" (IDungeonState.LastDefeatedCount snapshot; 0 when absent/not yet wired).
-    // v9 = + "tscore". v10 = + "trig" (archive trigger reason, "manual" when absent). NOTE: the
-    // reader REJECTS unknown keys (HistoryStore.Read.cs field switch default), so this bump is
-    // mandatory — pre-v10 plugin builds skip v10 entries as malformed (downgrade-only concern; the
-    // release ships framework+plugin together).
-    // The reader accepts v1..v10 — older entries just lack the newer keys and load with defaults, so
-    // writing v10 never strands old files. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
+    // v9 = + "tscore". v10 = + "trig" (archive trigger reason, "manual" when absent).
+    // STAYS AT v10 (deliberately): per-entry upload state is persisted as a SIDECAR "uploadStates" key in
+    // the history config section (Plugin.HistoryStore.cs), NOT as new entry keys — so the entry JSON stays
+    // byte-identical to what shipped v10 builds wrote. A version bump + new entry keys would make a rollback
+    // to a prior DLL read every entry as malformed (its reader gated v <= FormatVersion AND rejected unknown
+    // keys) and silently wipe the owner's irreplaceable history on the next save (the owner rolls back via
+    // .bak DLLs routinely). The reader is ALSO forward-hardened now (HistoryStore.Read.cs): it accepts
+    // v >= MinSupportedVersion and SKIPS unknown keys, so a FUTURE format bump cannot recreate that trap for
+    // THIS build either. (Runs archived before v3 have no persisted levelUuid → upload as 0.)
     internal const int FormatVersion = 10;
     internal const int MinSupportedVersion = 1;
 

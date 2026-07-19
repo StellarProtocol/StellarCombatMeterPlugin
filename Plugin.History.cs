@@ -54,6 +54,11 @@ public sealed partial class Plugin
         public int       Defeated;
         // Why this segment was archived ("manual"|"scene"|"wipe"|"boss"|"idle"|"stage") — v10.
         public string   Trigger = "manual";
+        // NOTE: per-entry upload state (phase + run URL) is NOT stored on the entry — it persists as a
+        // SIDECAR "uploadStates" key in the history config section (Plugin.HistoryStore.cs), keyed by the
+        // stable (LevelUuid, ArchivedAtMs) composite, so the entry JSON stays byte-identical to what older
+        // builds wrote. That keeps a rollback to a prior (v10) DLL from reading these entries as malformed
+        // and silently wiping the owner's irreplaceable history.
     }
 
     private void OnSceneChanged(string? newScene)
