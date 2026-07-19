@@ -149,5 +149,7 @@ public sealed partial class Plugin
     // with zero log evidence; the overwritten-on-boot BepInEx log then destroyed the trail).
     private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
         => _services.Log.Info(
-            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs}");
+            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
+            $"flow={_services.Dungeon.CurrentFlowState} outcome={_services.Dungeon.LastOutcome} " +
+            $"pass={_services.Dungeon.LastSettlement?.PassTimeSeconds ?? 0} result={CarriesRunResult()}");
 }

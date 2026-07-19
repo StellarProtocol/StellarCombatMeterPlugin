@@ -117,7 +117,7 @@ public sealed partial class Plugin
         // (shared-cooldown/latch bookkeeping via OnArchived, meter reset via Clear) identical to a
         // real archive, so nothing else changes. A MANUAL (button/hotkey) archive is never suppressed.
         var spanMs = ComputeDurationMs();
-        if (ShouldSuppressAutoArchive(reason, spanMs))
+        if (ShouldSuppressAutoArchive(reason, spanMs, CarriesRunResult()))
         {
             LogArchiveOutcome(reason, "suppressed", _stats.Count, spanMs);
             _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
@@ -203,9 +203,13 @@ public sealed partial class Plugin
 
     /// <summary>True when an AUTO-triggered archive should be skipped for lack of a real combat span.
     /// Every reason except <see cref="AutoArchive.ArchiveReason.Manual"/> is subject to the span gate;
-    /// a manual (button/hotkey) archive is always kept.</summary>
-    internal static bool ShouldSuppressAutoArchive(AutoArchive.ArchiveReason reason, long durationMs)
-        => reason != AutoArchive.ArchiveReason.Manual && durationMs < MinAutoArchiveMs;
+    /// a manual (button/hotkey) archive is always kept. EXEMPTION: an archive that carries the run
+    /// RESULT (<paramref name="carriesRunResult"/> — a fresh kill/settlement, a failed outcome, or a
+    /// terminal dungeon flow state) is never junk and is kept regardless of span, so the dungeon-FINISH
+    /// entry survives even when the user manually archived most of the fight just before it (owner
+    /// report 2026-07-19: a 159 ms finish slice was wrongly discarded, losing the kill/clear-time).</summary>
+    internal static bool ShouldSuppressAutoArchive(AutoArchive.ArchiveReason reason, long durationMs, bool carriesRunResult)
+        => reason != AutoArchive.ArchiveReason.Manual && durationMs < MinAutoArchiveMs && !carriesRunResult;
 
     /// <summary>
     /// True when <paramref name="current"/> is evidence of a kill genuinely earned by THIS
@@ -216,6 +220,16 @@ public sealed partial class Plugin
     /// </summary>
     internal static bool IsFreshKill(DungeonSettlementInfo? current, DungeonSettlementInfo? baseline)
         => current is not null && !current.Equals(baseline);
+
+    // True when THIS archive is banking the dungeon's RESULT — a fresh kill/settlement, a failed
+    // outcome (wipe), or a terminal dungeon flow state (End/Settlement). Such an archive is the
+    // run finish and must never be junk-suppressed for a short span (the dungeon-finish slice is
+    // tiny when the user manually archived the fight moments earlier). Reads the sticky dungeon
+    // state on the main thread (volatile reads; no IL2CPP), so it is safe at archive time.
+    private bool CarriesRunResult()
+        => IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart)
+        || _services.Dungeon.LastOutcome == DungeonOutcome.Failed
+        || _services.Dungeon.CurrentFlowState is DungeonFlowState.End or DungeonFlowState.Settlement;
 
     // 3-way run verdict. Fail wins outright (a wipe). A Success outcome = kill. A fresh settlement
     // counts as a kill ONLY when it carries a real CLEAR signal — pass_time (the settlement clear
