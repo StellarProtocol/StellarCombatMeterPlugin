@@ -54,6 +54,21 @@ internal sealed class HpTimelineSampler
         }
     }
 
+    /// <summary>Records the entity's death: appends ONE final pct=0 sample so the uploaded track
+    /// reaches 0 even though the live 2 Hz sampler stops when the boss entity vanishes on death
+    /// (the source of the "replay clipped at ~8-12%" report). Idempotent: no-op when the entity is
+    /// untracked or its last sample is already 0. ms0 is combat-relative, clamped ≥ 0 (unused here —
+    /// samples share one implicit 500 ms grid rooted at Track's ms0, there is no per-sample
+    /// timestamp to stamp; kept in the signature so callers pass the death instant for parity with
+    /// Track/the rest of the sampler API).</summary>
+    internal void MarkDead(long entityId, long ms0)
+    {
+        if (!_entries.TryGetValue(entityId, out var e)) return;
+        if (e.Pct.Count > 0 && e.Pct[^1] == 0) return;
+        if (e.Pct.Count >= MaxSamplesPerEntity) return;
+        e.Pct.Add(0);
+    }
+
     /// <summary>The sampled track for an entity, or null when it has no samples.</summary>
     internal HpTrack? GetTrack(long entityId)
         => _entries.TryGetValue(entityId, out var e) && e.Pct.Count > 0

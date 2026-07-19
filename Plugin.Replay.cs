@@ -80,6 +80,10 @@ public sealed partial class Plugin
     private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
     private HpTimelineSampler? _hpSampler;   // boss + players; created in InitReplay
 
+    // One-shot latch: has TickHpTimelines already stamped the boss's final 0% death sample
+    // (see HpTimelineSampler.MarkDead)? Reset alongside the rest of the capture state in ResetReplay().
+    private bool _bossDeathMarked;
+
     // Player sub-profession (spec), snapshotted DURING capture — spec is cast/loadout-inferred
     // from live caches that ResetEntities() wipes before archive, so resolving it at upload
     // time always yielded 0 (same timing bug as the boss name). Sticky: first non-zero wins.
@@ -263,6 +267,7 @@ public sealed partial class Plugin
         _hpSampler?.Reset();
         _replaySpecs.Clear();
         _trackCapLogged = false;
+        _bossDeathMarked = false;
     }
 
     // -----------------------------------------------------------------------
@@ -298,6 +303,18 @@ public sealed partial class Plugin
             {
                 var sub = _services.CombatSpec.GetSubProfession(id);
                 if (sub != 0) _replaySpecs[id.Value] = sub;
+            }
+        }
+
+        // When the boss's vitals read dead (hp <= 0 while it was a known boss), stamp a final 0%
+        // on its HP track so the replay shows the kill (see HpTimelineSampler.MarkDead). One-shot.
+        if (!_bossDeathMarked && _bossEntityId.Value != 0)
+        {
+            var bv = _services.CombatLookup.GetVitals(_bossEntityId);
+            if (bv.MaxHp > 0 && bv.Hp <= 0)
+            {
+                _hpSampler.MarkDead(_bossEntityId.Value, nowMs - _replay.CombatStartMs);
+                _bossDeathMarked = true;
             }
         }
 
