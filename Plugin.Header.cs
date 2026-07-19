@@ -40,6 +40,8 @@ public sealed partial class Plugin
                 new ButtonElement(ReadyCheckLabel, static () => { }, Enabled: () => false))), Width: 28f),
         new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
             new ButtonElement(() => "", LeaderConvene, Icon: () => _megaphonePng)), Width: 28f),
+        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
+            new ButtonElement(() => "", LeaderCountdown, Icon: () => _countdownPng)), Width: 28f),
         new SpacerElement(),
         new ButtonElement(() => MetricDrop[(int)_metric], static () => { })
             { OnClickWithRect = OpenMetricMenu },

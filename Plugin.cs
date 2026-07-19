@@ -128,6 +128,7 @@ public sealed partial class Plugin : IStellarPlugin
         _locationPinPng  = BuildLocationPinPng();        // flat-white location pin for the Marking header button
         _checkmarkPng    = BuildCheckmarkPng();          // flat-white checkmark for the Ready Check header button
         _megaphonePng    = BuildMegaphonePng();          // flat-white megaphone for the Convene header button
+        _countdownPng    = BuildCountdownPng();          // flat-white stopwatch for the Countdown header button
 
         _prefs = _services.Config.GetSection("combatmeter");
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
