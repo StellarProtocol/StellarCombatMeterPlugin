@@ -237,7 +237,7 @@ public sealed partial class Plugin
                 _uploadStateDirty = true;
                 if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict);
                 else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
-            }, delayMs);
+            }, delayMs, skipPrecheck: !flushBuffer);   // manual re-upload (flushBuffer=false) forces full ingest so the server can REPAIR a bad run
 
             MaybeReportPortraits();
 
