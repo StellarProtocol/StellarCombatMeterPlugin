@@ -37,7 +37,8 @@ internal static class LogUploader
     internal static void UploadFireAndForget(
         CombatLog log,
         Action<bool, int, string?, UploadVerdict?>? onComplete = null,
-        int delayMs = 0)
+        int delayMs = 0,
+        bool skipPrecheck = false)
     {
         // Serialize synchronously on the calling (main) thread — cheap; only called at archive.
         string json;
@@ -52,7 +53,7 @@ internal static class LogUploader
         }
 
         // Fire off the actual HTTP on the thread-pool so the main thread is never blocked.
-        _ = Task.Run(() => UploadAsync(log, json, onComplete, delayMs));
+        _ = Task.Run(() => UploadAsync(log, json, onComplete, delayMs, skipPrecheck));
     }
 
     /// <summary>P3 pre-check header — MUST mirror the worker's parsePrecheckHeader fields.
@@ -68,7 +69,7 @@ internal static class LogUploader
                $"region={log.Header.Region}";
     }
 
-    private static async Task UploadAsync(CombatLog log, string json, Action<bool, int, string?, UploadVerdict?>? onComplete, int delayMs = 0)
+    private static async Task UploadAsync(CombatLog log, string json, Action<bool, int, string?, UploadVerdict?>? onComplete, int delayMs = 0, bool skipPrecheck = false)
     {
         try
         {
@@ -79,7 +80,14 @@ internal static class LogUploader
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
             content.Headers.ContentEncoding.Add("gzip");
             using var req = new HttpRequestMessage(HttpMethod.Post, UploadUrl) { Content = content };
-            req.Headers.TryAddWithoutValidation("X-Stellar-Precheck", BuildPrecheckHeader(log));
+            // The precheck lets the server 409-shortcut a redundant AUTO upload into a supplement
+            // (bandwidth saver for a 20-player party archiving at once). A MANUAL re-upload is a
+            // deliberate "re-send everything and take my data" — it MUST reach the full ingest path
+            // so the server's non-destructive merge can REPAIR a run whose representative went bad
+            // (owner: "reupload to make it correct"; run 179048802794078208). Skipping the precheck
+            // is safe: the merge only replaces the stored blob when the incoming is strictly richer.
+            if (!skipPrecheck)
+                req.Headers.TryAddWithoutValidation("X-Stellar-Precheck", BuildPrecheckHeader(log));
 
             using var response = await HttpClient.SendAsync(req, CancellationToken.None).ConfigureAwait(false);
             var status = (int)response.StatusCode;
