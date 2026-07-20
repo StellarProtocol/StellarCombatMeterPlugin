@@ -33,9 +33,7 @@ public sealed partial class Plugin
         //    this, a party member whose SocialSync profession never arrived (open-world / freshly-joined
         //    party) rendered the DPS-red default bar + a blank crest even though their spec — and thus
         //    their class — was already known from their casts (owner-reported red/iconless meter).
-        int sub = ResolveSpec(id);
-        if (sub > 0) return sub / 10000;
-        return 0;
+        return RoleClassifier.ParentProfession(ResolveSpec(id));
     }
 
     // Update-tick hook. First warms the cache once the profession table is
