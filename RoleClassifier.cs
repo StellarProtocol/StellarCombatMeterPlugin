@@ -36,7 +36,7 @@ public static class RoleClassifier
     /// Parent profession id encoded in a cast-inferred sub-profession (spec) id.
     /// A sub id encodes its parent as &lt;ProfessionId&gt;_00_&lt;SpecIndex&gt;
     /// (ProfessionSpecs), i.e. parent = sub / 10000. Returns 0 (unknown) when the sub id
-    /// is absent or below the encoding floor — callers leave the row unstyled.
+    /// is absent or below the encoding floor — the row then falls back to the DPS-red default colour with no crest.
     /// </summary>
     public static int ParentProfession(int subProfessionId)
         => subProfessionId >= 10000 ? subProfessionId / 10000 : 0;

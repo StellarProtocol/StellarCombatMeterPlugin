@@ -7,7 +7,7 @@ namespace Stellar.CombatMeter.Tests;
 /// meter): when SocialSync never delivered a party member's profession, the parent class is
 /// derived from the cast-inferred sub-profession. A sub id encodes its parent as
 /// &lt;ProfessionId&gt;_00_&lt;SpecIndex&gt; (ProfessionSpecs), i.e. parent = sub / 10000.
-/// 0 = unknown: the row stays unstyled rather than guessing.
+/// 0 = unknown: the row falls back to the DPS-red default colour with no crest rather than guessing a class.
 /// </summary>
 public sealed class RoleClassifierParentProfessionTests
 {
