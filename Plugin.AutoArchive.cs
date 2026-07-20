@@ -168,6 +168,7 @@ public sealed partial class Plugin
             BossGone         = bossGone,
             InstancedRun     = IsInstancedRun(),
             FlowStateVersion = _services.Dungeon.FlowStateVersion,
+            CurrentFlowState = _services.Dungeon.CurrentFlowState,
         };
     }
 

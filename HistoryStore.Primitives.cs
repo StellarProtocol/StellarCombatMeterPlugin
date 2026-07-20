@@ -99,6 +99,38 @@ internal static partial class HistoryStore
         }
     }
 
+    // Consume and DISCARD one complete JSON value (scalar, string, array, or object) positioned after a
+    // colon. Lets an unknown key be skipped instead of failing the whole entry (forward-compat: a future
+    // format's new keys load under this build as "read what you understand"). Returns false only on a
+    // structurally broken value (EOF/Error/token in value position) so a genuinely malformed entry is still
+    // rejected. Never throws.
+    private static bool SkipValue(HistoryJsonReader r)
+    {
+        var k = r.Next();
+        return k switch
+        {
+            JsonTokenKind.Number or JsonTokenKind.String => true,        // scalar already consumed
+            JsonTokenKind.ArrayStart  => SkipContainer(r, JsonTokenKind.ArrayEnd),
+            JsonTokenKind.ObjectStart => SkipContainer(r, JsonTokenKind.ObjectEnd),
+            _ => false,                                                   // colon/comma/eof/error = malformed
+        };
+    }
+
+    // Skip tokens until the matching container end, recursing into nested arrays/objects. A well-formed
+    // (future-writer) value always closes; malformed input runs into Eof/Error and fails cleanly.
+    private static bool SkipContainer(HistoryJsonReader r, JsonTokenKind end)
+    {
+        while (true)
+        {
+            var k = r.Next();
+            if (k == end) return true;
+            if (k == JsonTokenKind.Eof || k == JsonTokenKind.Error) return false;
+            if (k == JsonTokenKind.ArrayStart  && !SkipContainer(r, JsonTokenKind.ArrayEnd))  return false;
+            if (k == JsonTokenKind.ObjectStart && !SkipContainer(r, JsonTokenKind.ObjectEnd)) return false;
+            // scalars, colons, commas inside the container are simply consumed and skipped
+        }
+    }
+
     // Read an object body, invoking <paramref name="onKey"/> for each key (reader positioned after the colon,
     // BEFORE the value). The ObjectStart has already been consumed by the caller (ReadArray).
     private static bool ReadObject(HistoryJsonReader r, Func<string, bool> onKey)

@@ -58,6 +58,23 @@ internal sealed class PositionTrack
         StrideMs *= 2;
     }
 
+    /// <summary>Frees the leading samples whose <see cref="PositionSample.Ms"/> is &lt;= <paramref name="ms"/>
+    /// (they've been uploaded in a completed window) and compacts the buffer in place; returns how many
+    /// were dropped. Samples are appended in ascending Ms and coalescing preserves that order, so the
+    /// kept tail is always a contiguous suffix. Lifecycle op (runs at archive, not on the sample path);
+    /// <see cref="StrideMs"/> is unchanged — the retained samples keep their spacing.</summary>
+    public int TrimBelow(long ms)
+    {
+        if (_buf is null || _count == 0) return 0;
+        var drop = 0;
+        while (drop < _count && _buf[drop].Ms <= ms) drop++;
+        if (drop == 0) return 0;
+        var remaining = _count - drop;
+        if (remaining > 0) Array.Copy(_buf, drop, _buf, 0, remaining);
+        _count = remaining;
+        return drop;
+    }
+
     /// <summary>Returns a snapshot of all currently retained samples in order.</summary>
     public PositionSample[] Snapshot()
     {

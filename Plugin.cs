@@ -158,6 +158,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
         _lastSceneName = _services.ClientState.CurrentSceneName;
+        _sceneIsCandidate = ResolveSceneCandidate(_lastSceneName);
 
         OnSkillBreakdownRequested += HandleSkillBreakdownRequested;
         OnInspectRequested += HandleInspectRequested;
@@ -288,6 +289,7 @@ public sealed partial class Plugin : IStellarPlugin
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
+        PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         RebuildSnapshots();
@@ -341,7 +343,13 @@ public sealed partial class Plugin : IStellarPlugin
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
-        ResetReplay();
+        // NOTE: Clear() no longer resets the replay (delta-window decouple, owner design 2026-07-19).
+        // Clear() runs at the end of every BANKED archive and on the Reset button (suppressed junk
+        // archives no longer call Clear() at all — owner ruling 2026-07-19: suppression wipes NOTHING) —
+        // wiping the replay here destroyed the accumulating walk-in at a suppressed archive (THE
+        // walk-in-clip root cause, proven 2026-07-19). The recorder is a per-RUN capture: it resets
+        // ONLY at true run end (scene-leave / run-id change) via ResetReplay, and each banked archive
+        // uploads a watermark window without stopping it. See _replayWatermarkMs / ResetReplay.
         _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
     }
 

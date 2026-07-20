@@ -316,4 +316,62 @@ public class PositionTrackAssemblerTests
         Assert.Equal(0, doc.Tracks["1"].Ms0);
         Assert.Empty(doc.Tracks["1"].Dx);
     }
+
+    // ── delta-window overload: boss HP decoupled from boss POSITION presence ─────────────────────
+    // A boss vanishes on death, so the FINAL window can carry the MarkDead death-0 HP sample with NO
+    // boss position track. BossHp/BossEntityId/meta must ride on the sliced HP alone — gating them on
+    // a boss position track re-clips the replay short of 0% (the exact bug this release fixes).
+
+    [Fact]
+    public void DeltaOverload_EmitsBossMetaRow_ForABossWithNoPositionTrack()
+    {
+        var samplesByEntity = new Dictionary<EntityId, PositionSample[]>
+        {
+            [new EntityId(7)] = new[] { new PositionSample(0, 1f, 2f, 3f, 0f) },   // a player w/ positions
+        };
+        var meta = new Dictionary<EntityId, PositionMetaDto>
+        {
+            [new EntityId(7)]  = new PositionMetaDto("player", "P", 0),
+            [new EntityId(42)] = new PositionMetaDto("boss", "Boss", 0),   // boss meta, NO position track
+        };
+
+        var doc = PositionTrackAssembler.Assemble(
+            samplesByEntity, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f, meta: meta);
+
+        // Boss meta row survives without a track → the site's boss name/star join still resolves.
+        Assert.True(doc.Meta.ContainsKey("42"));
+        Assert.Equal("boss", doc.Meta["42"].Kind);
+        Assert.Equal("Boss", doc.Meta["42"].Name);
+        Assert.False(doc.Tracks.ContainsKey("42"));   // no position track for the vanished boss
+
+        // The window's sliced boss HP (8% → death-0) rides the doc with a recomputed ms0, keyed to the boss.
+        var bossHp = ReplayWindow.SliceHp(new HpTrack(1000, new[] { 8, 0 }), 500, 3000, 500);
+        var composed = doc with { BossEntityId = "42", BossHp = bossHp };
+        Assert.Equal("42", composed.BossEntityId);
+        Assert.NotNull(composed.BossHp);
+        Assert.Equal(1000, composed.BossHp!.Ms0);
+        Assert.Equal(0, composed.BossHp.Pct[^1]);     // reaches 0% — the clip fix
+    }
+
+    [Fact]
+    public void DeltaOverload_NoBossFields_WhenBossAbsentFromWindow()
+    {
+        // Inverse guard: no boss HP in the window AND no boss position track → no boss meta row, and
+        // the doc's boss fields stay at their defaults (null / empty), exactly as before the change.
+        var samplesByEntity = new Dictionary<EntityId, PositionSample[]>
+        {
+            [new EntityId(7)] = new[] { new PositionSample(0, 1f, 2f, 3f, 0f) },
+        };
+        var meta = new Dictionary<EntityId, PositionMetaDto>
+        {
+            [new EntityId(7)] = new PositionMetaDto("player", "P", 0),
+        };
+
+        var doc = PositionTrackAssembler.Assemble(
+            samplesByEntity, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f, meta: meta);
+
+        Assert.False(doc.Meta.ContainsKey("42"));
+        Assert.Null(doc.BossHp);
+        Assert.Equal("", doc.BossEntityId);
+    }
 }

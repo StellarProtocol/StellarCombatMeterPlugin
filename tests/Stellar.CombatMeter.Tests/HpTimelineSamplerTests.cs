@@ -105,4 +105,29 @@ public class HpTimelineSamplerTests
         for (var i = 0; i < HpTimelineSampler.MaxSamplesPerEntity + 25; i++) s.Tick(500f);
         Assert.Equal(HpTimelineSampler.MaxSamplesPerEntity, s.GetTrack(1)!.Pct.Count);
     }
+
+    [Fact]
+    public void MarkDead_appends_a_final_zero_sample()
+    {
+        long hp = 50, maxHp = 100;
+        var s = new HpTimelineSampler(_ => (hp, maxHp));
+        s.Track(7, 0);
+        s.Tick(500f);                // one 50% sample
+        s.MarkDead(7, 1000);         // boss dies
+        var track = s.GetTrack(7)!;
+        Assert.Equal(0, track.Pct[^1]);       // last sample is 0
+        Assert.Equal(2, track.Pct.Count);     // 50 then 0
+    }
+
+    [Fact]
+    public void MarkDead_is_idempotent_and_ignores_untracked()
+    {
+        var s = new HpTimelineSampler(_ => (0, 100));
+        s.Track(7, 0);
+        s.Tick(500f);                // one 0% sample already
+        s.MarkDead(7, 1000);         // must NOT add a second 0
+        s.MarkDead(999, 1000);       // untracked -> no-op
+        Assert.Single(s.GetTrack(7)!.Pct);
+        Assert.Null(s.GetTrack(999));
+    }
 }

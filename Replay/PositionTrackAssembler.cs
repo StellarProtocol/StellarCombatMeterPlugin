@@ -39,13 +39,32 @@ internal static class PositionTrackAssembler
         IReadOnlyDictionary<EntityId, PositionMetaDto>? meta = null,
         int msOffset = 0)
     {
-        var dtoTracks = BuildTracks(tracks, origin, scale, msOffset);
+        var samples = new Dictionary<EntityId, PositionSample[]>(tracks.Count);
+        foreach (var id in tracks.Keys) samples[id] = tracks[id].Snapshot();
+        return Assemble(samples, hz, mapId, origin, scale, meta, msOffset);
+    }
+
+    /// <summary>
+    /// Delta-window overload: assembles from pre-sliced per-entity sample arrays (one upload window,
+    /// <c>(watermark, archive]</c>, produced by <see cref="ReplayWindow.SlicePositions"/>). Shares
+    /// the quantize/delta path with the whole-track overload above.
+    /// </summary>
+    public static PositionUploadDoc Assemble(
+        IReadOnlyDictionary<EntityId, PositionSample[]> samplesByEntity,
+        int hz,
+        int mapId,
+        (float X, float Z) origin,
+        float scale,
+        IReadOnlyDictionary<EntityId, PositionMetaDto>? meta = null,
+        int msOffset = 0)
+    {
+        var dtoTracks = BuildTracks(samplesByEntity, origin, scale, msOffset);
         var dtoMeta = BuildMeta(meta);
         return new PositionUploadDoc(hz, mapId, origin, scale, dtoTracks, dtoMeta);
     }
 
     private static IReadOnlyDictionary<string, PositionTrackDto> BuildTracks(
-        IReadOnlyDictionary<EntityId, PositionTrack> tracks,
+        IReadOnlyDictionary<EntityId, PositionSample[]> tracks,
         (float X, float Z) origin,
         float scale,
         int msOffset)
@@ -62,9 +81,8 @@ internal static class PositionTrackAssembler
     }
 
     private static PositionTrackDto BuildTrackDto(
-        PositionTrack track, (float X, float Z) origin, float scale, int msOffset)
+        PositionSample[] samples, (float X, float Z) origin, float scale, int msOffset)
     {
-        var samples = track.Snapshot();
         if (samples.Length == 0)
             return new PositionTrackDto(0, Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>());
 

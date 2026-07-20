@@ -63,6 +63,18 @@ public sealed class LogUploadTests
         Assert.Equal("https://example/run/1", table.UrlFor(a));
     }
 
+    // Persistence maps a transient InFlight to Idle (never persist "Uploading…"); terminal phases
+    // persist as-is so a relaunch restores "✓ Uploaded" / keeps a failure retryable (Task 13).
+    // (Inlined rather than a [Theory] because the internal enum can't be a public param type.)
+    [Fact]
+    public void Persistable_phase_collapses_only_inflight_to_idle()
+    {
+        Assert.Equal(UploadPhase.Idle,   UploadStatusTable.Persistable(UploadPhase.Idle));
+        Assert.Equal(UploadPhase.Idle,   UploadStatusTable.Persistable(UploadPhase.InFlight));   // transient never persisted
+        Assert.Equal(UploadPhase.Done,   UploadStatusTable.Persistable(UploadPhase.Done));
+        Assert.Equal(UploadPhase.Failed, UploadStatusTable.Persistable(UploadPhase.Failed));
+    }
+
     [Fact]
     public void Upload_status_Forget_drops_one_entry_and_Clear_empties_all()
     {
