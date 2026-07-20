@@ -19,6 +19,12 @@ public sealed partial class Plugin
         if (evt is CombatEvent.EntitySummonAppeared sa) { ObserveSummonAppeared(sa); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
+        // All-channel combat-activity clock (dealt / heal / taken are all DamageDealt) — feeds the
+        // auto-archive idle-settle delay so a deferred AUTO archive waits out trailing DoTs / the
+        // killing-blow tick before snapshotting. Distinct from _lastDamageMs (dealt-only, set in
+        // AccumulateDamage) which the Idle trigger depends on — do not conflate the two.
+        _lastCombatEventMs = d.TimestampMs;
+
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
         // the latch lived in AccumulateDamage, so an encounter that opened with a heal or an incoming hit
         // dropped those events from the timeline (the `if (_combatActive)` guards were unsatisfied) and
@@ -34,6 +40,7 @@ public sealed partial class Plugin
         // Replay: note both source and target BEFORE the player-only early-out so boss/add target ids
         // (e.g. a mob being hit by a player) also enter the entity set for position tracking.
         NoteReplayEntity(d.SourceId, d.TargetId);
+        ObserveAutoArchiveBoss(d.SourceId, d.TargetId);
 
         // Per-source stats/timeline: PLAYERS ONLY — mirror the _agg guard above. Mob sources are never
         // shown (live rows come from _agg, which discards non-players; History/SkillBreakdown are

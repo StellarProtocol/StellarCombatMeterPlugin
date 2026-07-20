@@ -30,12 +30,12 @@ public sealed partial class Plugin
     // scene, the current run id, samples held at reset, and whether the outgoing scene archived —
     // so an in-game diagnostics pass can confirm the reset fires on a no-combat scene change (the
     // path that previously leaked pre-dungeon samples into the next run's replay upload).
-    private void LogReplaySceneReset(string? outgoing, string? incoming, int samplesAtReset, bool archived)
+    private void LogReplaySceneReset(string? outgoing, string? incoming, int samplesAtReset, bool archived, bool kept)
     {
         if (!StellarDiagnostics.IsEnabled) return;
         _services.Log.Info(
             $"[CombatMeter.Replay][scene] reset '{outgoing}' -> '{incoming}' " +
-            $"runId={_services.Dungeon.CurrentRunId} samplesAtReset={samplesAtReset} outgoingArchived={archived}");
+            $"runId={_services.Dungeon.CurrentRunId} samplesAtReset={samplesAtReset} outgoingArchived={archived} kept={kept}");
     }
 
     // One-shot per encounter: fires the first time TickReplayCapture observes ReplayCapture.TrackCapHit
@@ -118,4 +118,36 @@ public sealed partial class Plugin
         _skillUsedLogCount++;
         _services.Log.Info($"[CombatMeter][skill-used] caster={su.CasterId.Value} self={isSelf} skill={su.SkillId} phase={su.Phase} -> imagine={(img is { } i ? i.SkillId : 0)} now={su.TimestampMs}");
     }
+
+    // One line per auto-archive fire — the Task 10 verification artifact. With the idle-settle delay
+    // this marks the moment the engine DECIDED (the pending was armed); the commit lands once combat
+    // goes quiet — see LogAutoArchiveCommit. The gap between the two lines is the trailing-damage
+    // settle window (the pending waits out ArchiveIdleSettleMs of no combat events).
+    private void LogAutoArchiveFired(AutoArchive.ArchiveReason reason, in AutoArchive.AutoArchiveInputs s)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][auto-archive] fired reason={ArchiveReasonTag(reason)} dead={s.DeadCount}/{s.RosterSize} unknown={s.UnknownCount} " +
+            $"idleMs={(s.LastDamageMs > 0 ? s.NowMs - s.LastDamageMs : 0)} flowVer={s.FlowStateVersion} run={s.InstancedRun}");
+    }
+
+    // One line per deferred AUTO archive that actually commits after the idle-settle wait — pair it
+    // with the preceding [auto-archive] fired line to confirm the quiet-window gap in-game. quietMs is
+    // how long combat had been silent (all channels) at commit; armedMs is the wait since the trigger.
+    private void LogAutoArchiveCommit(AutoArchive.ArchiveReason reason, long nowMs)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][auto-archive] commit reason={ArchiveReasonTag(reason)} now={nowMs} " +
+            $"quietMs={nowMs - _lastCombatEventMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={ArchiveIdleSettleMs}");
+    }
+
+    // One line per ManualArchive ATTEMPT with its outcome (skip-empty | suppressed | banked |
+    // banked+upload) — deliberately UNGATED Info, like the SP1 "Uploading log" line: archives are
+    // rare per-run lifecycle events, and their SILENT skip variants are exactly what field
+    // debugging needs (2026-07-19: a full dungeon run produced no history entry and no upload
+    // with zero log evidence; the overwritten-on-boot BepInEx log then destroyed the trail).
+    private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
+        => _services.Log.Info(
+            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs}");
 }

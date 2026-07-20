@@ -29,6 +29,11 @@ public sealed partial class Plugin
     private const int    ReplayMaxSamplesPerTrack = 3600;
     private const int    ReplayMaxTotalSamples    = 200_000;
 
+    // Skip ALL live-transform probing for this long after a scene change (line-switch / dungeon-
+    // enter): the game mass-frees and re-streams nearby entities and the framework's AOI-disappear
+    // bookkeeping can lag the native teardown by a few frames. See IsWithinReplaySettle.
+    internal const long  ReplaySettleMs           = 2_000;
+
     // -----------------------------------------------------------------------
     // State
     // -----------------------------------------------------------------------
@@ -40,6 +45,26 @@ public sealed partial class Plugin
     // DIFFERENT run (including via 0, e.g. a crash → re-enter) can be detected and the prior
     // run's capture dropped before it leaks into the new run's replay (Bug 2 source fix).
     private long _replayRunId;
+
+    // Server clock at the last scene change (ClientState.SceneChanged -> OnSceneChanged). Feeds the
+    // post-transition settle gate in TickReplayCapture. 0 = no scene change seen yet (boot).
+    private long _lastSceneChangeMs;
+
+    // Is the CURRENT scene instanced-candidate content (dungeon approach / raid lobby)?
+    // Drives provisional capture (ReplayCaptureGate.ShouldCapture) before the run-id
+    // latches. Resolved on scene change from the game scene table's SceneKind; false when
+    // the scene name doesn't parse or the table row is missing (safe default: Off).
+    private bool _sceneIsCandidate;
+
+    // Resolves whether a scene (IClientState.CurrentSceneName — the scene-table id as a
+    // string, same parse CombatLogAssembler uses for MapId) is instanced-candidate content.
+    private bool ResolveSceneCandidate(string? sceneName)
+    {
+        if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneId))
+            return false;
+        var info = _services.GameData.World.GetScene(sceneId);
+        return info.HasValue && ReplayCaptureGate.IsCandidateScene(info.Value.SceneKind);
+    }
 
     // One-shot latch for LogReplayTrackCapHit — set the first time this encounter's ReplayCapture
     // reports TrackCapHit, so the diagnostics line fires once instead of every frame. Reset alongside
@@ -54,6 +79,23 @@ public sealed partial class Plugin
     private EntityId   _bossEntityId;          // set when boss is identified at assembly time; zero = none
     private MonsterInfo? _bossMonsterInfo;     // snapshotted at capture (caches live); used at archive (caches wiped)
     private HpTimelineSampler? _hpSampler;   // boss + players; created in InitReplay
+
+    // One-shot latch: has TickHpTimelines already stamped the boss's final 0% death sample
+    // (see HpTimelineSampler.MarkDead)? Reset alongside the rest of the capture state in ResetReplay().
+    private bool _bossDeathMarked;
+
+    // Delta-window upload watermark (owner design 2026-07-19): capture-relative ms through which the
+    // replay has already been uploaded. Each banked archive serializes only (watermark, now] and — on
+    // a successful upload hand-off — advances the watermark to that archive's cut and frees the
+    // consumed samples. The recorder NEVER stops or resets mid-run; the buffers reset only at true run
+    // end (scene-leave / run-id change) via ResetReplay. Started below zero so window 1 carries the
+    // walk-in lead (position sample ms=0). A suppressed / empty / failed-hand-off window leaves the
+    // watermark unchanged, so its samples merge into the next window (at-least-once, owner default 2).
+    private const long ReplayWatermarkUnset = -1;
+    private long _replayWatermarkMs = ReplayWatermarkUnset;
+    // Upper bound of the window PrepareReplayDoc just serialized; consumed by AdvanceReplayWatermark
+    // once the caller confirms the upload was handed off. Only meaningful between those two calls.
+    private long _replayWindowUpperMs;
 
     // Player sub-profession (spec), snapshotted DURING capture — spec is cast/loadout-inferred
     // from live caches that ResetEntities() wipes before archive, so resolving it at upload
@@ -78,12 +120,55 @@ public sealed partial class Plugin
     {
         _uploadReplay = _prefs.Get(PrefUploadReplay, ReplayDefaults.UploadReplayDefault);
         _replay = new ReplayCapture(
-            tryGet: (EntityId id, out Position3D p, out float yaw) =>
-                _services.EntityTransforms.TryGetTransform(id, out p, out yaw),
+            tryGet: SafeTryGetTransform,
             maxSamplesPerTrack:  ReplayMaxSamplesPerTrack,
             maxTotalSamples:     ReplayMaxTotalSamples,
             sampleIntervalMs:    ReplaySampleIntervalMs);
         _hpSampler = new HpTimelineSampler(ReadHpPair);
+    }
+
+    // The replay position probe reads a LIVE IL2CPP entity model (ZModel.GetAttrGoPosition via
+    // reflection). If that model is freed — an entity torn down during a scene/line teardown, or a
+    // party member who walked out of AOI on a wide map — the reflected call is an UNCATCHABLE native
+    // access violation (a managed try/catch does NOT stop a c0000005). That is the crash-on-line-
+    // switch / crash-on-dungeon-enter fault. Two pure gates make the probe safe.
+
+    /// <summary>Liveness gate: probe SELF (the local player, never freed while in-world), a PARTY
+    /// member (present with you from dungeon-enter — must be probed so the pre-combat walk-in is
+    /// captured, and NOT gated on combat vitals which only arrive on the first hit), or any other
+    /// entity the framework currently confirms AOI-present (<paramref name="aoiKnown"/>). A
+    /// not-yet-engaged / despawned non-party mob is skipped. An out-of-AOI party member stays safe
+    /// even though probed: the game's <c>GetEntity</c> returns null for culled ids, so the probe
+    /// yields a clean GAP, never a deref of a freed model. Pure, so it is unit-tested.</summary>
+    internal static bool ShouldProbeTransform(EntityId id, EntityId self, bool isPartyMember, bool aoiKnown)
+        => id.Value == self.Value || isPartyMember || aoiKnown;
+
+    /// <summary>Settle gate: skip the whole sample pass for <see cref="ReplaySettleMs"/> after a
+    /// scene change, covering the mass teardown/rebuild window where AOI bookkeeping lags the native
+    /// free. 0 lastSceneChangeMs = boot (not settling); a backwards clock does not wedge it.</summary>
+    internal static bool IsWithinReplaySettle(long nowMs, long lastSceneChangeMs)
+        => lastSceneChangeMs != 0 && nowMs >= lastSceneChangeMs && nowMs - lastSceneChangeMs < ReplaySettleMs;
+
+    // Delegate handed to ReplayCapture — gates the live-transform probe on entity liveness so it can
+    // never dereference a freed IL2CPP model. GetVitals is a managed cache read (no IL2CPP), so the
+    // gate itself is always safe to evaluate even mid-teardown.
+    private bool SafeTryGetTransform(EntityId id, out Position3D position, out float yaw)
+    {
+        position = Position3D.Zero;
+        yaw = 0f;
+        if (!ShouldProbeTransform(id, _services.CombatSnapshot.LocalEntityId,
+                IsRosterMember(id), _services.CombatLookup.GetVitals(id).IsKnown))
+            return false;
+        return _services.EntityTransforms.TryGetTransform(id, out position, out yaw);
+    }
+
+    // Is this id the local player's current party roster? Cheap linear scan (roster is <= 20). Used
+    // by the probe liveness gate so party members are captured during the pre-combat walk-in.
+    private bool IsRosterMember(EntityId id)
+    {
+        foreach (var m in _services.PartyRoster.Members)
+            if (m.EntityId.Value == id.Value) return true;
+        return false;
     }
 
     // Called every frame from OnUpdate. Gate: toggle on + dungeon/raid run in progress. Deliberately
@@ -93,22 +178,34 @@ public sealed partial class Plugin
     // combat clock (_combatActive/_combatStartMs) is untouched by this — see PrepareReplayDoc's
     // msOffset rebase, which keeps the uploaded track's zero point at combat start regardless of how
     // early sampling actually began.
+    // Server clock at this method's previous invocation — a gap >= TickGapRearmMs means the
+    // framework tick was gated off (loading screen / world connect); see the re-arm below.
+    private long _lastReplayTickMs;
+
     private void TickReplayCapture(float deltaTimeSec)
     {
         if (_replay is null || !_uploadReplay) return;
 
+        // Loading-screen hardening (2026-07-19 silent-crash follow-up): the settle gate arms on
+        // the SceneChanged EVENT (load START); a load longer than ReplaySettleMs left the first
+        // resumed frames unguarded. A large gap between our own ticks IS the load — re-arm the
+        // settle from the resume moment so probing never starts on freshly-streaming entities.
+        var serverNowMs = _services.CombatSnapshot.ServerNowMs;
+        if (ReplayCaptureGate.ShouldRearmSettleAfterTickGap(serverNowMs, _lastReplayTickMs))
+            _lastSceneChangeMs = serverNowMs;
+        _lastReplayTickMs = serverNowMs;
+
         var runId = _services.Dungeon.CurrentRunId;
         if (runId != _replayRunId)
         {
-            // Entering a NEW instanced run (incl. crash → re-enter): drop the prior run's
-            // capture so its movement can't leak into this run's replay (Bug 2 source fix).
-            // Only clear on a non-zero id so we never wipe a just-finished run's tracks
-            // before PrepareReplayDoc (fires at archive time, in-dungeon) has assembled them.
-            if (runId != 0) ResetReplay();
+            // 0 -> snowflake ADOPTS the provisional walk-in/lobby buffer (no reset);
+            // snowflake -> different-snowflake still wipes (Bug-2 crash-re-enter fix);
+            // snowflake -> 0 keeps the buffer for the dungeon->town archive window.
+            if (ReplayCaptureGate.ShouldResetOnRunIdChange(_replayRunId, runId)) ResetReplay();
             _replayRunId = runId;
         }
 
-        _replay.Active = IsInstancedRun();
+        _replay.Active = ReplayCaptureGate.ShouldCapture(runId, _sceneIsCandidate);
         if (!_replay.Active) return;
         // Register local + party entities up front so their pre-combat movement (before any of them
         // has dealt/taken damage) is sampled too — NoteReplayEntity below only fires from combat
@@ -117,6 +214,10 @@ public sealed partial class Plugin
         NoteRosterEntities();
         var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
+        // Post-scene-change settle gate — skip probing while the mass entity teardown/rebuild after a
+        // line-switch / dungeon-enter is still in flight (see SafeTryGetTransform's crash rationale).
+        // NoteRosterEntities above already registered the tracks, so sampling resumes cleanly after.
+        if (IsWithinReplaySettle(_services.CombatSnapshot.ServerNowMs, _lastSceneChangeMs)) return;
         _replay.Tick(nowMs, dtMs);
         if (_replay.TrackCapHit && !_trackCapLogged) { _trackCapLogged = true; LogReplayTrackCapHit(); }
         TickHpTimelines(nowMs, dtMs);
@@ -170,6 +271,9 @@ public sealed partial class Plugin
 
     private bool IsInstancedRun() => _services.Dungeon.CurrentRunId != 0;
 
+    // Full reset — fired ONLY at true run end (scene-leave out of the run / run-id change), never at
+    // archive time anymore (delta-window model): the recorder accumulates across the whole run and each
+    // banked archive uploads a window + advances the watermark instead. See _replayWatermarkMs.
     private void ResetReplay()
     {
         _replay?.Reset();
@@ -179,6 +283,9 @@ public sealed partial class Plugin
         _hpSampler?.Reset();
         _replaySpecs.Clear();
         _trackCapLogged = false;
+        _bossDeathMarked = false;
+        _replayWatermarkMs  = ReplayWatermarkUnset;
+        _replayWindowUpperMs = 0;
     }
 
     // -----------------------------------------------------------------------
@@ -192,6 +299,9 @@ public sealed partial class Plugin
     private void TickHpTimelines(int nowMs, float dtMs)
     {
         if (_hpSampler is null || _replay is null) return;
+        // HP timelines stay committed-only: pre-combat vitals are unknown/absent (no boss
+        // exists yet), and the provisional walk-in needs positions only.
+        if (!IsInstancedRun()) return;
 
         // Lazy boss identification — unchanged semantics from the boss-HP feature.
         if (_bossEntityId.Value == 0 && _replay.Tracks.Count > 0)
@@ -211,6 +321,18 @@ public sealed partial class Plugin
             {
                 var sub = _services.CombatSpec.GetSubProfession(id);
                 if (sub != 0) _replaySpecs[id.Value] = sub;
+            }
+        }
+
+        // When the boss's vitals read dead (hp <= 0 while it was a known boss), stamp a final 0%
+        // on its HP track so the replay shows the kill (see HpTimelineSampler.MarkDead). One-shot.
+        if (!_bossDeathMarked && _bossEntityId.Value != 0)
+        {
+            var bv = _services.CombatLookup.GetVitals(_bossEntityId);
+            if (bv.MaxHp > 0 && bv.Hp <= 0)
+            {
+                _hpSampler.MarkDead(_bossEntityId.Value, nowMs - _replay.CombatStartMs);
+                _bossDeathMarked = true;
             }
         }
 
@@ -251,47 +373,44 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// At archive: assembles + signs the replay position doc for <paramref name="entry"/>, ALWAYS
-    /// resetting the capture buffers before returning (regardless of outcome) — the capture-buffer
-    /// reset must happen at archive time no matter what any later upload decision does. Returns
-    /// <c>null</c> when replay upload is off, no capture exists, the run has no level id, or
-    /// nothing was sampled. Never throws. Callers (Plugin.History.cs / Plugin.LogUpload.cs) decide
-    /// separately whether to fire <see cref="UploadReplayDoc"/> for the returned doc, based on the
-    /// summary upload's verdict (skip when the server already has positions for this run).
+    /// Delta-window serializer (owner design 2026-07-19): assembles + signs the replay doc for the
+    /// window <c>(watermark, now]</c> — the samples captured since the last uploaded window — linked to
+    /// <paramref name="entry"/>'s damage segment. Does NOT reset or advance anything: the recorder
+    /// keeps accumulating, and the watermark advances only once the caller confirms the upload was
+    /// handed off (see <see cref="AdvanceReplayWatermark"/> / <c>FinalizeAndMaybeUploadReplay</c>).
+    /// Returns <c>null</c> — leaving the watermark and buffers untouched — when replay upload is off,
+    /// there is no capture, the run has no level id, or the window is EMPTY (no samples since the
+    /// watermark, e.g. a suppressed-junk or between-pull archive). Never throws.
     /// </summary>
     internal PositionUploadDoc? PrepareReplayDoc(EncounterHistoryEntry entry)
     {
         try
         {
-            if (!_uploadReplay || _replay is null) { ResetReplay(); return null; }
-            if (entry.LevelUuid == 0 || _replay.TotalSamples == 0) { ResetReplay(); return null; }
+            if (!_uploadReplay || _replay is null) return null;      // Clear-decouple: NEVER reset here
+            if (entry.LevelUuid == 0) return null;
 
+            // upperMs = capture-relative "now" (the samples' own clock) — covers every buffered sample
+            // above the watermark, incl. a late MarkDead 0-stamp. See _replayWatermarkMs for the model.
+            var upperMs = (long)((int)_services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs);
+            var windowTracks = SliceWindowPositions(_replayWatermarkMs, upperMs);
+            if (windowTracks.Count == 0) return null;                // empty window → no upload, watermark unchanged
+            _replayWindowUpperMs = upperMs;
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
-
-            // Sampling now starts at dungeon-enter (TickReplayCapture), not at first damage, so
-            // _replay.CombatStartMs (the capture's own zero point) usually PRECEDES the DPS combat
-            // clock's encounter.StartMs. Rebase every track's Ms0 by this offset so the uploaded
-            // doc's zero point stays exactly at combat start (matching StartMs below) — pre-combat
-            // samples land at negative ms, which the codec/viewer already tolerate (plain signed
-            // ints; the site's death/imagine-cast markers are converted the same way and only ever
-            // occur at/after combat start, so they stay aligned with the extended position timeline).
+            // Per-doc contract unchanged: rebase Ms0 onto THIS segment's combat start (capture zero is run-constant).
             var msOffset = _replay.CombatStartMs - (int)encounter.StartMs;
 
-            // Resolve boss info for meta + upload fields using capture-time snapshot.
-            var (bossEntityIdStr, bossMonsterInfo) = ResolveBossUploadFields();
-            var bossHpTrack = RebaseHpTrack(BuildBossHpTrack(), msOffset);
+            var boss = ResolveWindowBossFields(windowTracks, upperMs, msOffset);
 
             var doc = PositionTrackAssembler.Assemble(
-                tracks: _replay.Tracks,
+                samplesByEntity: windowTracks,
                 hz:     2,
                 mapId:  encounter.MapId,
                 origin: (0f, 0f),
                 scale:  0.1f,
                 msOffset: msOffset,
-                meta:   BuildReplayMeta(bossEntityIdStr, bossMonsterInfo));
+                meta:   BuildReplayMeta(WindowMetaIds(windowTracks, boss.inWindow), boss.idStr, boss.info));
 
-            var nonce = GenerateReplayNonce();
             doc = doc with
             {
                 LogId        = GenerateReplayLogId(),
@@ -299,35 +418,32 @@ public sealed partial class Plugin
                 LocalUid     = localUid,
                 StartMs      = encounter.StartMs,
                 EndMs        = encounter.EndMs,
-                Nonce        = nonce,
-                BossEntityId = bossEntityIdStr,
-                BossHp       = bossHpTrack,
-                PlayerHp     = RebasePlayerHpTracks(BuildPlayerHpTracks(), msOffset),
+                Nonce        = GenerateReplayNonce(),
+                BossEntityId = boss.idStr,
+                BossHp       = boss.hp,
+                PlayerHp     = RebasePlayerHpTracks(SlicePlayerHpWindow(upperMs), msOffset),
             };
-            doc = doc with { Sig = SignReplay(doc) };
-
-            ResetReplay();
-
-            return doc;
+            return doc with { Sig = SignReplay(doc) };
         }
         catch (Exception ex)
         {
-            ResetReplay();
             _services.Log.Warning($"[CombatMeter.Replay] threw: {ex.Message}");
-            return null;
+            return null;   // no reset — samples survive to the next window (watermark unchanged)
         }
     }
 
     /// <summary>
     /// Fires the fire-and-forget positions upload for an already-assembled <paramref name="doc"/>
-    /// (see <see cref="PrepareReplayDoc"/>). Never throws. Region comes straight from
-    /// <see cref="Stellar.Abstractions.Services.IGameEnvironment"/> — <c>PositionUploadDoc</c>
-    /// carries no region of its own, and this call site has no <c>CombatLog</c> in scope
-    /// (both of <c>UploadReplayDoc</c>'s callers — the summary-upload callback legs in
-    /// Plugin.LogUpload.cs and the no-summary-fired path in Plugin.History.cs — only have
-    /// <c>replayDoc</c>, not the assembled log).
+    /// (see <see cref="PrepareReplayDoc"/>). Never throws. Returns <c>true</c> when the doc was handed
+    /// off to the upload queue (the synchronous dispatch did not throw) — the signal that gates the
+    /// watermark advance (owner default 2); <c>false</c> only when the dispatch itself threw, in which
+    /// case the caller keeps the watermark so the window re-uploads next time. Region comes straight
+    /// from <see cref="Stellar.Abstractions.Services.IGameEnvironment"/> — <c>PositionUploadDoc</c>
+    /// carries no region of its own, and this call site has no <c>CombatLog</c> in scope (both of
+    /// <c>UploadReplayDoc</c>'s callers — the summary-upload callback legs in Plugin.LogUpload.cs and
+    /// the no-summary-fired path in Plugin.History.cs — only have <c>replayDoc</c>, not the log).
     /// </summary>
-    internal void UploadReplayDoc(PositionUploadDoc doc)
+    internal bool UploadReplayDoc(PositionUploadDoc doc)
     {
         try
         {
@@ -338,10 +454,12 @@ public sealed partial class Plugin
                 else    _services.Log.Warning(
                     $"[CombatMeter.Replay] positions FAILED (HTTP {status}): {err}");
             });
+            return true;
         }
         catch (Exception ex)
         {
             _services.Log.Warning($"[CombatMeter.Replay] upload threw: {ex.Message}");
+            return false;
         }
     }
 
@@ -371,11 +489,14 @@ public sealed partial class Plugin
     // Helpers
     // -----------------------------------------------------------------------
 
+    // Meta covers the entities PRESENT IN THIS WINDOW (ids = the windowed track keys), per the
+    // delta-window design — a boss present across windows is described in each; the site's
+    // first-write-wins name capture + per-segment bossId mapping already handle the repetition.
     private Dictionary<EntityId, PositionMetaDto> BuildReplayMeta(
-        string bossEntityIdStr, MonsterInfo? bossMonsterInfo)
+        ICollection<EntityId> ids, string bossEntityIdStr, MonsterInfo? bossMonsterInfo)
     {
-        var meta = new Dictionary<EntityId, PositionMetaDto>(_replay!.Tracks.Count);
-        foreach (var id in _replay.Tracks.Keys)
+        var meta = new Dictionary<EntityId, PositionMetaDto>(ids.Count);
+        foreach (var id in ids)
         {
             MonsterInfo? monsterInfo;
             if (!id.IsPlayer && !string.IsNullOrEmpty(bossEntityIdStr) &&

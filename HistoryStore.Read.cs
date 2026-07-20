@@ -36,9 +36,12 @@ internal static partial class HistoryStore
             if (r.Next() != JsonTokenKind.Colon) return false;
             switch (key)
             {
-                // Accept any supported version (v1 || v2). v1 entries simply carry no "entities" key, so they load
-                // with an empty Entities map — backward compatible. A future (unsupported) version is rejected.
-                case "v":       if (!ReadLong(r, out var v)) return false; seenVersion = v >= MinSupportedVersion && v <= FormatVersion; break;
+                // Forward-hardened version gate: accept ANY version >= MinSupportedVersion — "read what you
+                // understand". A newer-than-this-build entry is NOT rejected; its recognized keys load and its
+                // unknown keys are skipped (default arm below). This is what stops a FUTURE format bump from
+                // making THIS build (once it is the rolled-back-to DLL) read newer files as malformed and wipe
+                // them. Older entries simply lack newer keys and load with defaults.
+                case "v":       if (!ReadLong(r, out var v)) return false; seenVersion = v >= MinSupportedVersion; break;
                 case "scene":   if (!ReadString(r, out var sc)) return false; e.SceneName = sc; break;
                 case "enter":   if (!ReadLong(r, out e.EnteredAtMs)) return false; break;
                 case "arch":    if (!ReadLong(r, out e.ArchivedAtMs)) return false; break;
@@ -53,10 +56,14 @@ internal static partial class HistoryStore
                 case "dstart":  if (!ReadLong(r, out e.DungeonStartMs)) return false; break;
                 case "res":     if (!ReadString(r, out var res)) return false; e.Result = res ?? "partial"; break;
                 case "def":     if (!ReadLong(r, out var def)) return false; e.Defeated = (int)def; break;
+                case "trig":    if (!ReadString(r, out var trig)) return false; e.Trigger = trig ?? "manual"; break;
                 case "stats":   if (!ReadStats(r, e.Stats)) return false; break;
                 case "series":  if (!ReadSeries(r, e.Series)) return false; break;
                 case "entities": if (!ReadEntities(r, e.Entities)) return false; break;
-                default: return false;
+                // Forward-hardening: an UNKNOWN key (a newer format's addition) is SKIPPED, not rejected —
+                // its value is consumed whole so parsing continues. Known keys still validate their shape,
+                // so a corrupt recognized field still fails the entry.
+                default:        if (!SkipValue(r)) return false; break;
             }
         }
     }

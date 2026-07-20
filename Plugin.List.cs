@@ -171,12 +171,21 @@ public sealed partial class Plugin
             return ps.MaxHealth > 0 && ps.Health <= 0;
         }
         var v = _services.CombatLookup.GetVitals(id);
-        if (v.IsKnown && v.MaxHp > 0) return v.Hp <= 0;
+        // HasHpObservation (not just IsKnown): a MaxHp-only observation is "alive, HP unknown" —
+        // reading its Hp:0 as death was the false skull/strike/grey-name bug (spec A1).
+        if (v.HasHpObservation && v.MaxHp > 0) return v.Hp <= 0;
         long charId = id.Value >> 16;
         foreach (var m in _services.PartyRoster.Members)
             if (m.CharId == charId && m.MaxHp > 0) return m.Hp <= 0;
         return false;
     }
+
+    // TeamMemberFastSyncData.state values, calibrated in-game — see the devkit's
+    // docs/recon/party-fastsync-state-calibration.md (2026-07-17 sync spec, A2). 0 = unmapped:
+    // FastSyncStateMapper.TryMap is INERT until calibration fills a value in, so an uncalibrated or
+    // regressed wire build silently falls back to the pre-existing behavior everywhere it's used.
+    private const int FastSyncStateDead    = 0;   // ← Step 5 REPLACES with the calibrated value
+    private const int FastSyncStateOffline = 0;   // ← Step 5 REPLACES with the calibrated value
 
     // Class-crest icon for a row (null while loading / no profession). uv is the atlas sub-rect.
     private object? LoadCrest(EntityId id, out UvRect uv)
@@ -214,7 +223,9 @@ public sealed partial class Plugin
         }
 
         var v = _services.CombatLookup.GetVitals(id);
-        if (v.IsKnown && v.MaxHp > 0) return Mathf.Clamp01((float)v.Hp / v.MaxHp);
+        // HasHpObservation (not just IsKnown): a MaxHp-only observation has no real HP reading yet —
+        // fall through to the roster fast-sync HP instead of rendering a false 0% bar (spec A1).
+        if (v.HasHpObservation && v.MaxHp > 0) return Mathf.Clamp01((float)v.Hp / v.MaxHp);
 
         long charId = id.Value >> 16;
         foreach (var m in _services.PartyRoster.Members)

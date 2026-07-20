@@ -33,9 +33,29 @@ public sealed partial class Plugin
 
     private readonly UploadStatusTable _uploadStatus = new();
 
+    // Set by the fire-and-forget upload callback (thread-pool thread) whenever an entry's terminal
+    // upload phase changes; drained on the Unity main thread (PersistUploadStateIfDirty, called from
+    // OnUpdate) to re-persist history so a completed Done/Failed — including a manual retry's result,
+    // which has no surrounding archive save — survives a relaunch. The archive-time SaveHistory runs
+    // BEFORE the async upload finishes, so without this the most-recent upload would not be persisted.
+    private volatile bool _uploadStateDirty;
+
+    // Main-thread drain: re-persist history once after an async upload changed a terminal phase.
+    // A cheap volatile read per tick; SaveHistory runs only on the tick that observes the flag set.
+    private void PersistUploadStateIfDirty()
+    {
+        if (!_uploadStateDirty) return;
+        _uploadStateDirty = false;
+        SaveHistory();
+    }
+
     internal UploadPhase UploadStateFor(EncounterHistoryEntry e) => _uploadStatus.PhaseFor(e);
 
     internal string? UploadUrlFor(EncounterHistoryEntry e) => _uploadStatus.UrlFor(e);
+
+    // Persistence lives in Plugin.HistoryStore.cs: the live _uploadStatus is mirrored to the "uploadStates"
+    // sidecar (keyed by the entry's LevelUuid+ArchivedAtMs) at SaveHistory and re-hydrated from it at
+    // LoadHistory. The transient-InFlight collapse rule is UploadStatusTable.Persistable.
 
     // -----------------------------------------------------------------------
     // Settings keys (read/written from the "combatmeter" config section)
@@ -148,6 +168,7 @@ public sealed partial class Plugin
         if (entry.LevelUuid == 0)   // pre-v3 archive (identity not persisted) — /run/0 would collide; refuse
         {
             _uploadStatus.Set(entry, UploadPhase.Failed);
+            _uploadStateDirty = true;
             _services.Log.Warning("[CombatMeter.SP1] Cannot upload: run has no levelUuid (archived before run-identity was persisted). Re-run the fight to upload it.");
             return;
         }
@@ -191,7 +212,7 @@ public sealed partial class Plugin
             // Pass the capture-time boss config id so the assembler doesn't re-resolve from
             // wiped entity caches (ResetEntities fires before archive on scene change).
             var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count);
-            var url = "https://logs.stellarresonance.app/run/" + log.Header.Region + "/" +
+            var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
@@ -206,8 +227,14 @@ public sealed partial class Plugin
             LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
             {
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
-                // call thread-safe log methods here — never touch uGUI.
-                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+                // call thread-safe log methods here — never touch uGUI. Flag the terminal phase change
+                // so the main thread re-persists it (drained in PersistUploadStateIfDirty via OnUpdate).
+                // On success prefer the server's short run URL when the response carried one (a relative
+                // "/run/…" is absolutized against the same SiteBase as `url`); otherwise (old server,
+                // failure, or 409-resolved path whose body has no shortUrl) keep the constructed `url`.
+                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
+                    UploadVerdict.PreferredUrl(verdict, url));
+                _uploadStateDirty = true;
                 if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict);
                 else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
             }, delayMs);
@@ -223,6 +250,7 @@ public sealed partial class Plugin
         {
             // Any unhandled exception here must NOT propagate into the main-thread caller.
             _uploadStatus.Set(entry, UploadPhase.Failed, null);
+            _uploadStateDirty = true;
             _logBuffer.Clear();
             _services.Log.Warning($"[CombatMeter.SP1] Log assembly/upload threw: {ex.Message}");
             return fired;

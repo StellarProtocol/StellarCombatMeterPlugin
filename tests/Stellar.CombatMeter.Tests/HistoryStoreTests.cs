@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter;
+using Stellar.CombatMeter.LogUpload;   // UploadPhase
 using Xunit;
 
 namespace Stellar.CombatMeter.Tests;
@@ -280,6 +281,75 @@ public sealed class HistoryStoreTests
         Assert.Empty(s.FashionDyes);           // 3 floats → not a multiple of 4 → trimmed to 0 (no partial colour)
     }
 
+    // ---- Task 13 reshape: entries stay byte-identical to v10; upload state lives in a sidecar ----
+
+    // The entry JSON a NEW build writes carries NO upload-state keys and stays version 10, so a rollback
+    // to a prior (v10) DLL reads it intact instead of treating it as malformed and wiping history.
+    [Fact]
+    public void Entry_json_stays_v10_shape_with_no_upload_state_keys()
+    {
+        var json = HistoryStore.SerializeEntry(new Plugin.EncounterHistoryEntry { SceneName = "7151", LevelUuid = 42 });
+
+        Assert.StartsWith("{\"v\":10,", json);        // version NOT bumped
+        Assert.DoesNotContain("\"up\":", json);       // no per-entry upload phase
+        Assert.DoesNotContain("\"uurl\":", json);     // no per-entry run URL
+    }
+
+    // Exact byte-identity: a controlled minimal entry serializes to the precise v10 string an older build
+    // produced — the strongest guarantee that no field snuck into the entry shape.
+    [Fact]
+    public void Minimal_entry_serializes_to_exact_v10_bytes()
+    {
+        var json = HistoryStore.SerializeEntry(new Plugin.EncounterHistoryEntry { SceneName = "7151", LevelUuid = 42 });
+
+        const string expected =
+            "{\"v\":10,\"scene\":\"7151\",\"enter\":0,\"arch\":0,\"dur\":0,\"party\":0,\"members\":0,"
+          + "\"luid\":42,\"pass\":0,\"mms\":0,\"tscore\":0,\"diff\":0,\"dstart\":0,\"res\":\"partial\","
+          + "\"def\":0,\"trig\":\"manual\",\"stats\":[],\"series\":[],\"entities\":[]}";
+        Assert.Equal(expected, json);
+    }
+
+    // Old-build tolerance: an INDEPENDENT copy of the shipped-v10 gate (v <= 10 AND reject-unknown-keys)
+    // must ACCEPT the entry JSON this build writes — proving a rollback to a v10 DLL reads it, not skips it.
+    [Fact]
+    public void New_build_entry_is_accepted_by_a_copy_of_the_old_v10_gate()
+    {
+        var richJson    = HistoryStore.SerializeEntry(BuildRichEntry());
+        var minimalJson = HistoryStore.SerializeEntry(new Plugin.EncounterHistoryEntry { SceneName = "x" });
+
+        Assert.True(OldV10GateAccepts(richJson));
+        Assert.True(OldV10GateAccepts(minimalJson));
+    }
+
+    // A faithful reimplementation of the SHIPPED v10 gate: accept only version 1..10 and only the v10 key
+    // set; a version > 10 or ANY unknown top-level key => rejected (exactly what the shipped reader did via
+    // `v <= FormatVersion` + `default: return false`). Uses System.Text.Json so it is independent of the
+    // (now forward-hardened) production reader.
+    private static readonly System.Collections.Generic.HashSet<string> V10Keys = new()
+    {
+        "v","scene","enter","arch","dur","party","members","luid","pass","mms",
+        "tscore","diff","dstart","res","def","trig","stats","series","entities",
+    };
+
+    private static bool OldV10GateAccepts(string entryJson)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(entryJson);
+        var root = doc.RootElement;
+        if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return false;
+        var sawV = false;
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (!V10Keys.Contains(prop.Name)) return false;   // shipped reader rejected unknown keys
+            if (prop.Name == "v")
+            {
+                var v = prop.Value.GetInt32();
+                if (v < 1 || v > 10) return false;            // shipped gate: v <= FormatVersion(=10)
+                sawV = true;
+            }
+        }
+        return sawV;
+    }
+
     [Fact]
     public void Empty_entry_round_trips()
     {
@@ -300,7 +370,6 @@ public sealed class HistoryStoreTests
     [InlineData("{\"v\":1,\"scene\":\"x")]            // truncated string
     [InlineData("{\"v\":1,\"stats\":[{\"id\":")]      // truncated number
     [InlineData("[]")]                                 // array, not the expected object
-    [InlineData("{\"v\":1,\"bogus\":5}")]             // unknown key
     [InlineData("{\"scene\":\"x\"}")]                 // missing version marker
     public void Malformed_or_legacy_input_is_skipped_without_throwing(string garbage)
     {
@@ -309,17 +378,113 @@ public sealed class HistoryStoreTests
         Assert.Null(got);
     }
 
-    // An unsupported FUTURE version (>FormatVersion) must still be skipped, not throw. Computed from the live
-    // FormatVersion constant (not a hardcoded literal) so this case can never go stale the way a fixed "v9" did
-    // once FormatVersion itself reached 9 (the version-bump trap, spec §3.3 — same trap this test exists to guard
-    // against elsewhere in this file).
+    // Forward-hardening: a FUTURE version with UNKNOWN keys now LOADS (read what you understand), reading
+    // the recognized keys and skipping the rest — so a later format bump can never make THIS build (once it
+    // is the rolled-back-to DLL) read newer files as malformed and wipe them. Replaces the old "future
+    // version is skipped" behavior, which was exactly the rollback trap the reviewer flagged.
     [Fact]
-    public void Future_version_beyond_current_format_is_skipped_without_throwing()
+    public void Future_version_with_unknown_keys_loads_reading_understood_fields()
     {
-        var future = "{\"v\":" + (HistoryStore.FormatVersion + 1) + ",\"scene\":\"x\"}";
+        var future = "{\"v\":" + (HistoryStore.FormatVersion + 5) + ",\"scene\":\"NewMap\",\"members\":4,"
+                   + "\"newScalar\":123,\"newString\":\"x\",\"newArray\":[1,2,[3,4]],"
+                   + "\"newObj\":{\"a\":1,\"b\":{\"c\":2}},\"stats\":[],\"series\":[]}";
 
-        Assert.False(HistoryStore.TryDeserializeEntry(future, out var got));
+        Assert.True(HistoryStore.TryDeserializeEntry(future, out var got));   // loads, does not throw
+        Assert.NotNull(got);
+        Assert.Equal("NewMap", got!.SceneName);   // understood keys read
+        Assert.Equal(4, got.MemberCount);         // unknown scalar/string/array/object keys skipped
+    }
+
+    // An unknown key on a CURRENT-version entry is skipped, not rejected (same forward-tolerance).
+    [Fact]
+    public void Unknown_key_on_current_version_is_skipped_not_rejected()
+    {
+        Assert.True(HistoryStore.TryDeserializeEntry("{\"v\":1,\"scene\":\"x\",\"bogus\":5,\"stats\":[]}", out var got));
+        Assert.Equal("x", got!.SceneName);
+    }
+
+    // A corrupt RECOGNIZED field still fails the entry — skip-unknown only tolerates keys we don't know.
+    [Fact]
+    public void Corrupt_known_field_still_fails_the_entry()
+    {
+        Assert.False(HistoryStore.TryDeserializeEntry("{\"v\":1,\"enter\":\"not-a-number\"}", out var got));
         Assert.Null(got);
+    }
+
+    // ---- Task 13 reshape: sidecar upload-state format ----
+
+    // A sidecar record survives serialize→deserialize: composite key (LevelUuid, ArchivedAtMs) + phase + URL.
+    [Fact]
+    public void Upload_state_sidecar_record_round_trips()
+    {
+        var rec = new HistoryStore.UploadStateRecord(42, 1_700_000_000_000L, UploadPhase.Done,
+            "https://logs.stellarresonance.app/run/SEA/42");
+        var json = HistoryStore.SerializeUploadState(rec);
+
+        Assert.True(HistoryStore.TryDeserializeUploadState(json, out var got));
+        Assert.Equal(42L, got.LevelUuid);
+        Assert.Equal(1_700_000_000_000L, got.ArchivedAtMs);
+        Assert.Equal(UploadPhase.Done, got.Phase);
+        Assert.Equal("https://logs.stellarresonance.app/run/SEA/42", got.Url);
+    }
+
+    // The sidecar array only ever holds durable (non-Idle) records; Idle entries are omitted entirely.
+    [Fact]
+    public void Sidecar_serialize_skips_idle_records()
+    {
+        var live = new System.Collections.Generic.List<HistoryStore.UploadStateRecord>
+        {
+            new(1, 100, UploadPhase.Done,   "u1"),
+            new(2, 200, UploadPhase.Idle,   null),   // never persisted
+            new(3, 300, UploadPhase.Failed, null),
+        };
+        var sidecar = HistoryStore.SerializeUploadStates(live);
+
+        Assert.Equal(2, sidecar.Length);   // Idle dropped
+        var idx = HistoryStore.IndexUploadStates(sidecar);
+        Assert.True(idx.ContainsKey((1, 100)));
+        Assert.False(idx.ContainsKey((2, 200)));
+        Assert.True(idx.ContainsKey((3, 300)));
+    }
+
+    // Orphan cleanup: a sidecar record whose (LevelUuid, ArchivedAtMs) matches no live entry is not applied
+    // on hydrate, and a rebuild from the surviving live set omits it — so it drops on the next save.
+    [Fact]
+    public void Sidecar_orphan_records_are_not_matched_and_drop_on_rebuild()
+    {
+        // Persisted sidecar has records for runs A(1,100) and B(2,200).
+        var persisted = HistoryStore.SerializeUploadStates(new System.Collections.Generic.List<HistoryStore.UploadStateRecord>
+        {
+            new(1, 100, UploadPhase.Done, "uA"),
+            new(2, 200, UploadPhase.Done, "uB"),
+        });
+
+        // On load, only run A still exists (B was evicted/deleted). Match by composite key.
+        var idx = HistoryStore.IndexUploadStates(persisted);
+        Assert.True(idx.TryGetValue((1, 100), out var recA));   // A applies
+        Assert.Equal("uA", recA.Url);
+        Assert.True(idx.ContainsKey((2, 200)));                  // B present in the parsed index...
+        // ...but a rebuild from the surviving live set (only A) omits B entirely — orphan dropped.
+        var rebuilt = HistoryStore.IndexUploadStates(HistoryStore.SerializeUploadStates(
+            new System.Collections.Generic.List<HistoryStore.UploadStateRecord> { new(1, 100, UploadPhase.Done, "uA") }));
+        Assert.True(rebuilt.ContainsKey((1, 100)));
+        Assert.False(rebuilt.ContainsKey((2, 200)));
+    }
+
+    // Malformed / Idle sidecar records are dropped by the index (never throws).
+    [Fact]
+    public void Sidecar_index_skips_malformed_and_idle_records()
+    {
+        var sidecar = new[]
+        {
+            HistoryStore.SerializeUploadState(new HistoryStore.UploadStateRecord(1, 100, UploadPhase.Done, "u1")),
+            "not json",
+            HistoryStore.SerializeUploadState(new HistoryStore.UploadStateRecord(2, 200, UploadPhase.Idle, null)),
+        };
+        var idx = HistoryStore.IndexUploadStates(sidecar);
+
+        Assert.Single(idx);
+        Assert.True(idx.ContainsKey((1, 100)));
     }
 
     [Fact]

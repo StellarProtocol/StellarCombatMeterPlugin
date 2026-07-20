@@ -398,13 +398,17 @@ public sealed partial class Plugin
             _historyView.Add(new SessionEntry(
                 i,
                 FormatSessionClock(h.ArchivedAtMs),
-                $"{map} · {dur} · {h.MemberCount}p"));
+                $"{map} · {dur} · {h.MemberCount}p{TriggerSuffix(h.Trigger)}"));
         }
         // Keep the selected session in sync (it may have been evicted).
         if (_historyIndex >= 0 && _historyIndex < _history.Count) _selectedSession = _history[_historyIndex];
         else { _selectedSession = null; _historyIndex = -1; _chartedSources.Clear(); _chartSourcesVersion++; }
         RebuildSessionRows();
     }
+
+    // Auto-archive segments show WHY they ended; manual/scene stay untagged (pre-v10 default).
+    private static string TriggerSuffix(string trigger)
+        => trigger is "wipe" or "boss" or "idle" or "stage" ? $" · {trigger}" : "";
 
     private void RebuildSessionRows()
     {

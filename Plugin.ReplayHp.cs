@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Globalization;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter.Replay;
 
@@ -32,22 +31,8 @@ public sealed partial class Plugin
         return (hp, maxHp);
     }
 
-    /// <summary>Collects per-player HP tracks (entity-id-string keyed); null when none sampled.</summary>
-    private IReadOnlyDictionary<string, HpTrack>? BuildPlayerHpTracks()
-    {
-        if (_hpSampler is null || _replay is null) return null;
-        Dictionary<string, HpTrack>? result = null;
-        foreach (var id in _replay.Tracks.Keys)
-        {
-            if (!id.IsPlayer) continue;
-            var track = _hpSampler.GetTrack(id.Value);
-            if (track is null) continue;
-            result ??= new Dictionary<string, HpTrack>(8);
-            result[id.Value.ToString(CultureInfo.InvariantCulture)] = track;
-            if (result.Count == MaxPlayerHpTracks) break;
-        }
-        return result;
-    }
+    // (Per-player HP collection now happens window-scoped in Plugin.Replay.cs's SlicePlayerHpWindow,
+    // which slices each track to (watermark, now] before upload — see the delta-window design.)
 
     // Shift a single HP track's Ms0 by the same capture->combat-start offset applied to the
     // position tracks (see PrepareReplayDoc), so boss HP stays synced with the replay timeline.

@@ -131,7 +131,22 @@ public sealed partial class Plugin
         ApplyModeSize();         // restore the view we're entering
     }
     private void TogglePause() { _paused = !_paused; }
-    private void ManualArchiveFromMenu() { ManualArchive(); }
+
+    // One unconditional line BEFORE the archive runs — a user-initiated press, so ungated logging is
+    // correct (matching LogArchiveOutcome). The 2026-07-19 field report was "I pressed Archive and
+    // nothing happened, with no log evidence"; this proves the press reached the plugin, paired with
+    // the archive-outcome line ManualArchive emits (skip-empty | suppressed | banked | banked+upload).
+    private void ManualArchiveFromMenu()
+    {
+        _services.Log.Info("[CombatMeter][archive] manual-press");
+        ManualArchive();
+    }
+
+    // Visible acknowledgment that a MANUAL archive landed (banked) — a success toast on the meter.
+    // Called from ManualArchive only when reason == Manual, so auto archives (scene/stage/boss/idle)
+    // don't spam the toast surface. Fire-and-forget on the main thread (INotifications enqueues).
+    private void NotifyManualArchived(long durationMs)
+        => _services.Notifications.Notify($"Archived ✓ ({durationMs / 1000} s)", NotificationKind.Success);
 
     private void ToggleHistory()
     {

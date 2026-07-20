@@ -32,4 +32,86 @@ public class UploadVerdictTests
         var body = "{ \"kept\" : false , \"havePositions\" : false }";
         Assert.Equal(new UploadVerdict(false, false), UploadVerdict.Parse(body));
     }
+
+    // --- shortUrl (server's public short run URL, spec § 9) — additive; old servers omit it. ---
+
+    [Fact]
+    public void Parse_ExtractsShortUrl_WhenPresent()
+    {
+        var body = "{\"ok\":true,\"levelUuid\":\"123\",\"runUrl\":\"/api/run/sea/123\"," +
+                   "\"shortId\":\"prqPvke7Gi\",\"shortUrl\":\"https://logs.stellarresonance.app/run/sea/prqPvke7Gi\"," +
+                   "\"kept\":true,\"havePositions\":false}";
+        var v = UploadVerdict.Parse(body);
+        Assert.Equal("https://logs.stellarresonance.app/run/sea/prqPvke7Gi", v.ShortUrl);
+        Assert.True(v.Kept);                 // shortUrl parse must not disturb kept …
+        Assert.False(v.HavePositions);       // … or havePositions
+    }
+
+    [Fact]
+    public void Parse_ShortUrl_Null_WhenAbsent()
+    {
+        // Old worker: response has no shortUrl field.
+        var body = "{\"ok\":true,\"levelUuid\":\"123\",\"runUrl\":\"/api/run/sea/123\",\"kept\":true,\"havePositions\":false}";
+        var v = UploadVerdict.Parse(body);
+        Assert.Null(v.ShortUrl);
+        Assert.True(v.Kept);
+        Assert.False(v.HavePositions);
+    }
+
+    [Fact]
+    public void Parse_ShortUrl_CoexistsWith_KeptFalse_HavePositionsTrue()
+    {
+        var body = "{\"ok\":true,\"kept\":false,\"havePositions\":true," +
+                   "\"shortUrl\":\"https://logs.stellarresonance.app/run/jp/abc123XY\"}";
+        Assert.Equal(new UploadVerdict(false, true, "https://logs.stellarresonance.app/run/jp/abc123XY"),
+            UploadVerdict.Parse(body));
+    }
+
+    [Fact]
+    public void Parse_EmptyShortUrl_TreatedAsAbsent()
+    {
+        var body = "{\"ok\":true,\"kept\":true,\"havePositions\":false,\"shortUrl\":\"\"}";
+        Assert.Null(UploadVerdict.Parse(body).ShortUrl);
+    }
+
+    // --- Done-transition URL preference + normalization (the seam the upload callback uses to record
+    //     the entry URL). Relative short URLs (path-only worker responses) are made absolute against
+    //     the SAME SiteBase the constructed run URL uses; absolute short URLs pass through untouched. ---
+
+    private const string Constructed = "https://logs.stellarresonance.app/run/sea/146960651154096128";
+
+    [Fact]
+    public void PreferredUrl_PassesThroughAbsoluteShortUrl()
+    {
+        var verdict = new UploadVerdict(true, false, "https://logs.stellarresonance.app/run/sea/prqPvke7Gi");
+        Assert.Equal("https://logs.stellarresonance.app/run/sea/prqPvke7Gi",
+            UploadVerdict.PreferredUrl(verdict, Constructed));
+    }
+
+    [Fact]
+    public void PreferredUrl_NormalizesRelativeShortUrl_ToAbsoluteWithSiteBase()
+    {
+        var verdict = new UploadVerdict(true, false, "/run/sea/prqPvke7Gi");
+        // Prefixed with the REAL base the plugin uses to build run URLs (asserted via the shared constant).
+        Assert.Equal(UploadVerdict.SiteBase + "/run/sea/prqPvke7Gi",
+            UploadVerdict.PreferredUrl(verdict, Constructed));
+        Assert.Equal("https://logs.stellarresonance.app/run/sea/prqPvke7Gi",
+            UploadVerdict.PreferredUrl(verdict, Constructed));   // and the concrete absolute form
+    }
+
+    [Fact]
+    public void PreferredUrl_FullPath_RelativeBodyBecomesAbsolute()
+    {
+        // End-to-end: worker returns a PATH-ONLY shortUrl → Parse keeps it raw → PreferredUrl absolutizes.
+        var body = "{\"ok\":true,\"kept\":true,\"havePositions\":false,\"shortUrl\":\"/run/jp/abc123XY\"}";
+        Assert.Equal(UploadVerdict.SiteBase + "/run/jp/abc123XY",
+            UploadVerdict.PreferredUrl(UploadVerdict.Parse(body), Constructed));
+    }
+
+    [Fact]
+    public void PreferredUrl_FallsBackToConstructed_WhenShortUrlAbsentOrNoVerdict()
+    {
+        Assert.Equal(Constructed, UploadVerdict.PreferredUrl(new UploadVerdict(true, false), Constructed));  // absent
+        Assert.Equal(Constructed, UploadVerdict.PreferredUrl(null, Constructed));                            // no verdict
+    }
 }

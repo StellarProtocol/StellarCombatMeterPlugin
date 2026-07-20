@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
+using Stellar.CombatMeter.Replay;
 
 namespace Stellar.CombatMeter;
 
@@ -51,10 +52,20 @@ public sealed partial class Plugin
         public string    Result = "partial"; // "kill" once settled, else "partial"
         // IDungeonState.LastDefeatedCount snapshotted at archive — 0 until the attr feeding it is wired.
         public int       Defeated;
+        // Why this segment was archived ("manual"|"scene"|"wipe"|"boss"|"idle"|"stage") — v10.
+        public string   Trigger = "manual";
+        // NOTE: per-entry upload state (phase + run URL) is NOT stored on the entry — it persists as a
+        // SIDECAR "uploadStates" key in the history config section (Plugin.HistoryStore.cs), keyed by the
+        // stable (LevelUuid, ArchivedAtMs) composite, so the entry JSON stays byte-identical to what older
+        // builds wrote. That keeps a rollback to a prior (v10) DLL from reading these entries as malformed
+        // and silently wiping the owner's irreplaceable history.
     }
 
     private void OnSceneChanged(string? newScene)
     {
+        // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
+        // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
+        _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;
@@ -68,44 +79,107 @@ public sealed partial class Plugin
 
         // Auto-archive on scene change. ManualArchive() is the single source of
         // truth for the snapshot-and-clear flow; the Archive button calls it too.
-        ManualArchive();
+        ManualArchive(AutoArchive.ArchiveReason.SceneChange);
 
-        // Unconditionally reset the replay capture at the scene boundary. ManualArchive()
-        // early-returns (never Clear()s -> never ResetReplay()s) when the outgoing scene had no
-        // combat (_stats.Count == 0) — so a no-combat instanced scene's position samples would
-        // otherwise linger and concatenate onto the NEXT run's replay upload (the 93:53
-        // cross-scene-carryover bug). When the outgoing scene DID have combat, ManualArchive
-        // already uploaded + reset the replay, so this call is a harmless no-op. Everything
-        // WITHIN a single scene (walk-in, long in-dungeon idle) is untouched.
-        ResetReplay();
-        LogReplaySceneReset(_lastSceneName, newScene, samplesAtReset, archived);
+        // Scene-boundary replay reset — now CONDITIONAL (spec 2026-07-19): the provisional
+        // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps
+        // the buffer so the lobby movement survives into the run's replay. Every other
+        // boundary resets, preserving the 93:53 cross-scene-carryover protection: entering a
+        // candidate from town starts fresh, leaving to town discards, and committed runs keep
+        // per-segment archives. When the outgoing scene HAD combat, ManualArchive above
+        // already uploaded + reset — this is then a harmless no-op either way.
+        var incomingCandidate = ResolveSceneCandidate(newScene);
+        var reset = ReplayCaptureGate.ShouldResetOnSceneChange(
+            _services.Dungeon.CurrentRunId, _sceneIsCandidate, incomingCandidate);
+        if (reset) ResetReplay();
+        LogReplaySceneReset(_lastSceneName, newScene, samplesAtReset, archived, kept: !reset);
+        _sceneIsCandidate = incomingCandidate;
 
         _lastSceneName = newScene;
     }
 
-    // Snapshot the active _stats into history and reset the live meter. No-op
-    // when there's nothing to archive so the button-press path doesn't push
-    // empty entries. Used by:
-    //   - OnSceneChanged (automatic, on scene transition)
-    //   - DrawHeaderBar's Archive button (manual, user-driven)
-    internal void ManualArchive()
-    {
-        if (_stats.Count == 0) return;
+    internal void ManualArchive() => ManualArchive(AutoArchive.ArchiveReason.Manual);
 
-        // Snapshot run-identity from the live dungeon state AT ARCHIVE so a deferred
-        // (manual) upload of this entry uses the right levelUuid / settlement — not
-        // whatever run happens to be live when the user later clicks Upload.
-        //
-        // LastSettlement is sticky for the whole dungeon run (it survives the drop-to-0 on
-        // leave-scene, and a same-uuid re-entry never clears it), so its mere non-null-ness
-        // is NOT evidence that THIS encounter ended in a kill — it may be left over from an
-        // earlier boss/segment cleared earlier in the same run. Only count it as a genuine
-        // kill when it differs from the baseline snapshotted at THIS encounter's combat
-        // start (EnsureCombatStarted) — i.e. the settlement actually changed during this
-        // encounter. A manual archive mid-fight (no new settlement) correctly stays "partial".
+    // Snapshot the active _stats into history and reset the live meter. No-op when there's
+    // nothing to archive. Callers: OnSceneChanged (scene), the Archive button/hotkey (manual),
+    // and TickAutoArchiveTriggers (wipe/boss/idle/stage). Every archive — whatever the path —
+    // reports into the AutoArchiveEngine so the shared 10 s cooldown spans them all.
+    internal void ManualArchive(AutoArchive.ArchiveReason reason)
+    {
+        // Any archive that actually enters this method — the manual button/hotkey, a scene change,
+        // OR the deferred AUTO fire itself — supersedes a still-pending settle-delayed auto archive
+        // (Plugin.AutoArchive.cs). Clearing here means a manual/scene archive during the ~1 s wait
+        // wins outright and a stale deferred StageChange can never double-fire on already-cleared
+        // stats afterward. The deferred fire calls ManualArchive too, so it self-clears the slot.
+        _pendingArchiveReason = null;
+
+        if (_stats.Count == 0) { LogArchiveOutcome(reason, "skip-empty", 0, 0); return; }
+
+        // Content-based junk suppression (owner ruling 2026-07-19, verbatim: "junk = when nothing
+        // happen DPS=0, HPS=0, TAKEN=0. and even I do nothing and all other player keep having
+        // DPS/HPS/TAKEN update it's not junk too"). Bin an AUTO archive ONLY when it carries no fresh
+        // run result AND every stat row is all-zero. ANY nonzero activity — even a lone single-
+        // participant instant hit — BANKS as its own entry (no participant-count / span floor); a
+        // fresh kill/settlement tail ALWAYS saves (the destroyed-kill-tail bug this guards). A MANUAL
+        // (button/hotkey) archive is never suppressed. carriesFreshResult uses IsFreshKill (baseline-
+        // relative — a stale run-level result from an earlier segment does NOT count).
+        var carriesFreshResult = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart);
+        if (ShouldSuppressAutoArchive(reason, carriesFreshResult, AllRowsZero()))
+        {
+            // Suppression BINS the entry but is now a total no-op on state (owner ruling 2026-07-19,
+            // run 206630597437685760): the old Clear() here erased accumulated state before the real
+            // fight → the local player showed 0 damage for the whole run. Everything (rows/actors +
+            // combat clocks + baselines) CARRIES forward unconditionally and folds into the next
+            // banked entry (all-zero pre-fight actors then appear there — the owner's intent). Because
+            // _combatActive stays true, EnsureCombatStarted's guard keeps _settlementAtCombatStart
+            // anchored at the true combat start (no re-snapshot, no stale-kill misattribution). The
+            // shared-cooldown OnArchived bookkeeping + the ungated outcome log still fire as before.
+            LogArchiveOutcome(reason, "suppressed", _stats.Count, ComputeDurationMs());
+            _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
+            return;
+        }
+
+        var entry = BuildHistoryEntry(reason);
+        _history.Add(entry);
+        foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
+        SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
+
+        var summaryFired = FinalizeAndMaybeUploadReplay(entry);
+        LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
+        if (reason == AutoArchive.ArchiveReason.Manual) NotifyManualArchived(entry.CombatDurationMs);
+
+        _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
+        Clear();
+    }
+
+    // Replay delta-window upload wiring (owner design 2026-07-19), extracted so ManualArchive stays
+    // under the 50-LoC cap. EVERY banked archive ships the window (watermark, now]: there is no
+    // ShouldFinalizeReplay gate (retired — the recorder never stops, so no run-terminal concept) and
+    // no sub-3s fragment gate (retired — contiguous windows stitch on the site, short tails are safe).
+    // PrepareReplayDoc returns null for an off / no-level / EMPTY window, in which case nothing uploads
+    // and the watermark holds. On a successful hand-off to the upload queue the watermark advances and
+    // the window's samples are freed; a failed hand-off keeps them so they merge into the next window
+    // (at-least-once, owner default 2). Returns whether a SUMMARY upload fired.
+    private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry)
+    {
+        var replayDoc = PrepareReplayDoc(entry);
+        if (replayDoc is null) return false;   // empty/off/no-level window — watermark unchanged
+        var summaryFired = MaybeUploadLog(entry, replayDoc);
+        // summaryFired → the summary callback OWNS + uploads the doc (synchronous hand-off complete);
+        // otherwise upload it directly here. A non-throwing hand-off (either path) advances the watermark.
+        var handedOff = summaryFired || UploadReplayDoc(replayDoc);
+        if (handedOff) AdvanceReplayWatermark();
+        return summaryFired;
+    }
+
+    // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
+    // snapshot rationale (sticky LastSettlement vs fresh-kill baseline) is documented on
+    // IsFreshKill below and _settlementAtCombatStart's declaration.
+    private EncounterHistoryEntry BuildHistoryEntry(AutoArchive.ArchiveReason reason)
+    {
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
-        var entry = new EncounterHistoryEntry
+        return new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
             EnteredAtMs      = _combatStartMs,
@@ -117,8 +191,6 @@ public sealed partial class Plugin
             ImagineCasts     = new List<ImagineCastEntry>(_imagineCasts),
             Entities         = SnapshotEntities(),
             PartyType        = _services.PartySnapshot.PartyType,
-            // Combatant count — every entity that participated, not just party.
-            // Guarded by _stats.Count == 0 early-return above, so >= 1 here.
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
             PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
@@ -128,20 +200,46 @@ public sealed partial class Plugin
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
             Defeated         = _services.Dungeon.LastDefeatedCount,
+            Trigger          = ArchiveReasonTag(reason),
         };
-        _history.Add(entry);
-        foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
-        SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
+    }
 
-        // SP1 + Replay R1 + P2 courtesy: assemble the replay doc FIRST (capture reset must happen
-        // at archive regardless), then let the summary upload's verdict decide whether the
-        // positions POST is needed (havePositions) — the callback owns the doc when a summary
-        // upload fires; otherwise (auto-upload off / no events) upload immediately as before.
-        var replayDoc = PrepareReplayDoc(entry);
-        var summaryFired = MaybeUploadLog(entry, replayDoc);
-        if (!summaryFired && replayDoc is not null) UploadReplayDoc(replayDoc);
+    internal static string ArchiveReasonTag(AutoArchive.ArchiveReason r) => r switch
+    {
+        AutoArchive.ArchiveReason.SceneChange => "scene",
+        AutoArchive.ArchiveReason.Wipe        => "wipe",
+        AutoArchive.ArchiveReason.BossPhase   => "boss",
+        AutoArchive.ArchiveReason.Idle        => "idle",
+        AutoArchive.ArchiveReason.StageChange => "stage",
+        _                                     => "manual",
+    };
 
-        Clear();
+    /// <summary>True when an AUTO-triggered archive is junk and should be skipped. Suppressed iff it
+    /// is NOT a <see cref="AutoArchive.ArchiveReason.Manual"/> archive (manual is always kept),
+    /// carries no fresh run result (<paramref name="carriesFreshResult"/> — a fresh kill/settlement
+    /// earned by THIS encounter always saves), AND every stat row is 0/0/0
+    /// (<paramref name="allRowsZero"/>). Junk is defined by CONTENT alone (owner ruling 2026-07-19,
+    /// verbatim): "junk = when nothing happen DPS=0, HPS=0, TAKEN=0. and even I do nothing and all
+    /// other player keep having DPS/HPS/TAKEN update it's not junk too." ANY nonzero row — even a
+    /// single participant with a lone instant hit — is real activity and BANKS as its own entry
+    /// (there is no participant-count or span floor). Combined with the suppressed-archives-never-
+    /// wipe rule, an all-zero suppressed archive is a total no-op: its zero rows/actors carry
+    /// untouched into the next banked entry.</summary>
+    internal static bool ShouldSuppressAutoArchive(
+        AutoArchive.ArchiveReason reason, bool carriesFreshResult, bool allRowsZero)
+        => reason != AutoArchive.ArchiveReason.Manual
+        && !carriesFreshResult
+        && allRowsZero;
+
+    // True when every archived stat row is empty — no damage dealt, no healing, no damage taken —
+    // i.e. a genuinely empty encounter that must not be saved (owner: "shouldn't save empty into
+    // history"). Only reached with _stats.Count > 0 (the skip-empty early-out handles the zero-row
+    // case). A rare per-archive scan, not a hot-path frame.
+    private bool AllRowsZero()
+    {
+        foreach (var s in _stats.Values)
+            if (s.TotalDamage != 0 || s.TotalHealing != 0 || s.TotalTaken != 0) return false;
+        return true;
     }
 
     /// <summary>

@@ -90,14 +90,7 @@ internal static class LogUploader
             }
             else if (status == 409)
             {
-                // Server: run already fully covered — send the ~KB supplement instead.
-                var body409 = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var havePositions = body409.Contains("\"havePositions\":true");
-                var supStatus = await PostSupplementAsync(log).ConfigureAwait(false);
-                // kept:false — chunks are pointless either way; havePositions gates positions.
-                onComplete?.Invoke(supStatus is >= 200 and < 300, supStatus,
-                    supStatus is >= 200 and < 300 ? null : "supplement upload failed",
-                    new UploadVerdict(false, havePositions));
+                await HandleAlreadyUploadedAsync(log, response, onComplete).ConfigureAwait(false);
             }
             else
             {
@@ -113,24 +106,57 @@ internal static class LogUploader
 
     private static readonly TimeSpan[] SupplementRetryDelays = { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
 
-    /// <summary>POSTs the supplement; returns the final HTTP status (0 on transport failure).
-    /// A 404 unknown-window is NOT retried — the run was reshaped between pre-check and now;
-    /// the member's detail is then absent and the site shows the gearless-actor fallback.</summary>
+    // 409 — the server already holds this run's summary, so the RUN is uploaded (a resolved success).
+    // Send the ~KB own-detail supplement ONLY when we hold local actor detail to contribute (the
+    // multi-uploader courtesy path); a deferred/reloaded manual retry has no local actor in its
+    // snapshot (the local entity-id differs across sessions), so there is nothing to send — that must
+    // resolve as success, NOT die on an empty supplement (Task 13 fix). A supplement we DID send flips
+    // back to a retryable failure only on a transient error (transport/5xx); a 2xx/4xx leaves the run
+    // resolved-uploaded (best-effort detail). Reports the honest HTTP status either way.
+    private static async Task HandleAlreadyUploadedAsync(
+        CombatLog log, HttpResponseMessage response, Action<bool, int, string?, UploadVerdict?>? onComplete)
+    {
+        var body409 = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        // kept:false — chunks are pointless either way; havePositions gates the positions upload.
+        // The 409 (precheck "supplement") body is {want,havePositions} only — it carries NO shortUrl,
+        // so ShortUrl stays null here and the resolved-upload entry keeps its client-constructed URL.
+        var verdict = new UploadVerdict(false, body409.Contains("\"havePositions\":true"));
+
+        if (!SupplementPolicy.ShouldSendSupplement(log))
+        {
+            onComplete?.Invoke(true, 409, null, verdict);   // nothing to add — run already fully covered
+            return;
+        }
+
+        var supStatus = await PostSupplementAsync(log).ConfigureAwait(false);
+        var applied = supStatus is >= 200 and < 300;
+        if (applied || !SupplementPolicy.IsRetryable(supStatus))
+            onComplete?.Invoke(true, applied ? supStatus : 409, null, verdict);   // run up; supplement best-effort
+        else
+            onComplete?.Invoke(false, supStatus, "supplement upload failed", verdict);   // transient → retryable
+    }
+
+    /// <summary>POSTs the supplement; returns the FINAL HTTP status honestly. A 2xx or any 4xx (incl. a
+    /// 404 unknown-window — the run was reshaped between pre-check and now) is definitive and returned
+    /// immediately; only a 5xx or a transport failure is retried. Returns 0 ONLY when no HTTP response
+    /// was ever received (genuine transport failure) — never as a mask over a real server status.</summary>
     private static async Task<int> PostSupplementAsync(CombatLog log)
     {
         var url = $"{ApiBase}/run/{log.Header.Region}/{log.Header.Encounter.LevelUuid.ToString(System.Globalization.CultureInfo.InvariantCulture)}/supplement";
         var json = SupplementWriter.Write(log);
+        var lastStatus = 0;
         for (var attempt = 0; ; attempt++)
         {
             try
             {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
                 using var response = await HttpClient.PostAsync(url, content, CancellationToken.None).ConfigureAwait(false);
-                var status = (int)response.StatusCode;
-                if (response.IsSuccessStatusCode || status == 404) return status;
+                lastStatus = (int)response.StatusCode;
+                if (lastStatus < 500) return lastStatus;   // 2xx/3xx/4xx are definitive — a retry can't change them
+                // 5xx — transient server error; fall through to retry.
             }
-            catch { /* transport error — retry below */ }
-            if (attempt >= SupplementRetryDelays.Length) return 0;
+            catch { lastStatus = 0; /* transport error — retry below; stays an honest 0 if never answered */ }
+            if (attempt >= SupplementRetryDelays.Length) return lastStatus;
             await Task.Delay(SupplementRetryDelays[attempt]).ConfigureAwait(false);
         }
     }

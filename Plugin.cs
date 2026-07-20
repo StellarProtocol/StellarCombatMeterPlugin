@@ -95,6 +95,11 @@ public sealed partial class Plugin : IStellarPlugin
     // Combat-timer state (unix ms).
     private long _combatStartMs;
     private long _lastDamageMs;
+    // Timestamp of the most recent combat event of ANY channel (dealt / heal / taken) — distinct from
+    // _lastDamageMs (dealt-only, which the Idle trigger depends on). Feeds the auto-archive idle-settle
+    // delay: a deferred AUTO archive waits until this has gone quiet for ArchiveIdleSettleMs so trailing
+    // DoTs / killing-blow ticks land before the snapshot (Plugin.AutoArchive.cs).
+    private long _lastCombatEventMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
     private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
                                             // run-id change (e.g. a fail-out to a new scene) that can precede archive.
@@ -136,6 +141,7 @@ public sealed partial class Plugin : IStellarPlugin
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
         InitLogUpload();   // SP1: cache the auto-upload bool off the per-event hot path
         InitReplay();      // Replay R1: load pref + create capture instance
+        InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
 
         // Encounter history is persisted in its own config section (string[] of per-entry JSON). Load it before
         // the windows are built so the History window has its sessions on first show.
@@ -153,6 +159,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
         _lastSceneName = _services.ClientState.CurrentSceneName;
+        _sceneIsCandidate = ResolveSceneCandidate(_lastSceneName);
 
         OnSkillBreakdownRequested += HandleSkillBreakdownRequested;
         OnInspectRequested += HandleInspectRequested;
@@ -283,7 +290,9 @@ public sealed partial class Plugin : IStellarPlugin
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
+        PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
+        TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         RebuildSnapshots();
     }
 
@@ -331,10 +340,18 @@ public sealed partial class Plugin : IStellarPlugin
         _combatActive  = false;
         _combatStartMs = 0;
         _lastDamageMs  = 0;
+        _lastCombatEventMs = 0;
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
-        ResetReplay();
+        // NOTE: Clear() no longer resets the replay (delta-window decouple, owner design 2026-07-19).
+        // Clear() runs at the end of every BANKED archive and on the Reset button (suppressed junk
+        // archives no longer call Clear() at all — owner ruling 2026-07-19: suppression wipes NOTHING) —
+        // wiping the replay here destroyed the accumulating walk-in at a suppressed archive (THE
+        // walk-in-clip root cause, proven 2026-07-19). The recorder is a per-RUN capture: it resets
+        // ONLY at true run end (scene-leave / run-id change) via ResetReplay, and each banked archive
+        // uploads a watermark window without stopping it. See _replayWatermarkMs / ResetReplay.
+        _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
     }
 
     private double EncounterElapsedSeconds()

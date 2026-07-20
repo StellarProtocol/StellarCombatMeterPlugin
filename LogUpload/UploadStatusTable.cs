@@ -37,4 +37,11 @@ internal sealed class UploadStatusTable
 
     /// <summary>Drops all recorded statuses. Call when history is cleared wholesale.</summary>
     internal void Clear() => _store.Clear();
+
+    /// <summary>The phase to PERSIST for a live phase: a transient <see cref="UploadPhase.InFlight"/>
+    /// collapses to <see cref="UploadPhase.Idle"/> (never persist "Uploading…" — a relaunch caught
+    /// mid-upload would otherwise show a run stuck in flight); terminal Done/Failed and Idle persist
+    /// as-is so an uploaded run restores "✓ Uploaded" and a failed one stays retryable.</summary>
+    internal static UploadPhase Persistable(UploadPhase phase)
+        => phase == UploadPhase.InFlight ? UploadPhase.Idle : phase;
 }
