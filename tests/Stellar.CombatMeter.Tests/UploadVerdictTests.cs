@@ -114,4 +114,31 @@ public class UploadVerdictTests
         Assert.Equal(Constructed, UploadVerdict.PreferredUrl(new UploadVerdict(true, false), Constructed));  // absent
         Assert.Equal(Constructed, UploadVerdict.PreferredUrl(null, Constructed));                            // no verdict
     }
+
+    [Fact]
+    public void From409_ParsesShortUrl_KeptForcedFalse()
+    {
+        // REGRESSION PIN (owner report 2026-07-20, run 179048802794078208): the 409 verdict was
+        // hand-built with ShortUrl=null, so every re-upload of an already-complete session overwrote
+        // the entry's stored short link with the numeric fallback. Body below is the REAL production
+        // precheck-409 response (post worker fix). Never weaken this pin.
+        var body = "{\"want\":\"supplement\",\"havePositions\":true,\"shortId\":\"F3fef2yu9w\",\"shortUrl\":\"/run/sea/F3fef2yu9w\"}";
+        var v = UploadVerdict.From409(body);
+        Assert.False(v.Kept);                                  // forced: run already covered server-side
+        Assert.True(v.HavePositions);
+        Assert.Equal("/run/sea/F3fef2yu9w", v.ShortUrl);
+        Assert.Equal(UploadVerdict.SiteBase + "/run/sea/F3fef2yu9w",
+            UploadVerdict.PreferredUrl(v, Constructed));       // the stored URL flips back to short
+    }
+
+    [Fact]
+    public void From409_OldServerBodyWithoutShortUrl_KeepsConstructed()
+    {
+        // Pre-fix worker body ({want,havePositions} only) — degrades exactly as before.
+        var v = UploadVerdict.From409("{\"want\":\"supplement\",\"havePositions\":false}");
+        Assert.False(v.Kept);
+        Assert.False(v.HavePositions);
+        Assert.Null(v.ShortUrl);
+        Assert.Equal(Constructed, UploadVerdict.PreferredUrl(v, Constructed));
+    }
 }

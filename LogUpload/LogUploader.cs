@@ -117,10 +117,7 @@ internal static class LogUploader
         CombatLog log, HttpResponseMessage response, Action<bool, int, string?, UploadVerdict?>? onComplete)
     {
         var body409 = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-        // kept:false — chunks are pointless either way; havePositions gates the positions upload.
-        // The 409 (precheck "supplement") body is {want,havePositions} only — it carries NO shortUrl,
-        // so ShortUrl stays null here and the resolved-upload entry keeps its client-constructed URL.
-        var verdict = new UploadVerdict(false, body409.Contains("\"havePositions\":true"));
+        var verdict = UploadVerdict.From409(body409);
 
         if (!SupplementPolicy.ShouldSendSupplement(log))
         {
