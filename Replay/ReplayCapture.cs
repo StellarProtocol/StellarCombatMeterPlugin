@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 
@@ -79,6 +80,13 @@ internal sealed class ReplayCapture
             if (TotalSamples >= _maxTotalSamples) break;
             var id = _order[i];
             if (!_tryGet(id, out var p, out var yaw)) continue;
+            // Lobby / walk-in phase: the live model exists (liveness gate passed) but AttrGoPosition
+            // has not streamed, so the probe resolves TRUE with the Position3D.Zero default. Treat that
+            // as a failed probe — drop it exactly like a false return — so the run is never anchored at
+            // the map origin. Sampling only runs while Active, i.e. inside an instanced/candidate scene
+            // (ReplayCaptureGate.ShouldCapture), so this guard is scoped to instanced-run captures.
+            // Regression: run sea/UaU5VejCA0 — docs/recon/thanatos-walkin-geo.md.
+            if (IsUnstreamedZeroTransform(p.X, p.Y, p.Z)) continue;
             _tracks[id].Add(new PositionSample(rel, p.X, p.Y, p.Z, yaw));
             TotalSamples++;
         }
@@ -96,6 +104,28 @@ internal sealed class ReplayCapture
         TotalSamples -= freed;
         if (TotalSamples < 0) TotalSamples = 0;
     }
+
+    /// <summary>Sub-metre tolerance for the horizontal (X/Z) plane in <see cref="IsUnstreamedZeroTransform"/>.
+    /// Positions are metres, so 0.5 is well below any meaningful movement at the 2 Hz sample cadence.</summary>
+    internal const float ZeroPlaneEpsilon = 0.5f;
+
+    /// <summary>
+    /// True when a RESOLVED transform is the uninitialised <see cref="Position3D.Zero"/> default the live
+    /// probe returns before <c>AttrGoPosition</c> has streamed (raid lobby / dungeon walk-in of an instanced
+    /// run — regression run sea/UaU5VejCA0, docs/recon/thanatos-walkin-geo.md). Such a sample is dropped
+    /// exactly like a failed probe so the run is not anchored at the world origin.
+    /// <para>
+    /// The discriminator is the VERTICAL axis. The georef table (site names.generated.json <c>sceneMaps</c>)
+    /// shows (X,Z)=(0,0) is a legitimate INTERIOR position in 518/609 instanced maps — many centre on the
+    /// world origin — so an X/Z-only test would wrongly drop real map-centre positions. A real instanced
+    /// floor is elevated (in that run the boss on the SAME floor in the SAME tick read Y=100.2), while the
+    /// default sentinel is Y bit-exactly <c>0f</c>. Requiring <c>Y == 0f</c> exactly (plus X/Z within a
+    /// metre of the origin) separates the default from any genuine near-origin standing position, which
+    /// still carries its real, non-zero floor Y. Pure; unit-tested.
+    /// </para>
+    /// </summary>
+    internal static bool IsUnstreamedZeroTransform(float x, float y, float z)
+        => y == 0f && MathF.Abs(x) < ZeroPlaneEpsilon && MathF.Abs(z) < ZeroPlaneEpsilon;
 
     public void Reset()
     {
