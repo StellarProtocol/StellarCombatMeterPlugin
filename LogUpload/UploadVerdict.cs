@@ -26,6 +26,18 @@ internal sealed record UploadVerdict(bool Kept, bool HavePositions, string? Shor
             ShortUrl: m.Success ? m.Groups[1].Value : null);
     }
 
+    /// <summary>
+    /// Verdict for the precheck-409 ("supplement") body. <c>Kept</c> is FORCED false — the run is
+    /// already covered server-side, so this upload's logId is never a segment's blob (the 409 body
+    /// carries no <c>kept</c> field for <see cref="Parse"/> to read). <c>havePositions</c> and — since
+    /// the worker's precheck-409 fix — <c>shortUrl</c> ARE parsed from the body: hand-building this
+    /// verdict with a null <c>ShortUrl</c> made every re-upload of an already-complete session
+    /// overwrite the entry's stored short link with the numeric fallback (owner report 2026-07-20,
+    /// run 179048802794078208). Never weaken the pin covering this.
+    /// </summary>
+    internal static UploadVerdict From409(string? body409)
+        => Parse(body409) with { Kept = false };
+
     /// <summary>Human-facing StellarLogs site origin — the base every run-page URL hangs off (distinct
     /// from <see cref="LogUploader.ApiBase"/>, the machine API host). Single source of truth: reused
     /// both to build the client-constructed run URL (Plugin.LogUpload) and to absolutize a server-
