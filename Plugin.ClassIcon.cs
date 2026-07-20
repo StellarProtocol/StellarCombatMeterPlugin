@@ -16,17 +16,25 @@ public sealed partial class Plugin
     private int ResolveProfessionId(EntityId id)
     {
         long charId = id.Value >> 16;
-        // Only trust a REAL profession from the roster. A sparsely-synced party slot
-        // (FastSync hp/position only, no SocialSync) carries Profession 0 — returning
-        // that would blank the crest even when IPlayerState knows our own class.
+        // 1. Real profession from the roster (SocialSync). A sparsely-synced party slot
+        //    (FastSync hp/position only, no SocialSync) carries Profession 0 — skip it.
         foreach (var m in _services.PartyRoster.Members)
         {
             if (m.CharId == charId && m.Profession > 0) return m.Profession;
         }
-        if (id == _services.CombatSnapshot.LocalEntityId)
+        // 2. Self: the live player-state profession.
+        if (id == _services.CombatSnapshot.LocalEntityId && _services.PlayerState.Profession > 0)
         {
             return _services.PlayerState.Profession;
         }
+        // 3. Fallback — derive the parent profession from the CAST-INFERRED sub-profession (spec),
+        //    the same source that resolves the row's spec name. A sub-profession id encodes its parent
+        //    as <ProfessionId>_00_<SpecIndex> (ProfessionSpecs), i.e. parent = subId / 10000. Without
+        //    this, a party member whose SocialSync profession never arrived (open-world / freshly-joined
+        //    party) rendered the DPS-red default bar + a blank crest even though their spec — and thus
+        //    their class — was already known from their casts (owner-reported red/iconless meter).
+        int sub = ResolveSpec(id);
+        if (sub > 0) return sub / 10000;
         return 0;
     }
 
