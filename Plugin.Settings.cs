@@ -99,12 +99,17 @@ public sealed partial class Plugin
     private HudElement SectionLabel(string text)
         => new TextElement(() => text, MutedCol);
 
-    private HudElement ToggleRow(string label, Func<bool> get, Action<bool> set, Func<bool>? enabled = null)
-        => new RowElement(new HudElement[]
-        {
-            new ToggleElement(() => "", get, v => { set(v); PersistToggles(); }, enabled),
-            new TextElement(() => label),
-        }, Gap: 8f);
+    // indent=true prepends a small spacer so the toggle (checkbox + label) nests visually under a
+    // parent trigger row — the same left inset PillRow uses — for sub-options like "Re-cut if boss
+    // re-detected" (under Boss phase) and "Ignore when solo" (under Team wipe).
+    private HudElement ToggleRow(string label, Func<bool> get, Action<bool> set, Func<bool>? enabled = null, bool indent = false)
+    {
+        var toggle = new ToggleElement(() => "", get, v => { set(v); PersistToggles(); }, enabled);
+        var text   = new TextElement(() => label);
+        return indent
+            ? new RowElement(new HudElement[] { new SpacerElement(Width: 8f), toggle, text }, Gap: 8f)
+            : new RowElement(new HudElement[] { toggle, text }, Gap: 8f);
+    }
 
     private HudElement ImagineShowRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
