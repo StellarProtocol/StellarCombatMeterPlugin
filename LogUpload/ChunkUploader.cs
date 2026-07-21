@@ -47,6 +47,23 @@ internal static class ChunkUploader
         _ = Task.Run(() => UploadSequentialAsync(baseUrl, region, levelUuid, logId, chunks, logWarn));
     }
 
+    /// <summary>Re-POST pre-serialized chunk envelopes verbatim, sequentially, after the summary landed.</summary>
+    internal static void PostRawEnvelopesFireAndForget(
+        string baseUrl, string region, long levelUuid, IReadOnlyList<string> envelopeJsons, Action<string> logWarn)
+        => _ = Task.Run(async () =>
+        {
+            var url = BuildUrl(baseUrl, region, levelUuid);
+            for (var i = 0; i < envelopeJsons.Count; i++)
+            {
+                try
+                {
+                    if (!await PostWithRetryAsync(url, envelopeJsons[i]).ConfigureAwait(false))
+                        logWarn($"[CombatMeter.SP1] Re-upload chunk {i} FAILED after retries — skipping; later chunks continue.");
+                }
+                catch (Exception ex) { logWarn($"[CombatMeter.SP1] Re-upload chunk {i} threw: {ex.Message} — skipping."); }
+            }
+        });
+
     /// <summary>Builds the region-scoped chunk-upload URL: <c>{baseUrl}/run/{region}/{levelUuid}/events</c>.</summary>
     internal static string BuildUrl(string baseUrl, string region, long levelUuid)
         => $"{baseUrl}/run/{region}/{levelUuid.ToString(CultureInfo.InvariantCulture)}/events";

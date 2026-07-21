@@ -166,6 +166,28 @@ internal static class LogUploader
         }
     }
 
+    /// <summary>Re-POST a pre-serialized summary body verbatim (byte-for-byte re-upload). Always full-ingest
+    /// (precheck skipped — this is a repair). Never throws; onComplete fires on a thread-pool thread.</summary>
+    internal static void PostRawFireAndForget(string json, Action<bool, int, string?> onComplete)
+        => _ = Task.Run(() => PostGzipJsonAsync(UploadUrl, json, onComplete));
+
+    // Shared raw gzip+POST used by the verbatim-replay entry points.
+    private static async Task PostGzipJsonAsync(string url, string json, Action<bool, int, string?> onComplete)
+    {
+        try
+        {
+            var gzipped = Gzip(json);
+            using var content = new ByteArrayContent(gzipped);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            content.Headers.ContentEncoding.Add("gzip");
+            using var response = await HttpClient.PostAsync(url, content, CancellationToken.None).ConfigureAwait(false);
+            var status = (int)response.StatusCode;
+            if (response.IsSuccessStatusCode) onComplete(true, status, null);
+            else onComplete(false, status, await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+        }
+        catch (Exception ex) { onComplete(false, 0, ex.Message); }
+    }
+
     private static byte[] Gzip(string input)
     {
         var raw = Encoding.UTF8.GetBytes(input);

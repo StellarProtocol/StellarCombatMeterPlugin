@@ -59,6 +59,13 @@ internal static class PositionUploader
         _ = Task.Run(() => UploadAsync(json, url, onComplete));
     }
 
+    /// <summary>Re-POST a pre-serialized positions body verbatim. Never throws.</summary>
+    internal static void PostRawFireAndForget(string region, long levelUuid, string json, Action<bool, int, string?>? onComplete = null)
+    {
+        var url = string.Concat(BaseUrl, region, "/", levelUuid.ToString(CultureInfo.InvariantCulture), "/positions");
+        _ = Task.Run(() => UploadAsync(json, url, onComplete));   // UploadAsync already gzips + POSTs
+    }
+
     private static async Task UploadAsync(string json, string url, Action<bool, int, string?>? onComplete)
     {
         try
