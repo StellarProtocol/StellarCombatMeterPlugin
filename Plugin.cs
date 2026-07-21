@@ -202,6 +202,7 @@ public sealed partial class Plugin : IStellarPlugin
         _snapshotWindow = RegisterSnapshotWindow();
 
         _settingsWindow = BuildAndRegisterSettings();
+        _archiveSettingsWindow = BuildAndRegisterArchiveSettings();
         _rowMenuWindow = RegisterRowMenuWindow();
 
         RegisterHotkeys();
