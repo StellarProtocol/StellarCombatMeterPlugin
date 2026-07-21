@@ -59,21 +59,21 @@ public sealed partial class Plugin
             new SeparatorElement(),
 
             ToggleRow("Team wipe", () => AutoArchiveWipe, v => AutoArchiveWipe = v),
-            new TextElement(() => "   Banks when everyone (or you, solo) goes down.", MutedCol),
+            new TextElement(() => "   Archives when everyone (or you, solo) goes down.", MutedCol),
             PillRow("Revive grace", () => AutoArchiveWipeGraceS, v => AutoArchiveWipeGraceS = v, new[] { 0, 2, 5 }, () => AutoArchiveWipe),
             ToggleRow("Ignore when solo", () => AutoArchiveWipeIgnoreSolo, v => AutoArchiveWipeIgnoreSolo = v, () => AutoArchiveWipe, indent: true),
 
             ToggleRow("Boss phase", () => AutoArchiveBoss, v => AutoArchiveBoss = v),
-            new TextElement(() => "   Cuts a fresh segment the moment the boss fight starts.", MutedCol),
+            new TextElement(() => "   Archives the run-up when the boss fight starts (fight records fresh).", MutedCol),
             PillRow("Keep before", () => AutoArchiveKeepBeforeS, v => AutoArchiveKeepBeforeS = v, new[] { 0, 3, 5 }, () => AutoArchiveBoss),
             ToggleRow("Re-cut if boss re-detected", () => AutoArchiveBossRecut, v => AutoArchiveBossRecut = v, () => AutoArchiveBoss, indent: true),
 
             ToggleRow("Combat idle", () => AutoArchiveIdle, v => AutoArchiveIdle = v),
-            new TextElement(() => "   Banks after no combat for a while.", MutedCol),
+            new TextElement(() => "   Archives after no combat for a while.", MutedCol),
             PillRow("Idle timeout", () => AutoArchiveIdleTimeoutS, v => AutoArchiveIdleTimeoutS = v, new[] { 30, 60, 120, 300 }, () => AutoArchiveIdle),
 
             ToggleRow("Dungeon stage change", () => AutoArchiveStage, v => AutoArchiveStage = v),
-            new TextElement(() => "   Banks when the dungeon advances (floor clear / settlement).", MutedCol),
+            new TextElement(() => "   Archives when the dungeon advances (floor clear / settlement).", MutedCol),
 
             new SeparatorElement(),
             new TextElement(() => "Uploads", Emphasis: true),
