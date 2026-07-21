@@ -384,6 +384,25 @@ public class AutoArchiveEngineTests
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in laterBoss));
     }
 
+    [Fact]
+    public void MinBossSegment_suppresses_pending_path_fire()
+    {
+        // The floor must gate the _bossPending fire path too, not just the live BossPresent path —
+        // otherwise a sighting banked while too-short, then vanishing before the floor lifts, fires a
+        // sub-floor sliver via the banked-pending branch instead of the live one.
+        var e = Armed(Live());
+        e.MinBossSegmentMs = 10_000;
+        // Boss sighted 3s into combat — floored on the live path, banks _bossPending regardless.
+        var sighted = Live() with { BossPresent = true, CombatStartMs = 100_000, NowMs = 103_000 };
+        Assert.Null(e.Evaluate(in sighted));
+        // Boss vanishes a tick later, still only 4s in — the pending path must be floored too.
+        var vanished = sighted with { BossPresent = false, BossGone = true, NowMs = 104_000 };
+        Assert.Null(e.Evaluate(in vanished));
+        // Now 12s in — past the floor — the banked pending sighting fires.
+        var later = vanished with { NowMs = 112_000 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in later));
+    }
+
     // ---- boss re-cut fix (default: one fight = one cut) ----
 
     // Baseline: a boss is present and a boss segment is active (first boss sighting already fired).

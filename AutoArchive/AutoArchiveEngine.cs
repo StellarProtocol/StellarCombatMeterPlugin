@@ -157,19 +157,11 @@ internal sealed class AutoArchiveEngine
         if (StageEnabled && _stagePending)                        { _stagePending = false;  return ArchiveReason.StageChange; }
         if (BossEnabled && !_bossSegmentActive && (s.BossPresent || _bossPending))
         {
-            // Only mark a segment active when firing off a boss that is genuinely present RIGHT
-            // NOW. A stale banked _bossPending firing after the boss already left (!s.BossPresent)
-            // archives the pre-boss segment but starts no live segment — there's nothing to close
-            // later, so marking one active here would wedge the NEXT real boss engagement behind
-            // this !_bossSegmentActive gate forever (round 2 fix; pinned by
-            // <see cref="AutoArchiveEngineTests.Boss_stale_banked_fire_does_not_wedge_next_real_boss"/>).
-            //
-            // Min-segment floor: a boss sighted too soon after combat start is suppressed (skip,
-            // don't consume the cooldown or mark a segment) so a rapid re-detect can't cut a sliver.
-            if (MinBossSegmentMs > 0 && s.BossPresent && s.NowMs - s.CombatStartMs < MinBossSegmentMs)
-            {
-                // fall through — neither fire nor mark a segment active; re-evaluate next tick.
-            }
+            // A stale banked _bossPending fire (boss already left) must not mark a segment active —
+            // there's nothing live to close later (round 2 fix; see
+            // Boss_stale_banked_fire_does_not_wedge_next_real_boss). Min-segment floor (see
+            // BossSegmentTooShort) gates both the live and the pending fire path on segment length.
+            if (BossSegmentTooShort(in s)) { /* too short — fall through, try again next tick */ }
             else
             {
                 _bossSegmentActive = s.BossPresent;
@@ -180,6 +172,11 @@ internal sealed class AutoArchiveEngine
         if (IdleEnabled && IdleExpired(in s))                     { return ArchiveReason.Idle; }
         return null;
     }
+
+    // Min-boss-segment floor (see the fire-branch comment in Evaluate): true when a boss cut this
+    // tick — live or banked-pending — would close a segment shorter than MinBossSegmentMs.
+    private bool BossSegmentTooShort(in AutoArchiveInputs s) =>
+        MinBossSegmentMs > 0 && s.NowMs - s.CombatStartMs < MinBossSegmentMs;
 
     /// <summary>Every archive — ANY path, including manual, hotkey, and scene change — reports here:
     /// arms the shared cooldown, and a non-boss archive ends the running boss segment (so the next
