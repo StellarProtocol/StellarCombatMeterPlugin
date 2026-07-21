@@ -34,6 +34,9 @@ internal readonly record struct AutoArchiveInputs
     public bool OutcomeFailed { get; init; }     // IDungeonState.LastOutcome == Failed
     public bool BossPresent { get; init; }       // a boss-tagged entity is currently resolved + alive
     public bool BossGone { get; init; }          // the previously resolved boss died / despawned / evicted
+    /// <summary>A CONFIRMED boss death — HP observed &lt;=0 — as opposed to a transient cache
+    /// eviction, which <see cref="BossGone"/> also covers.</summary>
+    public bool BossDead { get; init; }
     public bool InstancedRun { get; init; }      // IDungeonState.CurrentRunId != 0
     public int FlowStateVersion { get; init; }   // IDungeonState.FlowStateVersion
     public DungeonFlowState CurrentFlowState { get; init; }  // IDungeonState.CurrentFlowState — the run
@@ -57,6 +60,7 @@ internal sealed class AutoArchiveEngine
     public bool IdleEnabled   = true;
     public bool StageEnabled  = true;
     public long IdleTimeoutMs = 60_000;
+    public bool BossRecutOnRedetect;   // false = one fight, one cut (transient eviction / intervening archive never re-arms the boss segment). true = legacy re-detect re-cut.
 
     private long _lastArchiveMs;
 
@@ -167,7 +171,16 @@ internal sealed class AutoArchiveEngine
     public void OnArchived(long nowMs, ArchiveReason reason)
     {
         _lastArchiveMs = nowMs;
-        if (reason != ArchiveReason.BossPhase) { _bossSegmentActive = false; _bossPending = false; }
+        // Legacy re-arm on any non-boss archive is part of the re-detect model; with re-cut OFF a
+        // manual/wipe/idle archive mid-boss must NOT restart boss detection (round the owner's run).
+        // _bossPending's clear is NOT gated by the flag: a banked pre-fire sighting that another
+        // trigger already superseded must never resurface later, regardless of recut mode — the
+        // same "supersede" rule _stagePending already follows unconditionally below.
+        if (reason != ArchiveReason.BossPhase)
+        {
+            if (BossRecutOnRedetect) _bossSegmentActive = false;
+            _bossPending = false;
+        }
         _stagePending = false;
     }
 
@@ -176,7 +189,9 @@ internal sealed class AutoArchiveEngine
     // wipe latch's own recovery clear + edge stamp live directly in Evaluate — see its body.)
     private void UpdateLatches(in AutoArchiveInputs s)
     {
-        if (s.BossGone) _bossSegmentActive = false;    // boss died/despawned — next boss is a new segment
+        // Boss segment ends only on a CONFIRMED death (or, legacy, any "gone" incl. transient
+        // eviction). Default: a cache blink mid-fight must NOT re-arm — one fight, one cut.
+        if (BossRecutOnRedetect ? s.BossGone : s.BossDead) _bossSegmentActive = false;
         // Bank a boss sighting even if the cooldown gate below is about to swallow the fire this
         // tick, so a boss that starts AND ends entirely inside one cooldown window still gets cut
         // once the cooldown lifts, instead of silently merging into the surrounding trash segment.

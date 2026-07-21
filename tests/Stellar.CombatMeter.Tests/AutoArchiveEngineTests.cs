@@ -12,7 +12,7 @@ public class AutoArchiveEngineTests
     {
         NowMs = nowMs, CombatActive = true, CombatStartMs = 100_000, LastDamageMs = 160_000,
         HasStats = true, RosterSize = 4, DeadCount = 0, UnknownCount = 0,
-        OutcomeFailed = false, BossPresent = false, BossGone = false,
+        OutcomeFailed = false, BossPresent = false, BossGone = false, BossDead = false,
         InstancedRun = true, FlowStateVersion = 1,
     };
 
@@ -218,6 +218,10 @@ public class AutoArchiveEngineTests
     public void Boss_rearms_after_boss_gone()
     {
         var e = Armed(Live());
+        e.BossRecutOnRedetect = true;   // pins the legacy re-detect path explicitly (found breaking
+                                         // under the new recut-off default while implementing the
+                                         // boss re-cut fix — same category as the two brief-named
+                                         // migrations, not itself in that list)
         var s = Live() with { BossPresent = true };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
@@ -231,6 +235,7 @@ public class AutoArchiveEngineTests
     public void NonBoss_archive_ends_the_boss_segment()
     {
         var e = Armed(Live());
+        e.BossRecutOnRedetect = true;   // pins the legacy re-detect path explicitly
         var s = Live() with { BossPresent = true };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
@@ -284,6 +289,7 @@ public class AutoArchiveEngineTests
         // later real boss engagement behind the !_bossSegmentActive gate forever. This FAILS on
         // ea58a42.
         var e = Armed(Live());
+        e.BossRecutOnRedetect = true;   // pins the legacy re-detect path explicitly
         e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);                 // arm the cooldown
         var sighted = Live() with { BossPresent = true, NowMs = Live().NowMs + 2000 };
         Assert.Null(e.Evaluate(in sighted));                                   // banks _bossPending, cooldown blocks
@@ -300,6 +306,68 @@ public class AutoArchiveEngineTests
             BossPresent = true, BossGone = false, NowMs = cooldownLifted.NowMs + AutoArchiveEngine.CooldownMs + 1,
         };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newBoss));
+    }
+
+    // ---- boss re-cut fix (default: one fight = one cut) ----
+
+    // Baseline: a boss is present and a boss segment is active (first boss sighting already fired).
+    private static (AutoArchiveEngine e, AutoArchiveInputs bossOn) BossEngaged()
+    {
+        var e = Armed(Live());
+        // Isolate boss-recut behavior from Idle: NowMs climbs well past Live()'s fixed LastDamageMs
+        // across these tests' later ticks, which would otherwise let a stale Idle timeout leak
+        // through once the boss branch stops firing (the very thing under test here) — found while
+        // running this suite; not itself part of what the brief's tests were pinning.
+        e.IdleEnabled = false;
+        var sighting = Live() with { BossPresent = true, NowMs = 260_000 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in sighting));   // first cut
+        e.OnArchived(sighting.NowMs, ArchiveReason.BossPhase);
+        return (e, sighting);
+    }
+
+    [Fact]
+    public void Boss_transient_eviction_does_not_recut_when_recut_off()
+    {
+        var (e, on) = BossEngaged();   // BossRecutOnRedetect defaults false
+        // Cache blinks: boss "gone" via eviction (NOT a real death), boss still present next tick.
+        var evicted = on with { BossPresent = false, BossGone = true, BossDead = false, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Null(e.Evaluate(in evicted));
+        var back = on with { BossPresent = true, NowMs = evicted.NowMs + 500 };
+        Assert.Null(e.Evaluate(in back));   // must NOT re-cut — one fight, one cut
+    }
+
+    [Fact]
+    public void Boss_intervening_manual_archive_does_not_recut_when_recut_off()
+    {
+        var (e, on) = BossEngaged();
+        e.OnArchived(on.NowMs + 100, ArchiveReason.Manual);   // a manual archive mid-boss
+        var still = on with { BossPresent = true, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 200 };
+        Assert.Null(e.Evaluate(in still));   // boss still present, but no re-cut
+    }
+
+    [Fact]
+    public void Boss_confirmed_death_then_new_boss_recuts_even_when_recut_off()
+    {
+        var (e, on) = BossEngaged();
+        var dead = on with { BossPresent = false, BossGone = true, BossDead = true, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Null(e.Evaluate(in dead));   // death itself doesn't archive-by-boss; segment ends
+        var newBoss = dead with { BossPresent = true, BossGone = false, BossDead = false, NowMs = dead.NowMs + 5000 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newBoss));   // a genuinely new fight re-cuts
+    }
+
+    [Fact]
+    public void Boss_recut_on_preserves_legacy_redetect_behavior()
+    {
+        var e = Armed(Live());
+        e.IdleEnabled = false;   // isolate boss behavior from Idle — see BossEngaged()'s comment
+        e.BossRecutOnRedetect = true;
+        var sighting = Live() with { BossPresent = true, NowMs = 260_000 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in sighting));
+        e.OnArchived(sighting.NowMs, ArchiveReason.BossPhase);
+        var evicted = sighting with { BossPresent = false, BossGone = true, NowMs = sighting.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Null(e.Evaluate(in evicted));
+        var back = sighting with { BossPresent = true, NowMs = evicted.NowMs + 500 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in back));   // legacy: re-detect re-cuts
     }
 
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
