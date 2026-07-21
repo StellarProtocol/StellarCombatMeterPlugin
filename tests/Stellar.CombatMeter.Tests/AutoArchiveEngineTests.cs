@@ -225,8 +225,12 @@ public class AutoArchiveEngineTests
     [Fact]
     public void Wipe_outcome_failed_fires_immediately_ignoring_grace()
     {
+        // Both signals present on the SAME just-started tick: DeadCount==RosterSize means allDead is
+        // true but allDeadHeld is false (0ms held, under the 2000ms default grace) — if outcomeEdge
+        // were coupled to the debounce at all, this would fire null. It fires Wipe immediately, proving
+        // outcomeEdge (server-authoritative OutcomeFailed) is wired independently of allDeadHeld/grace.
         var e = Armed(Live());
-        var failed = Live() with { OutcomeFailed = true, NowMs = 210_000 };
+        var failed = Live() with { OutcomeFailed = true, DeadCount = 4, NowMs = 210_000 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in failed));   // server-authoritative fail = immediate
     }
 
@@ -240,6 +244,24 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in solo));
         var party = Live() with { RosterSize = 4, DeadCount = 4, NowMs = 220_000 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in party));
+    }
+
+    [Fact]
+    public void Wipe_and_stage_tie_at_default_grace_labels_stagechange()
+    {
+        // Deliberate, tracked tie-break — default WipeGraceMs (2000), NOT overridden to 0. When
+        // allDead and a stage transition into a run-end state land on the SAME tick, allDead has
+        // only just started (0ms held), so allDeadHeld is false and the grace debounce yields the
+        // tick to StageChange instead of Wipe. This is the canonical default-grace pin for that
+        // tie-break (see the migration comment on
+        // Stage_transition_banked_across_an_overlapping_archive_is_consumed, which isolates ITSELF
+        // from grace via WipeGraceMs=0 rather than pinning the tie-break). Coverage is preserved —
+        // an archive still fires at this exact tick, cutting the segment with no gap — only the
+        // trigger LABEL changes; a genuine mid-run wipe with no coinciding stage transition still
+        // fires Wipe once grace elapses (see Wipe_waits_out_revive_grace_and_a_revive_cancels_it).
+        var e = Armed(Live());
+        var tie = Live() with { DeadCount = 4, FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End };
+        Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in tie));   // archive fires — labeled Stage, not Wipe
     }
 
     // ---- boss phase ----
@@ -437,7 +459,11 @@ public class AutoArchiveEngineTests
         // StageChange archive once stats re-accumulate IS a double-archive in slow motion — pin that
         // OnArchived consumes any pending transition, whichever trigger actually fired.
         var e = new AutoArchiveEngine();
-        e.WipeGraceMs = 0;   // the wipe below must win the tick over StageChange on the SAME tick allDead turns true — isolate from revive-grace
+        // Isolates ITSELF from revive-grace (the wipe below must win the tick over StageChange on the
+        // SAME tick allDead turns true) — this test pins the OnArchived-consumes-pending-transition
+        // behavior, not the wipe/stage tie-break. See Wipe_and_stage_tie_at_default_grace_labels_stagechange
+        // for the canonical pin of what happens at the DEFAULT grace when the two genuinely tie.
+        e.WipeGraceMs = 0;
         Assert.Null(e.Evaluate(Live()));                                  // adopt flow version 1
         // Transition into End (a run-END state that DOES arm under the new rule) AND a wipe overlap.
         var overlap = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End, DeadCount = 4 };
