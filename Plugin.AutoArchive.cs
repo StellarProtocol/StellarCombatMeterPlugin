@@ -72,6 +72,19 @@ public sealed partial class Plugin
     private const string PrefAaBossRecut      = "autoArchive.bossRecut";
     private const string PrefAaMinBossSegS    = "autoArchive.minBossSegmentS";
 
+    // Boss-phase "keep before" (2026-07-21, Task 7): how much of the pre-hit run-up rides with the boss
+    // segment when the inline boss cut fires (Plugin.Capture.cs MaybeCutForBossPhase). Default 0 = cut
+    // exactly at the first boss hit. When > 0 the boss segment's combat clock is backdated to
+    // (first-boss-hit − keepBefore) and — on a trash→boss cut — the trash replay window is capped at the
+    // same instant so the run-up MOVEMENT rides with the boss window instead of the trash one (the
+    // boundary MOVES earlier; windows stay contiguous → the full-run concatenation is unbroken). DPS
+    // stats for the boss segment still start at the first boss hit (the accumulated trash is archived
+    // whole, never split mid-window). Plugin-local field (no engine behaviour), persisted like the
+    // engine knob accessors above.
+    private const string PrefAaKeepBeforeS    = "autoArchive.bossKeepBeforeS";
+    private long _autoArchiveKeepBeforeMs;
+    internal long BossKeepBeforeMs => _autoArchiveKeepBeforeMs;
+
     // Master enable (Fix 1, review round): the gate now lives on the pure engine (_autoArchive.Enabled)
     // — the single source of truth — so the policy is unit-testable (Master_disabled_never_fires).
     // This accessor is a thin persisted wrapper; TickAutoArchiveTriggers still short-circuits on it
@@ -152,6 +165,14 @@ public sealed partial class Plugin
         set { _archiveSettleMs = value * 1000L; _prefs.Set(PrefAaSettleS, value); _prefs.Save(); }
     }
 
+    // Boss-phase "keep before" seconds (Task 7). Plugin-local (no engine field) — the inline boss cut
+    // in Plugin.Capture.cs applies it. Persisted the same get-field/set-field+persist way as above.
+    internal int AutoArchiveKeepBeforeS
+    {
+        get => (int)(_autoArchiveKeepBeforeMs / 1000);
+        set { _autoArchiveKeepBeforeMs = value * 1000L; _prefs.Set(PrefAaKeepBeforeS, value); _prefs.Save(); }
+    }
+
     // The most recently committed (BANKED, not suppressed) archive — for the settings UI readout
     // (Task 5). Set by NoteLastArchive, called from ManualArchive (Plugin.History.cs) on every bank.
     internal (AutoArchive.ArchiveReason reason, long ms)? LastArchive { get; private set; }
@@ -173,6 +194,7 @@ public sealed partial class Plugin
         _autoArchive.CooldownMs          = _prefs.Get(PrefAaCooldownS, 10) * 1000L;
         _autoArchive.MinBossSegmentMs    = _prefs.Get(PrefAaMinBossSegS, 10) * 1000L;
         _archiveSettleMs                 = _prefs.Get(PrefAaSettleS, 2) * 1000L;
+        _autoArchiveKeepBeforeMs         = _prefs.Get(PrefAaKeepBeforeS, 0) * 1000L;   // Task 7: default 0 = cut at first hit
     }
 
     // ~10 Hz from OnUpdate's throttled region (Plugin.cs). An AUTO trigger is deferred until combat
@@ -220,17 +242,24 @@ public sealed partial class Plugin
         => nowMs - armedMs >= capMs;
 
     /// <summary>True for the engine-driven AUTO reasons that should wait out the settle delay
-    /// (a floor-clear <see cref="AutoArchive.ArchiveReason.StageChange"/>, wipe, boss, idle). A
+    /// (a floor-clear <see cref="AutoArchive.ArchiveReason.StageChange"/>, wipe, idle). A
     /// <see cref="AutoArchive.ArchiveReason.Manual"/> button/hotkey archive stays immediate, and
     /// <see cref="AutoArchive.ArchiveReason.SceneChange"/> must beat the entity teardown at the
-    /// boundary — neither defers. Pure so it unit-tests headless.</summary>
+    /// boundary — neither defers.
+    /// <para><b>BossPhase is now IMMEDIATE (2026-07-21, Task 7):</b> the boss cut moved INLINE into
+    /// <c>Plugin.Capture.cs</c> (see <c>MaybeCutForBossPhase</c>), firing at the first boss hit BEFORE
+    /// that hit is accumulated so the boss fight is one clean segment. The old deferred BossPhase path
+    /// hit the 15 s cap mid-fight and chopped the fight (owner-reported from the log). This engine path
+    /// no longer fires BossPhase in production (the inline cut sets <c>_bossSegmentActive</c> before the
+    /// next engine tick observes the boss), but should a BossPhase reason ever reach here it must NOT
+    /// defer.</para>
+    /// Pure so it unit-tests headless.</summary>
     internal static bool IsDeferrableArchive(AutoArchive.ArchiveReason reason) => reason switch
     {
         AutoArchive.ArchiveReason.Wipe        => true,
-        AutoArchive.ArchiveReason.BossPhase   => true,
         AutoArchive.ArchiveReason.Idle        => true,
         AutoArchive.ArchiveReason.StageChange => true,
-        _                                     => false,   // Manual + SceneChange stay immediate
+        _                                     => false,   // Manual + SceneChange + BossPhase stay immediate
     };
 
     private AutoArchiveInputs BuildAutoArchiveInputs()
@@ -325,5 +354,48 @@ public sealed partial class Plugin
             _bossCheck[id] = isBoss;
         }
         if (isBoss) _autoArchiveBossId = id;
+    }
+
+    /// <summary>Pure decision (Task 7): on the first-detected boss hit, should the accumulated pre-boss
+    /// trash be archived as its own boss-phase segment? Only when there WAS prior combat (trash) to
+    /// bank — a direct engage (no combat before the boss) has nothing to archive, so it must NOT emit a
+    /// spurious pre-fight segment; the boss fight simply starts here as one clean segment. The
+    /// boss-enabled + once-per-fight gating is applied separately by the caller
+    /// (<see cref="AutoArchiveEngine.TryBeginBossSegmentCut"/>). Unit-tested headless.</summary>
+    internal static bool ShouldArchiveTrashForBoss(bool priorCombat) => priorCombat;
+
+    // Inline boss-phase cut (Task 7, 2026-07-21). Called from OnCombatEvent (Plugin.Capture.cs) on every
+    // DamageDealt, BEFORE that event is accumulated. Detects the boss on its first combat event and, if
+    // boss auto-archive is enabled and no boss segment is active yet this fight, cuts IMMEDIATELY:
+    //   • trash→boss (priorCombat): archive the accumulated pre-boss trash as its own segment (immediate
+    //     ManualArchive(BossPhase) → Clear()), then start the boss segment's combat clock at
+    //     (firstHit − keepBefore). The trash replay window is capped at the same instant so the run-up
+    //     movement rides with the boss window (boundary moves earlier; windows stay contiguous).
+    //   • direct engage (!priorCombat): NO archive — the fight naturally starts at this event; we only
+    //     mark the segment active (so the engine's Evaluate boss branch is superseded and never fires a
+    //     spurious pre-fight archive) and backdate the combat clock by keepBefore.
+    // Hot-path safe: returns in O(1) with no allocation once _autoArchiveBossId is set (this fight's
+    // boss already known) or boss auto-archive is off.
+    private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
+    {
+        if (!_autoArchive.BossEnabled || _autoArchiveBossId.Value != 0) return;   // off, or boss already known this fight
+        ObserveAutoArchiveBoss(src, tgt);              // sets _autoArchiveBossId iff this event involves the boss
+        if (_autoArchiveBossId.Value == 0) return;     // this event didn't involve the boss — nothing to do
+        if (!_autoArchive.TryBeginBossSegmentCut()) return;   // a boss segment is already active — one cut per fight
+
+        long keepBeforeMs = BossKeepBeforeMs;
+        if (ShouldArchiveTrashForBoss(priorCombat))
+        {
+            // Bank the trash IMMEDIATELY (not the settle defer) + cap its replay window at (firstHit −
+            // keepBefore) so the run-up movement moves into the boss window. ManualArchive Clear()s the
+            // combat clock; EnsureCombatStarted below re-establishes it for the boss segment.
+            ManualArchive(AutoArchive.ArchiveReason.BossPhase, replayUpperCapServerMs: firstHitMs - keepBeforeMs);
+        }
+        // Start (trash→boss) or backdate (direct engage) the boss segment's combat clock at
+        // (firstHit − keepBefore). In the trash case ManualArchive Clear()ed _combatActive so this
+        // establishes the fresh segment; in direct engage it pre-empts OnCombatEvent's own
+        // EnsureCombatStarted(firstHit) so keepBefore is honoured. With keepBefore == 0 and direct
+        // engage this is identical to the normal EnsureCombatStarted(firstHit) (a no-op refinement).
+        EnsureCombatStarted(firstHitMs - keepBeforeMs);
     }
 }

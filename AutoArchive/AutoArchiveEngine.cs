@@ -185,6 +185,27 @@ internal sealed class AutoArchiveEngine
     private bool BossSegmentTooShort(in AutoArchiveInputs s) =>
         MinBossSegmentMs > 0 && s.NowMs - s.CombatStartMs < MinBossSegmentMs;
 
+    /// <summary>Inline boss-phase cut gate (2026-07-21, configurable-autoarchive Task 7). The boss cut
+    /// no longer fires from <see cref="Evaluate"/>'s deferred path in production — it happens INLINE in
+    /// <c>Plugin.Capture.cs</c> at the first boss combat event, BEFORE that hit is accumulated, so the
+    /// first boss hit lands in the fresh boss segment and the cut is never delayed to the 15 s settle
+    /// cap mid-fight (the owner's chopped-fight bug). This method is the gate that inline cut consults:
+    /// it reuses the SAME once-per-fight <see cref="_bossSegmentActive"/> latch the deferred path used —
+    /// maintained by <see cref="UpdateLatches"/> every tick (run-boundary + confirmed-death re-arm,
+    /// transient-eviction ignored when <see cref="BossRecutOnRedetect"/> is false) — so a transient
+    /// vitals blink / intervening non-boss archive never re-cuts and each new instanced run re-arms.
+    /// Returns true and marks the segment active EXACTLY ONCE per fight; false when boss auto-archive is
+    /// off or a boss segment is already active. Setting <see cref="_bossSegmentActive"/> here also
+    /// supersedes <see cref="Evaluate"/>'s boss branch on the next tick (it gates on !_bossSegmentActive),
+    /// which is why the engine never double-cuts once the inline path has run.</summary>
+    public bool TryBeginBossSegmentCut()
+    {
+        if (!BossEnabled || _bossSegmentActive) return false;
+        _bossSegmentActive = true;
+        _bossPending = false;   // a banked sighting is now moot — the inline cut supersedes it
+        return true;
+    }
+
     /// <summary>Every archive — ANY path, including manual, hotkey, and scene change — reports here:
     /// arms the shared cooldown, and a non-boss archive ends the running boss segment (so the next
     /// boss sighting cuts a fresh pre-boss segment). A boss-phase archive STARTS its segment, unless

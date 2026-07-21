@@ -88,4 +88,17 @@ public class AutoArchiveContentGuardTests
     [Fact] public void Activity_banks_wipe()  => Assert.False(SuppressWithActivity(AutoArchive.ArchiveReason.Wipe));
     [Fact] public void Activity_banks_scene() => Assert.False(SuppressWithActivity(AutoArchive.ArchiveReason.SceneChange));
     [Fact] public void Activity_banks_idle()  => Assert.False(SuppressWithActivity(AutoArchive.ArchiveReason.Idle));
+
+    // ── Inline boss-phase cut: archive the pre-boss trash ONLY when there was prior combat (Task 7) ──
+    // Direct engage (no combat before the boss) must NOT emit a spurious pre-fight archive — the boss
+    // fight is one clean segment starting at the first hit (owner spec point 2). Trash→boss archives the
+    // accumulated trash as its own segment (owner spec point 3). The boss-enabled + once-per-fight
+    // gating is applied separately by AutoArchiveEngine.TryBeginBossSegmentCut (see AutoArchiveEngineTests).
+
+    [Fact]
+    public void ShouldArchiveTrashForBoss_true_only_with_prior_combat()
+    {
+        Assert.True(Plugin.ShouldArchiveTrashForBoss(priorCombat: true));    // trash → boss: bank the trash
+        Assert.False(Plugin.ShouldArchiveTrashForBoss(priorCombat: false));  // direct engage: no spurious archive
+    }
 }

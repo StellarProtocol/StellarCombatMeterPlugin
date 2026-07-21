@@ -104,7 +104,8 @@ public sealed partial class Plugin
     // nothing to archive. Callers: OnSceneChanged (scene), the Archive button/hotkey (manual),
     // and TickAutoArchiveTriggers (wipe/boss/idle/stage). Every archive — whatever the path —
     // reports into the AutoArchiveEngine so the shared 10 s cooldown spans them all.
-    internal void ManualArchive(AutoArchive.ArchiveReason reason)
+    internal void ManualArchive(AutoArchive.ArchiveReason reason,
+                                long replayUpperCapServerMs = ReplayUpperCapUnset)
     {
         // Any archive that actually enters this method — the manual button/hotkey, a scene change,
         // OR the deferred AUTO fire itself — supersedes a still-pending settle-delayed auto archive
@@ -144,7 +145,7 @@ public sealed partial class Plugin
         foreach (var evicted in TrimToCapacity(_history)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
-        var summaryFired = FinalizeAndMaybeUploadReplay(entry);
+        var summaryFired = FinalizeAndMaybeUploadReplay(entry, replayUpperCapServerMs);
         LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
         if (reason == AutoArchive.ArchiveReason.Manual) NotifyManualArchived(entry.CombatDurationMs);
 
@@ -161,9 +162,10 @@ public sealed partial class Plugin
     // and the watermark holds. On a successful hand-off to the upload queue the watermark advances and
     // the window's samples are freed; a failed hand-off keeps them so they merge into the next window
     // (at-least-once, owner default 2). Returns whether a SUMMARY upload fired.
-    private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry)
+    private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry,
+                                              long replayUpperCapServerMs = ReplayUpperCapUnset)
     {
-        var replayDoc = PrepareReplayDoc(entry);
+        var replayDoc = PrepareReplayDoc(entry, replayUpperCapServerMs);
         if (replayDoc is null) return false;   // empty/off/no-level window — watermark unchanged
         var summaryFired = MaybeUploadLog(entry, replayDoc);
         // summaryFired → the summary callback OWNS + uploads the doc (synchronous hand-off complete);

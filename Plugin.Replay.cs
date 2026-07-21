@@ -380,18 +380,19 @@ public sealed partial class Plugin
     /// handed off (see <see cref="AdvanceReplayWatermark"/> / <c>FinalizeAndMaybeUploadReplay</c>).
     /// Returns <c>null</c> — leaving the watermark and buffers untouched — when replay upload is off,
     /// there is no capture, the run has no level id, or the window is EMPTY (no samples since the
-    /// watermark, e.g. a suppressed-junk or between-pull archive). Never throws.
-    /// </summary>
-    internal PositionUploadDoc? PrepareReplayDoc(EncounterHistoryEntry entry)
+    /// watermark, e.g. a suppressed-junk or between-pull archive). Never throws. Task 7: the boss cut
+    /// caps the upper to (firstBossHit − keepBefore) so the run-up moves into the next window.</summary>
+    internal PositionUploadDoc? PrepareReplayDoc(EncounterHistoryEntry entry, long replayUpperCapServerMs = ReplayUpperCapUnset)
     {
         try
         {
             if (!_uploadReplay || _replay is null) return null;      // Clear-decouple: NEVER reset here
             if (entry.LevelUuid == 0) return null;
 
-            // upperMs = capture-relative "now" (the samples' own clock) — covers every buffered sample
-            // above the watermark, incl. a late MarkDead 0-stamp. See _replayWatermarkMs for the model.
+            // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs) — covers even a
+            // late MarkDead 0-stamp; a boss-cut cap (int-truncated the same way) moves it earlier.
             var upperMs = (long)((int)_services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs);
+            if (replayUpperCapServerMs != ReplayUpperCapUnset) upperMs = ReplayWindow.CapUpper(upperMs, (int)replayUpperCapServerMs - _replay.CombatStartMs, _replayWatermarkMs);
             var windowTracks = SliceWindowPositions(_replayWatermarkMs, upperMs);
             if (windowTracks.Count == 0) return null;                // empty window → no upload, watermark unchanged
             _replayWindowUpperMs = upperMs;

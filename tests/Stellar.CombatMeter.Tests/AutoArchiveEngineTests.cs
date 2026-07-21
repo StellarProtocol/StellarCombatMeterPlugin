@@ -499,6 +499,76 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in backInRunNoBoss));   // cooldown clear, no boss — no stale pending fires
     }
 
+    // ---- inline boss-phase cut gate (Task 7, 2026-07-21): TryBeginBossSegmentCut ----
+    // The production boss cut moved INLINE into Plugin.Capture.cs (fires at the first boss hit, before
+    // accumulation). It consults this engine gate for the SAME once-per-fight + re-arm-per-run
+    // protections the deferred Evaluate path used (_bossSegmentActive, maintained by UpdateLatches every
+    // tick). In production the inline cut sets _bossSegmentActive BEFORE the next Evaluate tick observes
+    // the boss, so Evaluate's boss branch (still exercised by the tests above) never double-fires. These
+    // tests drive that production ordering: TryBeginBossSegmentCut first, then Evaluate ticks to advance
+    // the re-arm latches.
+
+    [Fact]
+    public void TryBeginBossSegmentCut_fires_once_then_gates_until_rearm()
+    {
+        var e = new AutoArchiveEngine();
+        Assert.True(e.TryBeginBossSegmentCut());    // first boss this fight → cut permitted, marks segment active
+        Assert.False(e.TryBeginBossSegmentCut());   // segment active → one fight, one cut
+    }
+
+    [Fact]
+    public void TryBeginBossSegmentCut_blocked_when_boss_disabled()
+    {
+        var e = new AutoArchiveEngine { BossEnabled = false };
+        Assert.False(e.TryBeginBossSegmentCut());
+    }
+
+    [Fact]
+    public void TryBeginBossSegmentCut_rearms_on_run_boundary()
+    {
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));            // adopt flow version
+        Assert.True(e.TryBeginBossSegmentCut());    // first cut this run
+        Assert.False(e.TryBeginBossSegmentCut());   // gated within the run
+        // Leaving the instanced run re-arms the segment latch (UpdateLatches, every tick).
+        Assert.Null(e.Evaluate(Live() with { InstancedRun = false, BossPresent = false }));
+        Assert.True(e.TryBeginBossSegmentCut());    // next run's boss cuts fresh
+    }
+
+    [Fact]
+    public void TryBeginBossSegmentCut_rearms_on_confirmed_death_recut_off()
+    {
+        var e = new AutoArchiveEngine();            // BossRecutOnRedetect defaults false
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut());
+        // A CONFIRMED death ends the segment even with re-cut off.
+        Assert.Null(e.Evaluate(Live() with { BossDead = true, BossGone = true, BossPresent = false }));
+        Assert.True(e.TryBeginBossSegmentCut());    // a genuinely new fight after the kill re-cuts
+    }
+
+    [Fact]
+    public void TryBeginBossSegmentCut_no_rearm_on_transient_eviction_recut_off()
+    {
+        var e = new AutoArchiveEngine();            // recut off (default)
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut());
+        // Transient vitals eviction (gone but NOT confirmed dead) must NOT re-arm with recut off —
+        // one fight, one cut (the pinned Boss_transient_eviction_does_not_recut_when_recut_off behavior).
+        Assert.Null(e.Evaluate(Live() with { BossGone = true, BossDead = false, BossPresent = false }));
+        Assert.False(e.TryBeginBossSegmentCut());
+    }
+
+    [Fact]
+    public void TryBeginBossSegmentCut_rearms_on_eviction_when_recut_on()
+    {
+        var e = new AutoArchiveEngine { BossRecutOnRedetect = true };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut());
+        // Legacy re-detect: any "gone" (incl. transient eviction) re-arms.
+        Assert.Null(e.Evaluate(Live() with { BossGone = true, BossPresent = false }));
+        Assert.True(e.TryBeginBossSegmentCut());
+    }
+
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
 
     [Fact]

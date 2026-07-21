@@ -12,6 +12,16 @@ namespace Stellar.CombatMeter.Replay;
 /// </summary>
 internal static class ReplayWindow
 {
+    /// <summary>Inline boss-phase upper-bound cap (Task 7, 2026-07-21). Clamps a window's upper bound
+    /// from "now" (<paramref name="upperMs"/>) down to <paramref name="capRelMs"/> — but ONLY when the
+    /// cap lands strictly BELOW now and strictly ABOVE the <paramref name="watermarkMs"/>, so the capped
+    /// window can never be empty/negative. Used by the trash→boss cut to end the trash window at
+    /// (firstBossHit − keepBefore): the run-up samples in (cap, now] are NOT trimmed and flow into the
+    /// following boss window, so the boundary MOVES earlier while the windows stay contiguous — the
+    /// full-run concatenation invariant is preserved. Returns the (possibly unchanged) upper. Pure.</summary>
+    internal static long CapUpper(long upperMs, long capRelMs, long watermarkMs)
+        => capRelMs < upperMs && capRelMs > watermarkMs ? capRelMs : upperMs;
+
     /// <summary>Position samples with <c>lowerExclusive &lt; Ms &lt;= upperInclusive</c>, in order.
     /// The initial watermark is below zero so window 1 carries the walk-in lead (ms=0); each later
     /// window's lower bound is the previous archive's upper bound, so the windows tile exactly.</summary>

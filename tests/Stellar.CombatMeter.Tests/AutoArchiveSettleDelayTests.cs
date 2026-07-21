@@ -92,8 +92,15 @@ public class AutoArchiveSettleDelayTests
         => Assert.True(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.Wipe));
 
     [Fact]
-    public void BossPhase_archive_is_deferred()
-        => Assert.True(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.BossPhase));
+    public void BossPhase_archive_is_immediate()
+        // RE-PINNED (Task 7, 2026-07-21): BossPhase used to defer (Assert.True) alongside the other AUTO
+        // reasons. It is now IMMEDIATE — the boss cut moved INLINE into Plugin.Capture.cs
+        // (MaybeCutForBossPhase), firing at the first boss hit BEFORE the hit is accumulated so the boss
+        // fight is one clean segment. The old deferred path hit the 15 s settle cap MID-FIGHT and chopped
+        // the fight (owner-reported). Deliberate contract change → re-pinned in the same commit per the
+        // agent process rules (a pinned test that changed contract is re-pinned with rationale, not
+        // silently deleted). Should a BossPhase reason ever reach the settle path it must NOT defer.
+        => Assert.False(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.BossPhase));
 
     [Fact]
     public void Idle_archive_is_deferred()
