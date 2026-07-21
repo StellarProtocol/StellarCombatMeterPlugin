@@ -389,8 +389,7 @@ public sealed partial class Plugin
             if (!_uploadReplay || _replay is null) return null;      // Clear-decouple: NEVER reset here
             if (entry.LevelUuid == 0) return null;
 
-            // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs) — covers even a
-            // late MarkDead 0-stamp; a boss-cut cap (int-truncated the same way) moves it earlier.
+            // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs); a boss-cut cap (same truncation) moves it earlier.
             var upperMs = (long)((int)_services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs);
             if (replayUpperCapServerMs != ReplayUpperCapUnset) upperMs = ReplayWindow.CapUpper(upperMs, (int)replayUpperCapServerMs - _replay.CombatStartMs, _replayWatermarkMs);
             var windowTracks = SliceWindowPositions(_replayWatermarkMs, upperMs);

@@ -162,6 +162,11 @@ internal sealed class AutoArchiveEngine
             return ArchiveReason.Wipe;
         }
         if (StageEnabled && _stagePending)                        { _stagePending = false;  return ArchiveReason.StageChange; }
+        // SUPERSEDED IN PRODUCTION (Task 7): the boss cut now happens INLINE at the first boss hit via
+        // Plugin.Capture.cs MaybeCutForBossPhase (see AutoArchiveEngine.TryBeginBossSegmentCut), which
+        // sets _bossSegmentActive before any tick observes the boss, so this branch (and its
+        // MinBossSegmentMs/BossSegmentTooShort floor, _bossPending) no longer fire live. Retained with
+        // the _bossSegmentActive latch + its tests pending a deeper engine cleanup.
         if (BossEnabled && !_bossSegmentActive && (s.BossPresent || _bossPending))
         {
             // A stale banked _bossPending fire (boss already left) must not mark a segment active —

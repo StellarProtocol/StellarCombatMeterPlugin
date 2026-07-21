@@ -70,7 +70,10 @@ public sealed partial class Plugin
     private const string PrefAaWipeGraceS     = "autoArchive.wipeGraceS";
     private const string PrefAaWipeIgnoreSolo = "autoArchive.wipeIgnoreSolo";
     private const string PrefAaBossRecut      = "autoArchive.bossRecut";
-    private const string PrefAaMinBossSegS    = "autoArchive.minBossSegmentS";
+    // NOTE: the old PrefAaMinBossSegS / AutoArchiveMinBossSegmentS accessor were removed (Task 7 review
+    // Minor 2): the inline boss cut is deterministic at the first boss hit, so the engine's
+    // MinBossSegmentMs floor (BossSegmentTooShort, read only in the now-superseded Evaluate boss branch)
+    // has no user-facing effect. The engine field + its tests are retained pending a deeper cleanup.
 
     // Boss-phase "keep before" (2026-07-21, Task 7): how much of the pre-hit run-up rides with the boss
     // segment when the inline boss cut fires (Plugin.Capture.cs MaybeCutForBossPhase). Default 0 = cut
@@ -153,12 +156,6 @@ public sealed partial class Plugin
         set { _autoArchive.CooldownMs = value * 1000L; _prefs.Set(PrefAaCooldownS, value); _prefs.Save(); }
     }
 
-    internal int AutoArchiveMinBossSegmentS
-    {
-        get => (int)(_autoArchive.MinBossSegmentMs / 1000);
-        set { _autoArchive.MinBossSegmentMs = value * 1000L; _prefs.Set(PrefAaMinBossSegS, value); _prefs.Save(); }
-    }
-
     internal int AutoArchiveSettleS
     {
         get => (int)(_archiveSettleMs / 1000);
@@ -192,7 +189,6 @@ public sealed partial class Plugin
         _autoArchive.WipeIgnoreSolo      = _prefs.Get(PrefAaWipeIgnoreSolo, false);
         _autoArchive.WipeGraceMs         = _prefs.Get(PrefAaWipeGraceS, 2) * 1000L;
         _autoArchive.CooldownMs          = _prefs.Get(PrefAaCooldownS, 10) * 1000L;
-        _autoArchive.MinBossSegmentMs    = _prefs.Get(PrefAaMinBossSegS, 10) * 1000L;
         _archiveSettleMs                 = _prefs.Get(PrefAaSettleS, 2) * 1000L;
         _autoArchiveKeepBeforeMs         = _prefs.Get(PrefAaKeepBeforeS, 0) * 1000L;   // Task 7: default 0 = cut at first hit
     }
@@ -364,6 +360,17 @@ public sealed partial class Plugin
     /// (<see cref="AutoArchiveEngine.TryBeginBossSegmentCut"/>). Unit-tested headless.</summary>
     internal static bool ShouldArchiveTrashForBoss(bool priorCombat) => priorCombat;
 
+    /// <summary>Pure guard (Task 7, review Minor 1): should the inline boss cut even CONSIDER this
+    /// event — i.e. detect the boss + (maybe) cut? Only when boss auto-archive is enabled, no boss is
+    /// known yet this fight, AND we are in an instanced run. The <c>inRun</c> gate mirrors the engine's
+    /// <c>_bossPending</c> InstancedRun gate: without it, an OPEN-WORLD boss (CurrentRunId==0) would set
+    /// <c>_autoArchiveBossId</c> + <c>_bossSegmentActive</c>, then <c>UpdateLatches</c>'s <c>!InstancedRun</c>
+    /// reset would clear the latch and the engine's live boss branch (no InstancedRun gate) could
+    /// re-fire → double-cut. Gating here means nothing boss-related runs out of run, so the engine's
+    /// BossPresent stays false too. Unit-tested headless.</summary>
+    internal static bool ShouldConsiderInlineBossCut(bool bossEnabled, bool bossAlreadyKnown, bool inRun)
+        => bossEnabled && !bossAlreadyKnown && inRun;
+
     // Inline boss-phase cut (Task 7, 2026-07-21). Called from OnCombatEvent (Plugin.Capture.cs) on every
     // DamageDealt, BEFORE that event is accumulated. Detects the boss on its first combat event and, if
     // boss auto-archive is enabled and no boss segment is active yet this fight, cuts IMMEDIATELY:
@@ -378,7 +385,9 @@ public sealed partial class Plugin
     // boss already known) or boss auto-archive is off.
     private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
     {
-        if (!_autoArchive.BossEnabled || _autoArchiveBossId.Value != 0) return;   // off, or boss already known this fight
+        // off / boss already known this fight / not in an instanced run (Minor 1: the InstancedRun gate
+        // keeps _autoArchiveBossId + the cut out of the open world, closing the double-cut edge).
+        if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchiveBossId.Value != 0, IsInstancedRun())) return;
         ObserveAutoArchiveBoss(src, tgt);              // sets _autoArchiveBossId iff this event involves the boss
         if (_autoArchiveBossId.Value == 0) return;     // this event didn't involve the boss — nothing to do
         if (!_autoArchive.TryBeginBossSegmentCut()) return;   // a boss segment is already active — one cut per fight

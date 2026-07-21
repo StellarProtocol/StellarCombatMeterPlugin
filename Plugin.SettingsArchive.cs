@@ -46,7 +46,6 @@ public sealed partial class Plugin
             new TextElement(() => "   Cuts a fresh segment the moment the boss fight starts.", MutedCol),
             PillRow("Keep before", () => AutoArchiveKeepBeforeS, v => AutoArchiveKeepBeforeS = v, new[] { 0, 3, 5 }, () => AutoArchiveBoss),
             ToggleRow("   Re-cut if boss re-detected", () => AutoArchiveBossRecut, v => AutoArchiveBossRecut = v, () => AutoArchiveBoss),
-            PillRow("Min boss seg", () => AutoArchiveMinBossSegmentS, v => AutoArchiveMinBossSegmentS = v, new[] { 0, 10, 30 }, () => AutoArchiveBoss),
 
             ToggleRow("Combat idle", () => AutoArchiveIdle, v => AutoArchiveIdle = v),
             new TextElement(() => "   Banks after no combat for a while.", MutedCol),
