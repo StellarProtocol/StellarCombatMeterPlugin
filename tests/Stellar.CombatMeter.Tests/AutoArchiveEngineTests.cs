@@ -62,7 +62,7 @@ public class AutoArchiveEngineTests
         var dead = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in dead));
         e.OnArchived(dead.NowMs, ArchiveReason.Wipe);
-        var later = dead with { NowMs = dead.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var later = dead with { NowMs = dead.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in later));                       // still all dead — no new edge
         var revived = later with { DeadCount = 3, NowMs = later.NowMs + 1000 };
         Assert.Null(e.Evaluate(in revived));                     // revived — edge consumed, nobody's wiped
@@ -77,7 +77,7 @@ public class AutoArchiveEngineTests
         var s = Live() with { OutcomeFailed = true };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.Wipe);
-        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in later));                       // edge consumed, sticky Failed doesn't refire
     }
 
@@ -96,7 +96,7 @@ public class AutoArchiveEngineTests
         var s1 = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
         e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
-        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, OutcomeFailed = true };
+        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1, OutcomeFailed = true };
         Assert.Null(e.Evaluate(in s2));   // still all dead, outcome now failed too — no duplicate archive
     }
 
@@ -112,7 +112,7 @@ public class AutoArchiveEngineTests
         var s1 = Live() with { OutcomeFailed = true };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
         e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
-        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, DeadCount = 4 };
+        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1, DeadCount = 4 };
         Assert.Null(e.Evaluate(in s2));   // outcome still failed, now all dead too — no duplicate archive
     }
 
@@ -131,7 +131,7 @@ public class AutoArchiveEngineTests
 
         var revived = wipe1 with
         {
-            DeadCount = 0, NowMs = wipe1.NowMs + AutoArchiveEngine.CooldownMs + 1_000,
+            DeadCount = 0, NowMs = wipe1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1_000,
         };
         Assert.Null(e.Evaluate(in revived));           // OutcomeFailed still true (sticky), nobody's dead
 
@@ -159,7 +159,7 @@ public class AutoArchiveEngineTests
 
         var later = wipe1 with
         {
-            NowMs = wipe1.NowMs + AutoArchiveEngine.CooldownMs + 5_000, OutcomeFailed = true,
+            NowMs = wipe1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 5_000, OutcomeFailed = true,
         };   // party still all dead throughout — no revive ever happened
         Assert.Null(e.Evaluate(in later));   // must NOT re-fire — same episode, already archived
     }
@@ -180,7 +180,7 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in rising));                                        // cooldown suppresses the fire
         var stillDead = rising with { NowMs = rising.NowMs + 3_000 };              // still inside cooldown, still dead
         Assert.Null(e.Evaluate(in stillDead));                                     // still suppressed
-        var afterLift = stillDead with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var afterLift = stillDead with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in afterLift));                // level persisted — fires on lift
     }
 
@@ -202,7 +202,7 @@ public class AutoArchiveEngineTests
         e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);                          // unrelated archive arms cooldown
         var rising = Live() with { OutcomeFailed = true, NowMs = Live().NowMs + 2_000 }; // edge rises inside cooldown
         Assert.Null(e.Evaluate(in rising));                                             // suppressed — edge consumed here
-        var afterLift = rising with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var afterLift = rising with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in afterLift));   // accepted loss: sticky signal, no new edge, allDead never true
     }
 
@@ -218,7 +218,7 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in revived));                              // cancelled, no wipe
         var deadAgain = revived with { DeadCount = 4, NowMs = 212_000 };   // dies again — grace restarts
         Assert.Null(e.Evaluate(in deadAgain));
-        var held = deadAgain with { NowMs = deadAgain.NowMs + AutoArchiveEngine.CooldownMs + 2001 }; // held >= grace, cooldown clear
+        var held = deadAgain with { NowMs = deadAgain.NowMs + AutoArchiveEngine.DefaultCooldownMs + 2001 }; // held >= grace, cooldown clear
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in held));
     }
 
@@ -273,7 +273,7 @@ public class AutoArchiveEngineTests
         var s = Live() with { BossPresent = true };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
-        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in later));                       // boss segment active — no refire
     }
 
@@ -288,9 +288,9 @@ public class AutoArchiveEngineTests
         var s = Live() with { BossPresent = true };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
-        var gone = s with { BossPresent = false, BossGone = true, NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var gone = s with { BossPresent = false, BossGone = true, NowMs = s.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in gone));
-        var next = gone with { BossPresent = true, BossGone = false, NowMs = gone.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var next = gone with { BossPresent = true, BossGone = false, NowMs = gone.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in next));
     }
 
@@ -303,7 +303,7 @@ public class AutoArchiveEngineTests
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
         e.OnArchived(s.NowMs + 1000, ArchiveReason.Manual);      // user archived mid-boss — segment over
-        var later = s with { NowMs = s.NowMs + 1000 + AutoArchiveEngine.CooldownMs + 1 };
+        var later = s with { NowMs = s.NowMs + 1000 + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in later));
     }
 
@@ -320,7 +320,7 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in sighted));                                // cooldown swallows the live fire
         var goneAlready = sighted with { BossPresent = false, BossGone = true, NowMs = sighted.NowMs + 3000 };
         Assert.Null(e.Evaluate(in goneAlready));                            // boss already left, still cooling down
-        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in cooldownLifted)); // banked sighting fires once able
     }
 
@@ -336,7 +336,7 @@ public class AutoArchiveEngineTests
         e.OnArchived(sighted.NowMs, ArchiveReason.Manual);                  // manual archive supersedes it
         var later = sighted with
         {
-            BossPresent = false, NowMs = sighted.NowMs + AutoArchiveEngine.CooldownMs + 1,
+            BossPresent = false, NowMs = sighted.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1,
         };
         Assert.Null(e.Evaluate(in later));                                  // no stale BossPhase resurfaces
     }
@@ -358,7 +358,7 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in sighted));                                   // banks _bossPending, cooldown blocks
         var goneAlready = sighted with { BossPresent = false, BossGone = true, NowMs = sighted.NowMs + 3000 };
         Assert.Null(e.Evaluate(in goneAlready));                               // boss already left, still cooling down
-        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in cooldownLifted));  // stale banked sighting fires once able
         e.OnArchived(cooldownLifted.NowMs, ArchiveReason.BossPhase);
 
@@ -366,9 +366,22 @@ public class AutoArchiveEngineTests
         // "segment active" left over from the stale fire above.
         var newBoss = cooldownLifted with
         {
-            BossPresent = true, BossGone = false, NowMs = cooldownLifted.NowMs + AutoArchiveEngine.CooldownMs + 1,
+            BossPresent = true, BossGone = false, NowMs = cooldownLifted.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1,
         };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newBoss));
+    }
+
+    [Fact]
+    public void MinBossSegment_suppresses_a_too_short_boss_cut()
+    {
+        var e = Armed(Live());
+        e.MinBossSegmentMs = 10_000;
+        // Boss sighted only 3s into combat (CombatStartMs 100_000, now 103_000) — below the floor.
+        var earlyBoss = Live() with { BossPresent = true, CombatStartMs = 100_000, NowMs = 103_000 };
+        Assert.Null(e.Evaluate(in earlyBoss));
+        // Same boss, now 12s in — above the floor.
+        var laterBoss = earlyBoss with { NowMs = 112_000 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in laterBoss));
     }
 
     // ---- boss re-cut fix (default: one fight = one cut) ----
@@ -393,7 +406,7 @@ public class AutoArchiveEngineTests
     {
         var (e, on) = BossEngaged();   // BossRecutOnRedetect defaults false
         // Cache blinks: boss "gone" via eviction (NOT a real death), boss still present next tick.
-        var evicted = on with { BossPresent = false, BossGone = true, BossDead = false, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var evicted = on with { BossPresent = false, BossGone = true, BossDead = false, NowMs = on.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in evicted));
         var back = on with { BossPresent = true, NowMs = evicted.NowMs + 500 };
         Assert.Null(e.Evaluate(in back));   // must NOT re-cut — one fight, one cut
@@ -404,7 +417,7 @@ public class AutoArchiveEngineTests
     {
         var (e, on) = BossEngaged();
         e.OnArchived(on.NowMs + 100, ArchiveReason.Manual);   // a manual archive mid-boss
-        var still = on with { BossPresent = true, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 200 };
+        var still = on with { BossPresent = true, NowMs = on.NowMs + AutoArchiveEngine.DefaultCooldownMs + 200 };
         Assert.Null(e.Evaluate(in still));   // boss still present, but no re-cut
     }
 
@@ -412,7 +425,7 @@ public class AutoArchiveEngineTests
     public void Boss_confirmed_death_then_new_boss_recuts_even_when_recut_off()
     {
         var (e, on) = BossEngaged();
-        var dead = on with { BossPresent = false, BossGone = true, BossDead = true, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var dead = on with { BossPresent = false, BossGone = true, BossDead = true, NowMs = on.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in dead));   // death itself doesn't archive-by-boss; segment ends
         var newBoss = dead with { BossPresent = true, BossGone = false, BossDead = false, NowMs = dead.NowMs + 5000 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newBoss));   // a genuinely new fight re-cuts
@@ -427,7 +440,7 @@ public class AutoArchiveEngineTests
         var sighting = Live() with { BossPresent = true, NowMs = 260_000 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in sighting));
         e.OnArchived(sighting.NowMs, ArchiveReason.BossPhase);
-        var evicted = sighting with { BossPresent = false, BossGone = true, NowMs = sighting.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var evicted = sighting with { BossPresent = false, BossGone = true, NowMs = sighting.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in evicted));
         var back = sighting with { BossPresent = true, NowMs = evicted.NowMs + 500 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in back));   // legacy: re-detect re-cuts
@@ -443,7 +456,7 @@ public class AutoArchiveEngineTests
         // Leaving the instanced run (InstancedRun -> false) must end the segment so the NEXT run's
         // boss gets a fresh cut, even though BossDead was never observed.
         var (e, on) = BossEngaged();   // first boss cut already fired; segment active; recut off (default)
-        var left = on with { BossPresent = false, InstancedRun = false, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var left = on with { BossPresent = false, InstancedRun = false, NowMs = on.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in left));   // leaving itself doesn't archive-by-boss
         var newRunBoss = left with { InstancedRun = true, BossPresent = true, NowMs = left.NowMs + 5000 };
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newRunBoss));   // new run's boss re-cuts
@@ -469,7 +482,7 @@ public class AutoArchiveEngineTests
         var overlap = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End, DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in overlap));          // wipe is checked first, wins the tick
         e.OnArchived(overlap.NowMs, ArchiveReason.Wipe);
-        var later = overlap with { NowMs = overlap.NowMs + AutoArchiveEngine.CooldownMs + 1, DeadCount = 0 };
+        var later = overlap with { NowMs = overlap.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1, DeadCount = 0 };
         Assert.Null(e.Evaluate(in later));                                // no stale StageChange fires later
     }
 
@@ -515,9 +528,9 @@ public class AutoArchiveEngineTests
         var s = Live() with { NowMs = 221_000 };   // 61s after last damage, 60s of content — idle fires
         Assert.Equal(ArchiveReason.Idle, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.Idle);
-        var cleared = s with { CombatActive = false, NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var cleared = s with { CombatActive = false, NowMs = s.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in cleared));       // past cooldown, but CombatActive=false blocks
-        var stillInactive = cleared with { NowMs = cleared.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var stillInactive = cleared with { NowMs = cleared.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in stillInactive)); // a second window later — still no refire
     }
 
@@ -597,7 +610,7 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in banked));                                   // banks _stagePending (into End), cooldown blocks
         var reset = banked with { FlowStateVersion = 1, NowMs = banked.NowMs + 1000 };
         Assert.Null(e.Evaluate(in reset));                                    // decrease discards the banked pending
-        var cooldownLifted = reset with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var cooldownLifted = reset with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in cooldownLifted));                           // no stale StageChange resurfaces
     }
 
@@ -645,7 +658,7 @@ public class AutoArchiveEngineTests
         var end = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End };
         Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in end));
         e.OnArchived(end.NowMs, ArchiveReason.StageChange);
-        var redelivered = end with { NowMs = end.NowMs + AutoArchiveEngine.CooldownMs + 1 };   // same version, still End
+        var redelivered = end with { NowMs = end.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };   // same version, still End
         Assert.Null(e.Evaluate(in redelivered));
     }
 
@@ -665,9 +678,27 @@ public class AutoArchiveEngineTests
         var e = Armed(Live());
         e.WipeGraceMs = 0;   // the fire below lands only 2ms after allDead turns true (well under the 2000ms default grace) — isolate from revive-grace
         e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);    // scene archive arms the cooldown
-        var s = Live() with { DeadCount = 4, NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs - 1 };
+        var s = Live() with { DeadCount = 4, NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs - 1 };
         Assert.Null(e.Evaluate(in s));                            // wipe suppressed inside the window
         var later = s with { NowMs = s.NowMs + 2 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in later));
+    }
+
+    [Fact]
+    public void Cooldown_is_configurable()
+    {
+        var e = Armed(Live());
+        e.WipeGraceMs = 0;   // isolate CooldownMs configurability from the unrelated revive-grace
+                              // debounce — both fires below land on the SAME tick allDead turns true
+        e.CooldownMs = 30_000;
+        var dead = Live() with { DeadCount = 4, NowMs = 210_000 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in dead));
+        e.OnArchived(dead.NowMs, ArchiveReason.Wipe);
+        var revived = dead with { DeadCount = 0, NowMs = dead.NowMs + 1000 };  // re-arm the episode
+        Assert.Null(e.Evaluate(in revived));
+        var deadAgain = revived with { DeadCount = 4, NowMs = dead.NowMs + 20_000 }; // <30s cooldown
+        Assert.Null(e.Evaluate(in deadAgain));
+        var later = deadAgain with { NowMs = dead.NowMs + 30_001 };            // past 30s
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in later));
     }
 

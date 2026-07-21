@@ -52,14 +52,16 @@ internal readonly record struct AutoArchiveInputs
 /// </summary>
 internal sealed class AutoArchiveEngine
 {
-    internal const long CooldownMs   = 10_000;   // shared across every trigger AND manual/scene archives
+    internal const long DefaultCooldownMs = 10_000;   // shared cooldown default (tests reference this)
     internal const long MinContentMs = 30_000;   // idle content guard: >= 30 s of actual combat span
 
+    public long CooldownMs = DefaultCooldownMs;   // shared across every trigger AND manual/scene archives; configurable at runtime via prefs
     public bool WipeEnabled   = true;
     public bool BossEnabled   = true;
     public bool IdleEnabled   = true;
     public bool StageEnabled  = true;
     public long IdleTimeoutMs = 60_000;
+    public long MinBossSegmentMs = 10_000;   // don't cut a boss segment shorter than this (0 = off)
     public bool BossRecutOnRedetect;   // false = one fight, one cut (transient eviction / intervening archive never re-arms the boss segment). true = legacy re-detect re-cut.
     public long WipeGraceMs = 2000;    // allDead must PERSIST this long before it counts toward a wipe, so a
                                        // momentary solo down->revive doesn't cut the run. OutcomeFailed
@@ -161,9 +163,19 @@ internal sealed class AutoArchiveEngine
             // later, so marking one active here would wedge the NEXT real boss engagement behind
             // this !_bossSegmentActive gate forever (round 2 fix; pinned by
             // <see cref="AutoArchiveEngineTests.Boss_stale_banked_fire_does_not_wedge_next_real_boss"/>).
-            _bossSegmentActive = s.BossPresent;
-            _bossPending = false;
-            return ArchiveReason.BossPhase;
+            //
+            // Min-segment floor: a boss sighted too soon after combat start is suppressed (skip,
+            // don't consume the cooldown or mark a segment) so a rapid re-detect can't cut a sliver.
+            if (MinBossSegmentMs > 0 && s.BossPresent && s.NowMs - s.CombatStartMs < MinBossSegmentMs)
+            {
+                // fall through — neither fire nor mark a segment active; re-evaluate next tick.
+            }
+            else
+            {
+                _bossSegmentActive = s.BossPresent;
+                _bossPending = false;
+                return ArchiveReason.BossPhase;
+            }
         }
         if (IdleEnabled && IdleExpired(in s))                     { return ArchiveReason.Idle; }
         return null;
