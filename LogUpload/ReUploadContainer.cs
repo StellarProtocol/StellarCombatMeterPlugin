@@ -19,6 +19,9 @@ internal sealed record ReUploadPayload(
 /// </summary>
 internal static class ReUploadContainer
 {
+    // Written on every Serialize; round-tripped verbatim by TryDeserialize. No read-side gate on this
+    // value yet — an older reader simply skips any newer/unknown key additively (see SkipValue below),
+    // so this is a marker for a future format check, not an enforced one today.
     internal const int Version = 1;
 
     internal static string ContainerName(long levelUuid, long archivedAtMs)

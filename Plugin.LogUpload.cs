@@ -189,23 +189,38 @@ public sealed partial class Plugin
         return bytes is not null && ReUploadContainer.TryDeserialize(bytes, out payload);
     }
 
-    // Verbatim replay: re-POST the stored summary, then (on success, preserving ordering) the stored
-    // chunk envelopes + positions. Byte-for-byte reproduction of the first send.
+    // Reproduces the captured first-send BODIES byte-for-byte, but re-sends all three UNCONDITIONALLY
+    // as a repair (skipPrecheck → full ingest) — deliberately NOT the verdict-gated subset the first
+    // send transmitted (first send gates chunks on v.Kept and positions on !v.HavePositions). This is
+    // correct because the server ingest is content-signed with no nonce/timestamp replay guard and is
+    // non-destructive (worker dee9069b); a future edit must NOT "optimize" this to mirror first-send
+    // verdict-gating or it silently breaks repair-after-total-server-loss.
     private void ReplayReUpload(EncounterHistoryEntry entry, ReUploadPayload payload)
     {
-        var url = UploadVerdict.SiteBase + "/run/" + payload.Region + "/" + payload.LevelUuid.ToString(CultureInfo.InvariantCulture);
-        _uploadStatus.Set(entry, UploadPhase.InFlight, url);
-        _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count} chunk(s), positions={(payload.Positions is not null)}).");
-        LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err) =>
+        try
         {
-            _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+            var url = UploadVerdict.SiteBase + "/run/" + payload.Region + "/" + payload.LevelUuid.ToString(CultureInfo.InvariantCulture);
+            _uploadStatus.Set(entry, UploadPhase.InFlight, url);
+            _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count} chunk(s), positions={(payload.Positions is not null)}).");
+            LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err) =>
+            {
+                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+                _uploadStateDirty = true;
+                if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
+                if (payload.Chunks.Count > 0)
+                    ChunkUploader.PostRawEnvelopesFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.Chunks, m => _services.Log.Warning(m));
+                if (payload.Positions is not null)
+                    PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions);
+            });
+        }
+        catch (Exception ex)
+        {
+            // Defense-in-depth (body is non-throwing today, matching AssembleAndUpload's guard below):
+            // a replay-kickoff fault must never propagate into the main-thread caller.
+            _uploadStatus.Set(entry, UploadPhase.Failed, null);
             _uploadStateDirty = true;
-            if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
-            if (payload.Chunks.Count > 0)
-                ChunkUploader.PostRawEnvelopesFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.Chunks, m => _services.Log.Warning(m));
-            if (payload.Positions is not null)
-                PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions);
-        });
+            _services.Log.Warning($"[CombatMeter.SP1] Re-upload replay threw: {ex.Message}");
+        }
     }
 
     // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
@@ -257,9 +272,7 @@ public sealed partial class Plugin
             // so it goes immediately.
             var delayMs = flushBuffer ? Random.Shared.Next(0, UploadJitterMaxMs) : 0;
             fired = true;
-
             if (flushBuffer) PersistReUpload(entry, log, chunks, replayDoc);
-
             LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
             {
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
@@ -339,8 +352,10 @@ public sealed partial class Plugin
     }
 
     /// <summary>Assembles the retained re-upload payload from the exact artifacts the auto path uploads.
-    /// Pure — the bodies are serialized with the SAME writers the uploaders use, so a later verbatim
-    /// re-POST reproduces the first send byte-for-byte.</summary>
+    /// Pure — the bodies are serialized with the SAME writers the uploaders use, so the captured
+    /// summary/chunks/positions are byte-identical to what the first send transmitted for each. This
+    /// captures BODIES only — whether/how a later replay resends them (verdict-gated vs. unconditional
+    /// repair) is ReplayReUpload's decision, not this method's.</summary>
     internal static ReUploadPayload BuildReUploadPayload(CombatLog log, IReadOnlyList<EventChunk> chunks, PositionUploadDoc? replayDoc)
     {
         var envelopes = new List<string>(chunks.Count);
@@ -355,8 +370,10 @@ public sealed partial class Plugin
             replayDoc is null ? null : PositionJsonWriter.Write(replayDoc));
     }
 
-    /// <summary>Auto path only: retain the exact bodies this send is about to POST, so a later
-    /// re-upload can reproduce the first send byte-for-byte (B4). Fire-and-forget — <paramref name="log"/>,
+    /// <summary>Auto path only: retain the exact bodies this send is about to POST — byte-identical
+    /// captures of the summary/chunks/positions — so a later re-upload has the true originals to
+    /// repair from (B4; see ReplayReUpload for why replay resends all three UNCONDITIONALLY, not
+    /// mirroring this send's verdict-gated subset). Fire-and-forget — <paramref name="log"/>,
     /// <paramref name="chunks"/>, and <paramref name="replayDoc"/> are immutable snapshots (records / a
     /// List&lt;EventChunk&gt; never mutated after assembly), so building the payload (including every
     /// chunk's <see cref="ChunkUploader.BuildEnvelope"/>) is safe to defer entirely onto the background

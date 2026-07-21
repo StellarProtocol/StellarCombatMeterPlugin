@@ -19,6 +19,7 @@ public class ReUploadContainerTests
         var bytes = ReUploadContainer.Serialize(payload);
         Assert.True(ReUploadContainer.TryDeserialize(bytes, out var back));
 
+        Assert.Equal(payload.V, back.V);
         Assert.Equal(payload.Region, back.Region);
         Assert.Equal(payload.LevelUuid, back.LevelUuid);
         Assert.Equal(payload.LogId, back.LogId);
