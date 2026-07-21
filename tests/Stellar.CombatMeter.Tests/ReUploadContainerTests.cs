@@ -50,4 +50,23 @@ public class ReUploadContainerTests
     {
         Assert.Equal("replay/123-456.replaydoc", ReUploadContainer.ContainerName(123, 456));
     }
+
+    // Pins the duplicate-runid hazard: the game can reuse a levelUuid across genuinely different
+    // runs (e.g. re-entering the same instance). ContainerName MUST key on the full (levelUuid,
+    // archivedAtMs) composite, not levelUuid alone, or a later run's re-upload container would
+    // collide with — and silently mix with — an earlier run that shares the same levelUuid.
+    [Fact]
+    public void SameLevelUuid_differentArchivedAtMs_yieldDistinctContainerNames()
+    {
+        const long levelUuid = 244376118654664704L;
+        const long t1 = 1784604916545L;
+        const long t2 = 1784604940589L;
+
+        var name1 = ReUploadContainer.ContainerName(levelUuid, t1);
+        var name2 = ReUploadContainer.ContainerName(levelUuid, t2);
+
+        Assert.NotEqual(name1, name2);
+        Assert.Equal("replay/244376118654664704-1784604916545.replaydoc", name1);
+        Assert.Equal("replay/244376118654664704-1784604940589.replaydoc", name2);
+    }
 }
