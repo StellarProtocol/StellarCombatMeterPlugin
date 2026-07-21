@@ -224,6 +224,14 @@ public sealed partial class Plugin
             // so it goes immediately.
             var delayMs = flushBuffer ? Random.Shared.Next(0, UploadJitterMaxMs) : 0;
             fired = true;
+
+            // Auto path only: retain the exact bodies this send is about to POST, so a later
+            // re-upload can reproduce the first send byte-for-byte (B4). Gated on flushBuffer so a
+            // manual re-upload (which re-assembles from possibly-lossy retained aggregates) never
+            // overwrites the good original capture.
+            if (flushBuffer)
+                PersistReUpload(entry, BuildReUploadPayload(log, chunks, replayDoc));
+
             LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
             {
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
@@ -300,5 +308,34 @@ public sealed partial class Plugin
     private void DisposeLogUpload()
     {
         _logBuffer.Clear();
+    }
+
+    /// <summary>Assembles the retained re-upload payload from the exact artifacts the auto path uploads.
+    /// Pure — the bodies are serialized with the SAME writers the uploaders use, so a later verbatim
+    /// re-POST reproduces the first send byte-for-byte.</summary>
+    internal static ReUploadPayload BuildReUploadPayload(CombatLog log, IReadOnlyList<EventChunk> chunks, PositionUploadDoc? replayDoc)
+    {
+        var envelopes = new List<string>(chunks.Count);
+        foreach (var c in chunks) envelopes.Add(ChunkUploader.BuildEnvelope(log.Header.LogId, c));
+        return new ReUploadPayload(
+            ReUploadContainer.Version,
+            log.Header.Region,
+            log.Header.Encounter.LevelUuid,
+            log.Header.LogId,
+            CombatLogWriter.Write(log),
+            envelopes,
+            replayDoc is null ? null : PositionJsonWriter.Write(replayDoc));
+    }
+
+    // Fire-and-forget: the payload bytes are immutable once built, so serialize+write off the main
+    // thread — a chunk-heavy run must never hitch the archive frame. Keyed by the entry's stable composite.
+    private void PersistReUpload(EncounterHistoryEntry entry, ReUploadPayload payload)
+    {
+        var name = ReUploadContainer.ContainerName(entry.LevelUuid, entry.ArchivedAtMs);
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try { _services.Data.Write(name, ReUploadContainer.Serialize(payload)); }
+            catch (Exception ex) { _services.Log.Warning($"[CombatMeter.SP1] re-upload persist failed: {ex.Message}"); }
+        });
     }
 }
