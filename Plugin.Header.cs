@@ -65,11 +65,7 @@ public sealed partial class Plugin
             new ButtonElement(() => "Archive", ManualArchiveFromMenu),
             new ButtonElement(() => $"History ({_history.Count})", ToggleHistory, Active: () => _historyWindow.IsShown),
             new ButtonElement(() => "Appearance", ToggleAppearance, Active: () => _settingsWindow.IsShown),
-            // ⚙ gear glyph (U+2699, Miscellaneous Symbols block — same block as the ★/▾/▴/✓/✕ glyphs
-            // already shipping in this window via the same WindowBuilder/MenuFont render path, e.g.
-            // ReadyCheckLabel's ✓ and the ▴/▾ caret above); chosen over plain "Settings" on that
-            // precedent, but T6's in-game smoke is the actual confirmation — see report.
-            new ButtonElement(() => "⚙ Settings", ToggleArchiveSettings, Active: () => _archiveSettingsWindow.IsShown),
+            new ButtonElement(() => "Settings", ToggleArchiveSettings, Active: () => _archiveSettingsWindow.IsShown, Icon: () => _settingsGearPng),
         }, Gap: 4f),
     }, Gap: 4f);
 

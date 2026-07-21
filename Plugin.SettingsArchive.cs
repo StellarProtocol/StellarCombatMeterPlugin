@@ -13,6 +13,27 @@ public sealed partial class Plugin
 {
     private IWindowControl _archiveSettingsWindow = null!;
 
+    // Cached gear icon for the header "Settings" button (real embedded PNG, replacing the old unicode
+    // gear-glyph label the game font dropped). Loaded once at construction (Plugin.cs) via
+    // LoadSettingsGearPng — never throws; a missing/corrupt resource degrades to null and the button
+    // just shows text, same as before this fix.
+    private byte[]? _settingsGearPng;
+
+    // Loads Resources/settings-gear.png (packed via the csproj EmbeddedResource entry) for
+    // ButtonElement.Icon. Mirrors Stellar.StatInspector.StatIconAtlas.GearPng's try/catch shape.
+    private static byte[]? LoadSettingsGearPng()
+    {
+        try
+        {
+            using var s = typeof(Plugin).Assembly.GetManifestResourceStream("Stellar.CombatMeter.settings-gear.png");
+            if (s == null) return null;
+            using var ms = new System.IO.MemoryStream();
+            s.CopyTo(ms);
+            return ms.ToArray();
+        }
+        catch { return null; }
+    }
+
     private IWindowControl BuildAndRegisterArchiveSettings()
         => _services.Windows.Register(new WindowRegistration(
             new WindowSpec(

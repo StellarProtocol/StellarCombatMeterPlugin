@@ -20,6 +20,7 @@
     <EmbeddedResource Include="Resources/mic.png" LogicalName="Stellar.CombatMeter.mic.png" />
     <EmbeddedResource Include="Resources/headphone.png" LogicalName="Stellar.CombatMeter.headphone.png" />
     <EmbeddedResource Include="Resources/mute.png" LogicalName="Stellar.CombatMeter.mute.png" />
+    <EmbeddedResource Include="Resources/settings-gear.png" LogicalName="Stellar.CombatMeter.settings-gear.png" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests/**/*.cs" />
