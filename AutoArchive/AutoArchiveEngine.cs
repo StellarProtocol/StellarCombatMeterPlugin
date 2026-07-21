@@ -99,7 +99,10 @@ internal sealed class AutoArchiveEngine
     private bool _wipeArchived;          // this wipe episode has already been archived
     private bool _prevOutcomeFailed;     // previous tick's OutcomeFailed reading (one-shot edge only)
 
-    private bool _bossSegmentActive;    // a boss segment is running; re-arms on boss-gone / non-boss archive
+    private bool _bossSegmentActive;    // a boss segment is running; re-arms on confirmed death (or,
+                                         // legacy BossRecutOnRedetect=true, any boss-gone/non-boss
+                                         // archive) — or unconditionally on leaving the instanced run
+                                         // (run/scene boundary), so the trigger re-arms per run
     private bool _bossPending;          // a boss sighting the cooldown gate swallowed, banked for when it lifts;
                                          // cleared by OnArchived on any non-boss archive (see its doc)
     private int  _lastFlowVersion = -1; // -1 = never observed (first sight adopts silently)
@@ -189,6 +192,10 @@ internal sealed class AutoArchiveEngine
     // wipe latch's own recovery clear + edge stamp live directly in Evaluate — see its body.)
     private void UpdateLatches(in AutoArchiveInputs s)
     {
+        // Leaving the instanced run (open world between dungeons) ends any boss segment, so the NEXT
+        // run's boss gets a fresh cut. This is the "scene/run change ends it" half of the fix — a
+        // mid-fight cache blink keeps InstancedRun true, so it never re-cuts during one fight.
+        if (!s.InstancedRun) { _bossSegmentActive = false; _bossPending = false; }
         // Boss segment ends only on a CONFIRMED death (or, legacy, any "gone" incl. transient
         // eviction). Default: a cache blink mid-fight must NOT re-arm — one fight, one cut.
         if (BossRecutOnRedetect ? s.BossGone : s.BossDead) _bossSegmentActive = false;

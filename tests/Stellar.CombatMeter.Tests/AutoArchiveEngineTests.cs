@@ -370,6 +370,22 @@ public class AutoArchiveEngineTests
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in back));   // legacy: re-detect re-cuts
     }
 
+    [Fact]
+    public void Boss_run_boundary_resets_segment_for_next_run()
+    {
+        // Gap closed post-review: with BossRecutOnRedetect=false (default), _bossSegmentActive only
+        // reset on a CONFIRMED death — but a boss fight very often ends WITHOUT one (you leave, the
+        // party wipes, the run just ends). Without a run-boundary reset, the segment would stay
+        // "active" for the rest of the SESSION, and every later dungeon run's boss would go uncut.
+        // Leaving the instanced run (InstancedRun -> false) must end the segment so the NEXT run's
+        // boss gets a fresh cut, even though BossDead was never observed.
+        var (e, on) = BossEngaged();   // first boss cut already fired; segment active; recut off (default)
+        var left = on with { BossPresent = false, InstancedRun = false, NowMs = on.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        Assert.Null(e.Evaluate(in left));   // leaving itself doesn't archive-by-boss
+        var newRunBoss = left with { InstancedRun = true, BossPresent = true, NowMs = left.NowMs + 5000 };
+        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newRunBoss));   // new run's boss re-cuts
+    }
+
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
 
     [Fact]
