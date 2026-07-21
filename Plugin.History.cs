@@ -141,7 +141,7 @@ public sealed partial class Plugin
 
         var entry = BuildHistoryEntry(reason);
         _history.Add(entry);
-        foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);   // unroot evicted runs
+        foreach (var evicted in TrimToCapacity(_history)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
         var summaryFired = FinalizeAndMaybeUploadReplay(entry);

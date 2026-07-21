@@ -24,6 +24,19 @@ internal static class ReUploadContainer
     internal static string ContainerName(long levelUuid, long archivedAtMs)
         => $"replay/{levelUuid}-{archivedAtMs}.replaydoc";
 
+    /// <summary>Names in <paramref name="existing"/> under <c>replay/</c> that no live (levelUuid, archivedAtMs)
+    /// key maps to — safe to delete. Non-<c>replay/</c> names are ignored.</summary>
+    internal static IReadOnlyList<string> OrphanContainerNames(
+        IReadOnlyList<string> existing, IEnumerable<(long LevelUuid, long ArchivedAtMs)> liveKeys)
+    {
+        var live = new HashSet<string>();
+        foreach (var (l, a) in liveKeys) live.Add(ContainerName(l, a));
+        var orphans = new List<string>();
+        foreach (var name in existing)
+            if (name.StartsWith("replay/", System.StringComparison.Ordinal) && !live.Contains(name)) orphans.Add(name);
+        return orphans;
+    }
+
     internal static byte[] Serialize(ReUploadPayload p)
     {
         var w = new HistoryJsonWriter();
