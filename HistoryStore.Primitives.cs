@@ -7,7 +7,9 @@ namespace Stellar.CombatMeter;
 /// returns false (never throws) on a token-shape mismatch so the surrounding entry can be skipped wholesale.</summary>
 internal static partial class HistoryStore
 {
-    private static bool ReadLong(HistoryJsonReader r, out long v)
+    // Promoted to internal (from private) so LogUpload.ReUploadContainer can reuse the same reflection-free
+    // reader primitives instead of duplicating the JSON parser — behavior is unchanged, accessibility only.
+    internal static bool ReadLong(HistoryJsonReader r, out long v)
     {
         v = 0;
         if (r.Next() != JsonTokenKind.Number) return false;
@@ -15,7 +17,7 @@ internal static partial class HistoryStore
         return true;
     }
 
-    private static bool ReadInt(HistoryJsonReader r, out int v)
+    internal static bool ReadInt(HistoryJsonReader r, out int v)
     {
         v = 0;
         if (!ReadLong(r, out var l)) return false;
@@ -23,7 +25,7 @@ internal static partial class HistoryStore
         return true;
     }
 
-    private static bool ReadString(HistoryJsonReader r, out string? v)
+    internal static bool ReadString(HistoryJsonReader r, out string? v)
     {
         v = null;
         if (r.Next() != JsonTokenKind.String) return false;
@@ -82,9 +84,32 @@ internal static partial class HistoryStore
         return true;
     }
 
+    // New sibling of ReadLongArray/ReadIntArray/ReadFloatArray above: a flat JSON array of STRING scalars
+    // (e.g. ReUploadContainer's "chunks" — each element is itself an already-serialized JSON body stored
+    // verbatim). NOT the same shape as ReadArray below, which hard-consumes an ObjectStart per element and
+    // is only for arrays-of-objects (stats/series/entities) — reusing it here would silently reject a
+    // string-array payload. Internal (not private) so LogUpload.ReUploadContainer can call it.
+    internal static bool ReadStringArray(HistoryJsonReader r, out string[] arr)
+    {
+        arr = System.Array.Empty<string>();
+        var list = new List<string>();
+        if (r.Next() != JsonTokenKind.ArrayStart) return false;
+        while (true)
+        {
+            var k = r.Next();
+            if (k == JsonTokenKind.ArrayEnd) break;
+            if (k == JsonTokenKind.Comma) continue;
+            if (k != JsonTokenKind.String) return false;
+            list.Add(r.StringValue);
+        }
+        arr = list.ToArray();
+        return true;
+    }
+
     // Iterate a JSON array, invoking <paramref name="readElement"/> with the reader positioned BEFORE each
     // element's first token. The callback must fully consume exactly one element.
-    private static bool ReadArray(HistoryJsonReader r, Func<bool> readElement)
+    // Promoted to internal — see ReadLong/ReadInt/ReadString note above.
+    internal static bool ReadArray(HistoryJsonReader r, Func<bool> readElement)
     {
         if (r.Next() != JsonTokenKind.ArrayStart) return false;
         while (true)
@@ -104,7 +129,8 @@ internal static partial class HistoryStore
     // format's new keys load under this build as "read what you understand"). Returns false only on a
     // structurally broken value (EOF/Error/token in value position) so a genuinely malformed entry is still
     // rejected. Never throws.
-    private static bool SkipValue(HistoryJsonReader r)
+    // Promoted to internal — see ReadLong/ReadInt/ReadString note above.
+    internal static bool SkipValue(HistoryJsonReader r)
     {
         var k = r.Next();
         return k switch
@@ -133,7 +159,8 @@ internal static partial class HistoryStore
 
     // Read an object body, invoking <paramref name="onKey"/> for each key (reader positioned after the colon,
     // BEFORE the value). The ObjectStart has already been consumed by the caller (ReadArray).
-    private static bool ReadObject(HistoryJsonReader r, Func<string, bool> onKey)
+    // Promoted to internal — see ReadLong/ReadInt/ReadString note above.
+    internal static bool ReadObject(HistoryJsonReader r, Func<string, bool> onKey)
     {
         while (true)
         {
