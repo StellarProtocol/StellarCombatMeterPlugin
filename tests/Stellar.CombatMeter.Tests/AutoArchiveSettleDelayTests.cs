@@ -62,11 +62,14 @@ public class AutoArchiveSettleDelayTests
 
     [Fact]
     public void Idle_settle_is_about_two_seconds_and_under_the_next_floor_window()
+        // The settle window became a prefs-configurable field (Task 4); DefaultArchiveSettleMs is the
+        // named default value (the AutoArchiveEngine.DefaultCooldownMs precedent) — same assertions,
+        // same values, just pointed at the renamed symbol so this stays pinned through the config change.
     {
-        Assert.InRange(Plugin.ArchiveIdleSettleMs, 1_000L, 4_000L);
-        Assert.True(Plugin.ArchiveIdleSettleMs < 5_000L,
+        Assert.InRange(Plugin.DefaultArchiveSettleMs, 1_000L, 4_000L);
+        Assert.True(Plugin.DefaultArchiveSettleMs < 5_000L,
             "idle-settle window must commit well before the game's ~5 s next-floor load");
-        Assert.True(Plugin.ArchiveIdleCapMs > Plugin.ArchiveIdleSettleMs,
+        Assert.True(Plugin.ArchiveIdleCapMs > Plugin.DefaultArchiveSettleMs,
             "the backstop cap must be longer than the idle-settle window");
     }
 

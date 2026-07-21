@@ -139,7 +139,7 @@ public sealed partial class Plugin
         if (!StellarDiagnostics.IsEnabled) return;
         _services.Log.Info(
             $"[CombatMeter][auto-archive] commit reason={ArchiveReasonTag(reason)} now={nowMs} " +
-            $"quietMs={nowMs - _lastCombatEventMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={ArchiveIdleSettleMs}");
+            $"quietMs={nowMs - _lastCombatEventMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={_archiveSettleMs}");
     }
 
     // One line per ManualArchive ATTEMPT with its outcome (skip-empty | suppressed | banked |

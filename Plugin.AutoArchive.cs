@@ -22,7 +22,12 @@ public sealed partial class Plugin
     // is a comfortable window: after a floor clear the game shows "Enter the next floor in 5s". A
     // MANUAL (button/hotkey) archive and the SceneChange archive (which must beat the entity teardown)
     // stay IMMEDIATE.
-    internal const long ArchiveIdleSettleMs = 2_000;
+    //
+    // Configurable (2026-07-21, Task 4): was a hardcoded const; now a prefs-fed field so the settle
+    // window can be tuned per-install. DefaultArchiveSettleMs keeps the original default value visible
+    // as a named symbol (the AutoArchiveEngine.DefaultCooldownMs precedent) for the sanity-range test.
+    internal const long DefaultArchiveSettleMs = 2_000;
+    private long _archiveSettleMs = DefaultArchiveSettleMs;
 
     // Backstop: sustained combat that never goes quiet (and no scene change to supersede the pending)
     // would defer the archive forever. Commit anyway once this long has elapsed since the trigger
@@ -57,6 +62,25 @@ public sealed partial class Plugin
     private const string PrefAaIdleTimeoutS = "autoArchive.idleTimeoutS";
     private const string PrefAaStage        = "autoArchive.stageChange";
 
+    // Task 4 additions (2026-07-21): master enable + the Task 1-3 engine knobs (boss recut,
+    // wipe grace/ignore-solo, shared cooldown, min-boss-segment floor) + the settle delay.
+    private const string PrefAaEnabled        = "autoArchive.enabled";
+    private const string PrefAaCooldownS      = "autoArchive.cooldownS";
+    private const string PrefAaSettleS        = "autoArchive.settleS";
+    private const string PrefAaWipeGraceS     = "autoArchive.wipeGraceS";
+    private const string PrefAaWipeIgnoreSolo = "autoArchive.wipeIgnoreSolo";
+    private const string PrefAaBossRecut      = "autoArchive.bossRecut";
+    private const string PrefAaMinBossSegS    = "autoArchive.minBossSegmentS";
+
+    // Master enable: gates TickAutoArchiveTriggers entirely (below _paused). When off, no AUTO
+    // trigger evaluates or fires — manual/hotkey/scene archives are unaffected (separate paths).
+    private bool _autoArchiveEnabled = true;
+    internal bool AutoArchiveEnabled
+    {
+        get => _autoArchiveEnabled;
+        set { _autoArchiveEnabled = value; _prefs.Set(PrefAaEnabled, value); _prefs.Save(); }
+    }
+
     internal bool AutoArchiveWipe
     {
         get => _autoArchive.WipeEnabled;
@@ -87,6 +111,51 @@ public sealed partial class Plugin
         set { _autoArchive.IdleTimeoutMs = value * 1000L; _prefs.Set(PrefAaIdleTimeoutS, value); _prefs.Save(); }
     }
 
+    // ---- Task 4 accessors: the Tasks 1-3 engine knobs, wired the same get-engine/set-engine+persist
+    // way as the accessors above. ----
+
+    internal bool AutoArchiveBossRecut
+    {
+        get => _autoArchive.BossRecutOnRedetect;
+        set { _autoArchive.BossRecutOnRedetect = value; _prefs.Set(PrefAaBossRecut, value); _prefs.Save(); }
+    }
+
+    internal bool AutoArchiveWipeIgnoreSolo
+    {
+        get => _autoArchive.WipeIgnoreSolo;
+        set { _autoArchive.WipeIgnoreSolo = value; _prefs.Set(PrefAaWipeIgnoreSolo, value); _prefs.Save(); }
+    }
+
+    internal int AutoArchiveWipeGraceS
+    {
+        get => (int)(_autoArchive.WipeGraceMs / 1000);
+        set { _autoArchive.WipeGraceMs = value * 1000L; _prefs.Set(PrefAaWipeGraceS, value); _prefs.Save(); }
+    }
+
+    internal int AutoArchiveCooldownS
+    {
+        get => (int)(_autoArchive.CooldownMs / 1000);
+        set { _autoArchive.CooldownMs = value * 1000L; _prefs.Set(PrefAaCooldownS, value); _prefs.Save(); }
+    }
+
+    internal int AutoArchiveMinBossSegmentS
+    {
+        get => (int)(_autoArchive.MinBossSegmentMs / 1000);
+        set { _autoArchive.MinBossSegmentMs = value * 1000L; _prefs.Set(PrefAaMinBossSegS, value); _prefs.Save(); }
+    }
+
+    internal int AutoArchiveSettleS
+    {
+        get => (int)(_archiveSettleMs / 1000);
+        set { _archiveSettleMs = value * 1000L; _prefs.Set(PrefAaSettleS, value); _prefs.Save(); }
+    }
+
+    // The most recently committed (BANKED, not suppressed) archive — for the settings UI readout
+    // (Task 5). Set by NoteLastArchive, called from ManualArchive (Plugin.History.cs) on every bank.
+    internal (AutoArchive.ArchiveReason reason, long ms)? LastArchive { get; private set; }
+
+    internal void NoteLastArchive(AutoArchive.ArchiveReason reason, long ms) => LastArchive = (reason, ms);
+
     private void InitAutoArchive()
     {
         _autoArchive.WipeEnabled   = _prefs.Get(PrefAaWipe, true);
@@ -94,6 +163,14 @@ public sealed partial class Plugin
         _autoArchive.IdleEnabled   = _prefs.Get(PrefAaIdle, true);
         _autoArchive.StageEnabled  = _prefs.Get(PrefAaStage, true);
         _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 60) * 1000L;
+
+        _autoArchiveEnabled              = _prefs.Get(PrefAaEnabled, true);
+        _autoArchive.BossRecutOnRedetect = _prefs.Get(PrefAaBossRecut, false);
+        _autoArchive.WipeIgnoreSolo      = _prefs.Get(PrefAaWipeIgnoreSolo, false);
+        _autoArchive.WipeGraceMs         = _prefs.Get(PrefAaWipeGraceS, 2) * 1000L;
+        _autoArchive.CooldownMs          = _prefs.Get(PrefAaCooldownS, 10) * 1000L;
+        _autoArchive.MinBossSegmentMs    = _prefs.Get(PrefAaMinBossSegS, 10) * 1000L;
+        _archiveSettleMs                 = _prefs.Get(PrefAaSettleS, 2) * 1000L;
     }
 
     // ~10 Hz from OnUpdate's throttled region (Plugin.cs). An AUTO trigger is deferred until combat
@@ -102,6 +179,7 @@ public sealed partial class Plugin
     private void TickAutoArchiveTriggers()
     {
         if (_paused) return;
+        if (!_autoArchiveEnabled) return;   // master toggle: manual/hotkey/scene archives are unaffected
 
         // Arm a fresh pending only when none is outstanding — while one waits, the engine is skipped.
         if (_pendingArchiveReason is null)
@@ -117,7 +195,7 @@ public sealed partial class Plugin
 
         if (_pendingArchiveReason is not { } pending) return;
         var now = _services.CombatSnapshot.ServerNowMs;
-        if (!PendingArchiveDue(now, _lastCombatEventMs, ArchiveIdleSettleMs) &&
+        if (!PendingArchiveDue(now, _lastCombatEventMs, _archiveSettleMs) &&
             !PendingArchiveCapped(now, _pendingArchiveArmedMs, ArchiveIdleCapMs)) return;
         LogAutoArchiveCommit(pending, now);
         ManualArchive(pending);   // ManualArchive clears _pendingArchiveReason on commit
@@ -152,7 +230,7 @@ public sealed partial class Plugin
     private AutoArchiveInputs BuildAutoArchiveInputs()
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
-        var (bossPresent, bossGone) = BossStatus();
+        var (bossPresent, bossGone, bossDead) = BossStatus();
         return new AutoArchiveInputs
         {
             NowMs            = _services.CombatSnapshot.ServerNowMs,
@@ -166,6 +244,7 @@ public sealed partial class Plugin
             OutcomeFailed    = _services.Dungeon.LastOutcome == DungeonOutcome.Failed,
             BossPresent      = bossPresent,
             BossGone         = bossGone,
+            BossDead         = bossDead,
             InstancedRun     = IsInstancedRun(),
             FlowStateVersion = _services.Dungeon.FlowStateVersion,
             CurrentFlowState = _services.Dungeon.CurrentFlowState,
@@ -208,14 +287,16 @@ public sealed partial class Plugin
 
     // Boss liveness for the engine. Gone = a REAL death observation (HasHpObservation) or the
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
-    private (bool present, bool gone) BossStatus()
+    // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction) — the engine's
+    // BossRecutOnRedetect=false default re-arms only on dead, not on any gone (Task 1).
+    private (bool present, bool gone, bool dead) BossStatus()
     {
-        if (_autoArchiveBossId.Value == 0) return (false, false);
+        if (_autoArchiveBossId.Value == 0) return (false, false, false);
         var v = _services.CombatLookup.GetVitals(_autoArchiveBossId);
         bool dead    = v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
         bool evicted = !v.IsKnown;
-        if (dead || evicted) { _autoArchiveBossId = default; return (false, true); }
-        return (true, false);
+        if (dead || evicted) { _autoArchiveBossId = default; return (false, true, dead); }
+        return (true, false, false);
     }
 
     // Called from OnCombatEvent (Plugin.Capture.cs) BEFORE the player-only early-out, next to

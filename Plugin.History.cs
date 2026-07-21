@@ -149,6 +149,7 @@ public sealed partial class Plugin
         if (reason == AutoArchive.ArchiveReason.Manual) NotifyManualArchived(entry.CombatDurationMs);
 
         _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
+        NoteLastArchive(reason, entry.ArchivedAtMs);
         Clear();
     }
 
