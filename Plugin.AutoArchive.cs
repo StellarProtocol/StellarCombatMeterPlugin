@@ -70,10 +70,6 @@ public sealed partial class Plugin
     private const string PrefAaWipeGraceS     = "autoArchive.wipeGraceS";
     private const string PrefAaWipeIgnoreSolo = "autoArchive.wipeIgnoreSolo";
     private const string PrefAaBossRecut      = "autoArchive.bossRecut";
-    // NOTE: the old PrefAaMinBossSegS / AutoArchiveMinBossSegmentS accessor were removed (Task 7 review
-    // Minor 2): the inline boss cut is deterministic at the first boss hit, so the engine's
-    // MinBossSegmentMs floor (BossSegmentTooShort, read only in the now-superseded Evaluate boss branch)
-    // has no user-facing effect. The engine field + its tests are retained pending a deeper cleanup.
 
     // Boss-phase "keep before" (2026-07-21, Task 7): how much of the pre-hit run-up rides with the boss
     // segment when the inline boss cut fires (Plugin.Capture.cs MaybeCutForBossPhase). Default 0 = cut

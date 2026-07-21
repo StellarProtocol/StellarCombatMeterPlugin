@@ -65,7 +65,10 @@ public sealed partial class Plugin
             new ButtonElement(() => "Archive", ManualArchiveFromMenu),
             new ButtonElement(() => $"History ({_history.Count})", ToggleHistory, Active: () => _historyWindow.IsShown),
             new ButtonElement(() => "Appearance", ToggleAppearance, Active: () => _settingsWindow.IsShown),
-            new ButtonElement(() => "Settings", ToggleArchiveSettings, Active: () => _archiveSettingsWindow.IsShown, Icon: () => _settingsGearPng),
+            // Settings gear: icon-only, pushed to the far RIGHT of the menu row (flexible spacer) — the
+            // sibling-plugin gear pattern. Opens the auto-archive + uploads pane (Plugin.SettingsArchive.cs).
+            new SpacerElement(),
+            new ButtonElement(() => "", ToggleArchiveSettings, Active: () => _archiveSettingsWindow.IsShown, Icon: () => _settingsGearPng, Width: 30f),
         }, Gap: 4f),
     }, Gap: 4f);
 
