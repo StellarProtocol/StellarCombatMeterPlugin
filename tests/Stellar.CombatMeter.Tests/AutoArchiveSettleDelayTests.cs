@@ -62,11 +62,14 @@ public class AutoArchiveSettleDelayTests
 
     [Fact]
     public void Idle_settle_is_about_two_seconds_and_under_the_next_floor_window()
+        // The settle window became a prefs-configurable field (Task 4); DefaultArchiveSettleMs is the
+        // named default value (the AutoArchiveEngine.DefaultCooldownMs precedent) — same assertions,
+        // same values, just pointed at the renamed symbol so this stays pinned through the config change.
     {
-        Assert.InRange(Plugin.ArchiveIdleSettleMs, 1_000L, 4_000L);
-        Assert.True(Plugin.ArchiveIdleSettleMs < 5_000L,
+        Assert.InRange(Plugin.DefaultArchiveSettleMs, 1_000L, 4_000L);
+        Assert.True(Plugin.DefaultArchiveSettleMs < 5_000L,
             "idle-settle window must commit well before the game's ~5 s next-floor load");
-        Assert.True(Plugin.ArchiveIdleCapMs > Plugin.ArchiveIdleSettleMs,
+        Assert.True(Plugin.ArchiveIdleCapMs > Plugin.DefaultArchiveSettleMs,
             "the backstop cap must be longer than the idle-settle window");
     }
 
@@ -89,8 +92,15 @@ public class AutoArchiveSettleDelayTests
         => Assert.True(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.Wipe));
 
     [Fact]
-    public void BossPhase_archive_is_deferred()
-        => Assert.True(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.BossPhase));
+    public void BossPhase_archive_is_immediate()
+        // RE-PINNED (Task 7, 2026-07-21): BossPhase used to defer (Assert.True) alongside the other AUTO
+        // reasons. It is now IMMEDIATE — the boss cut moved INLINE into Plugin.Capture.cs
+        // (MaybeCutForBossPhase), firing at the first boss hit BEFORE the hit is accumulated so the boss
+        // fight is one clean segment. The old deferred path hit the 15 s settle cap MID-FIGHT and chopped
+        // the fight (owner-reported). Deliberate contract change → re-pinned in the same commit per the
+        // agent process rules (a pinned test that changed contract is re-pinned with rationale, not
+        // silently deleted). Should a BossPhase reason ever reach the settle path it must NOT defer.
+        => Assert.False(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.BossPhase));
 
     [Fact]
     public void Idle_archive_is_deferred()

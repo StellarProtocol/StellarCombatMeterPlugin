@@ -65,6 +65,12 @@ public sealed partial class Plugin
             new ButtonElement(() => "Archive", ManualArchiveFromMenu),
             new ButtonElement(() => $"History ({_history.Count})", ToggleHistory, Active: () => _historyWindow.IsShown),
             new ButtonElement(() => "Appearance", ToggleAppearance, Active: () => _settingsWindow.IsShown),
+            // Settings gear: a BARE clickable icon (no button chrome / fill / border), right-aligned —
+            // the StatInspector mini-HUD pattern (CellElement > SelectableElement > ImageElement). An
+            // ImageElement carries no button styling, so it reads as a standalone cog like the sibling
+            // plugins rather than a filled/outlined button. Opens the auto-archive + uploads pane.
+            new SpacerElement(),
+            new CellElement(new SelectableElement(new ImageElement(() => _settingsGearPng, 15, 15), OnClick: ToggleArchiveSettings), Width: 26f),
         }, Gap: 4f),
     }, Gap: 4f);
 

@@ -12,7 +12,7 @@ public class AutoArchiveEngineTests
     {
         NowMs = nowMs, CombatActive = true, CombatStartMs = 100_000, LastDamageMs = 160_000,
         HasStats = true, RosterSize = 4, DeadCount = 0, UnknownCount = 0,
-        OutcomeFailed = false, BossPresent = false, BossGone = false,
+        OutcomeFailed = false, BossPresent = false, BossGone = false, BossDead = false,
         InstancedRun = true, FlowStateVersion = 1,
     };
 
@@ -29,6 +29,7 @@ public class AutoArchiveEngineTests
     public void Wipe_fires_when_every_member_reads_dead()
     {
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // pre-existing test fires on the SAME tick allDead turns true — grace default (2000ms) would suppress it; isolate the wipe-fire assertion from the new revive-grace debounce
         var s = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s));
     }
@@ -57,10 +58,11 @@ public class AutoArchiveEngineTests
         // refire), a revive (allDead false) consumes the edge with no fire, and a fresh death after
         // that IS a new rising edge and fires again. Same intent, edge semantics give it for free.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // both fires below happen on the SAME tick allDead turns true — isolate from revive-grace
         var dead = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in dead));
         e.OnArchived(dead.NowMs, ArchiveReason.Wipe);
-        var later = dead with { NowMs = dead.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var later = dead with { NowMs = dead.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in later));                       // still all dead — no new edge
         var revived = later with { DeadCount = 3, NowMs = later.NowMs + 1000 };
         Assert.Null(e.Evaluate(in revived));                     // revived — edge consumed, nobody's wiped
@@ -75,7 +77,7 @@ public class AutoArchiveEngineTests
         var s = Live() with { OutcomeFailed = true };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.Wipe);
-        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in later));                       // edge consumed, sticky Failed doesn't refire
     }
 
@@ -90,10 +92,11 @@ public class AutoArchiveEngineTests
         // between. The level condition, not the timing relative to the cooldown, is what proves
         // single-fire here.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // s1 fires on the SAME tick allDead turns true — isolate from revive-grace
         var s1 = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
         e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
-        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, OutcomeFailed = true };
+        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1, OutcomeFailed = true };
         Assert.Null(e.Evaluate(in s2));   // still all dead, outcome now failed too — no duplicate archive
     }
 
@@ -109,7 +112,7 @@ public class AutoArchiveEngineTests
         var s1 = Live() with { OutcomeFailed = true };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
         e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
-        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.CooldownMs + 1, DeadCount = 4 };
+        var s2 = s1 with { NowMs = s1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1, DeadCount = 4 };
         Assert.Null(e.Evaluate(in s2));   // outcome still failed, now all dead too — no duplicate archive
     }
 
@@ -121,13 +124,14 @@ public class AutoArchiveEngineTests
         // AND re-arm (`!allDead && !OutcomeFailed`) can never clear once OutcomeFailed sticks true,
         // wedging every later independent wipe in the same run. This FAILS on ea58a42.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // wipe2's fire relies on allDead's fresh edge alone (OutcomeFailed can't re-edge, sticky) on the SAME tick it turns true — isolate from revive-grace
         var wipe1 = Live() with { DeadCount = 4, OutcomeFailed = true };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in wipe1));
         e.OnArchived(wipe1.NowMs, ArchiveReason.Wipe);
 
         var revived = wipe1 with
         {
-            DeadCount = 0, NowMs = wipe1.NowMs + AutoArchiveEngine.CooldownMs + 1_000,
+            DeadCount = 0, NowMs = wipe1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1_000,
         };
         Assert.Null(e.Evaluate(in revived));           // OutcomeFailed still true (sticky), nobody's dead
 
@@ -148,13 +152,14 @@ public class AutoArchiveEngineTests
         // vs the 60s IdleTimeoutMs default — so this pins ONLY the wipe double-fire, not a
         // coincidental Idle fire from the elapsed time.)
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // wipe1 fires on the SAME tick allDead turns true — isolate from revive-grace
         var wipe1 = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in wipe1));
         e.OnArchived(wipe1.NowMs, ArchiveReason.Wipe);
 
         var later = wipe1 with
         {
-            NowMs = wipe1.NowMs + AutoArchiveEngine.CooldownMs + 5_000, OutcomeFailed = true,
+            NowMs = wipe1.NowMs + AutoArchiveEngine.DefaultCooldownMs + 5_000, OutcomeFailed = true,
         };   // party still all dead throughout — no revive ever happened
         Assert.Null(e.Evaluate(in later));   // must NOT re-fire — same episode, already archived
     }
@@ -175,7 +180,7 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in rising));                                        // cooldown suppresses the fire
         var stillDead = rising with { NowMs = rising.NowMs + 3_000 };              // still inside cooldown, still dead
         Assert.Null(e.Evaluate(in stillDead));                                     // still suppressed
-        var afterLift = stillDead with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var afterLift = stillDead with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in afterLift));                // level persisted — fires on lift
     }
 
@@ -197,109 +202,188 @@ public class AutoArchiveEngineTests
         e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);                          // unrelated archive arms cooldown
         var rising = Live() with { OutcomeFailed = true, NowMs = Live().NowMs + 2_000 }; // edge rises inside cooldown
         Assert.Null(e.Evaluate(in rising));                                             // suppressed — edge consumed here
-        var afterLift = rising with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var afterLift = rising with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in afterLift));   // accepted loss: sticky signal, no new edge, allDead never true
+    }
+
+    // ---- wipe revive-grace + ignore-solo ----
+
+    [Fact]
+    public void Wipe_waits_out_revive_grace_and_a_revive_cancels_it()
+    {
+        var e = Armed(Live());
+        var t0 = Live() with { DeadCount = 4, NowMs = 210_000 };
+        Assert.Null(e.Evaluate(in t0));                                   // all-dead just started — within grace
+        var revived = t0 with { DeadCount = 3, NowMs = 211_000 };          // revive inside the 2s grace
+        Assert.Null(e.Evaluate(in revived));                              // cancelled, no wipe
+        var deadAgain = revived with { DeadCount = 4, NowMs = 212_000 };   // dies again — grace restarts
+        Assert.Null(e.Evaluate(in deadAgain));
+        var held = deadAgain with { NowMs = deadAgain.NowMs + AutoArchiveEngine.DefaultCooldownMs + 2001 }; // held >= grace, cooldown clear
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in held));
+    }
+
+    [Fact]
+    public void Wipe_outcome_failed_fires_immediately_ignoring_grace()
+    {
+        // Both signals present on the SAME just-started tick: DeadCount==RosterSize means allDead is
+        // true but allDeadHeld is false (0ms held, under the 2000ms default grace) — if outcomeEdge
+        // were coupled to the debounce at all, this would fire null. It fires Wipe immediately, proving
+        // outcomeEdge (server-authoritative OutcomeFailed) is wired independently of allDeadHeld/grace.
+        var e = Armed(Live());
+        var failed = Live() with { OutcomeFailed = true, DeadCount = 4, NowMs = 210_000 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in failed));   // server-authoritative fail = immediate
+    }
+
+    [Fact]
+    public void Wipe_ignore_solo_skips_a_solo_death_but_party_wipe_still_fires()
+    {
+        var e = Armed(Live());
+        e.WipeIgnoreSolo = true;
+        e.WipeGraceMs = 0;   // isolate the solo gate from grace
+        var solo = Live() with { RosterSize = 1, DeadCount = 1, NowMs = 210_000 };
+        Assert.Null(e.Evaluate(in solo));
+        var party = Live() with { RosterSize = 4, DeadCount = 4, NowMs = 220_000 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in party));
+    }
+
+    [Fact]
+    public void Wipe_and_stage_tie_at_default_grace_labels_stagechange()
+    {
+        // Deliberate, tracked tie-break — default WipeGraceMs (2000), NOT overridden to 0. When
+        // allDead and a stage transition into a run-end state land on the SAME tick, allDead has
+        // only just started (0ms held), so allDeadHeld is false and the grace debounce yields the
+        // tick to StageChange instead of Wipe. This is the canonical default-grace pin for that
+        // tie-break (see the migration comment on
+        // Stage_transition_banked_across_an_overlapping_archive_is_consumed, which isolates ITSELF
+        // from grace via WipeGraceMs=0 rather than pinning the tie-break). Coverage is preserved —
+        // an archive still fires at this exact tick, cutting the segment with no gap — only the
+        // trigger LABEL changes; a genuine mid-run wipe with no coinciding stage transition still
+        // fires Wipe once grace elapses (see Wipe_waits_out_revive_grace_and_a_revive_cancels_it).
+        var e = Armed(Live());
+        var tie = Live() with { DeadCount = 4, FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End };
+        Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in tie));   // archive fires — labeled Stage, not Wipe
     }
 
     // ---- boss phase ----
 
+    // PINNED REGRESSION (recut-fix, 2026-07-21, run sea/U051Yv8lf2): the engine must NEVER return
+    // BossPhase. ALL boss cuts route through the INLINE capped path (Plugin.Capture.cs
+    // MaybeCutForBossPhase → ManualArchive(BossPhase, replayUpperCapServerMs)); the engine's old
+    // Evaluate boss branch fired an UNCAPPED archive at the engine-tick "now", which placed the
+    // keep-before boss boundary at "now" (owner saw 0:55) instead of firstHit − keepBefore (0:48) on a
+    // re-detect (where _bossSegmentActive was re-armed but the boss was still known, so the inline gate
+    // skipped and the engine won the race). Removing the branch closes that uncapped path entirely.
     [Fact]
-    public void Boss_sighting_cuts_the_trash_segment_once()
+    public void Evaluate_never_returns_bossphase()
     {
         var e = Armed(Live());
-        var s = Live() with { BossPresent = true };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
-        e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
-        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
-        Assert.Null(e.Evaluate(in later));                       // boss segment active — no refire
+        // The exact conditions the old branch fired on: boss present, no segment active, in a run.
+        var s = Live() with { BossPresent = true, BossGone = false, BossDead = false };
+        Assert.Null(e.Evaluate(in s));   // NOT ArchiveReason.BossPhase — the engine can't fire an uncapped boss cut
+        // …even when a stale banked-style sighting persists across a cooldown window.
+        var later = s with { NowMs = s.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
+        Assert.Null(e.Evaluate(in later));
+    }
+
+    // ---- inline boss-phase cut gate: TryBeginBossSegmentCut ----
+    // The boss cut is INLINE (Plugin.Capture.cs, fires at the first boss hit, before accumulation) and
+    // is the SOLE boss-cut path — the engine's old Evaluate boss branch was removed (recut-fix,
+    // 2026-07-21; see Evaluate_never_returns_bossphase). These tests pin the once-per-fight +
+    // re-arm-per-run/death protections the removed Evaluate-based boss tests used to cover, now driven
+    // through the real production gate: TryBeginBossSegmentCut() + UpdateLatches (via Evaluate ticks)
+    // + OnArchived. The behaviors preserved from the deleted tests:
+    //   • one-fight-one-cut                     → TryBeginBossSegmentCut_fires_once_then_gates_until_rearm
+    //   • re-arm on run boundary                → TryBeginBossSegmentCut_rearms_on_run_boundary
+    //   • re-arm on confirmed death (recut off) → TryBeginBossSegmentCut_rearms_on_confirmed_death_recut_off
+    //   • NO re-arm on transient eviction (off) → TryBeginBossSegmentCut_no_rearm_on_transient_eviction_recut_off
+    //   • re-arm on any "gone" (recut on)       → TryBeginBossSegmentCut_rearms_on_eviction_when_recut_on
+    //   • non-boss archive re-arm (recut on)    → TryBeginBossSegmentCut_nonboss_archive_rearms_when_recut_on
+    //   • non-boss archive NO re-arm (recut off)→ TryBeginBossSegmentCut_nonboss_archive_no_rearm_when_recut_off
+    // The removed MinBossSegment / _bossPending (cooldown-bank) tests pinned mechanics that no longer
+    // exist in the deterministic inline model (no min-segment floor, no cooldown-swallow-then-rebank).
+
+    [Fact]
+    public void TryBeginBossSegmentCut_fires_once_then_gates_until_rearm()
+    {
+        var e = new AutoArchiveEngine();
+        Assert.True(e.TryBeginBossSegmentCut());    // first boss this fight → cut permitted, marks segment active
+        Assert.False(e.TryBeginBossSegmentCut());   // segment active → one fight, one cut
     }
 
     [Fact]
-    public void Boss_rearms_after_boss_gone()
+    public void TryBeginBossSegmentCut_blocked_when_boss_disabled()
     {
-        var e = Armed(Live());
-        var s = Live() with { BossPresent = true };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
-        e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
-        var gone = s with { BossPresent = false, BossGone = true, NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
-        Assert.Null(e.Evaluate(in gone));
-        var next = gone with { BossPresent = true, BossGone = false, NowMs = gone.NowMs + AutoArchiveEngine.CooldownMs + 1 };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in next));
+        var e = new AutoArchiveEngine { BossEnabled = false };
+        Assert.False(e.TryBeginBossSegmentCut());
     }
 
     [Fact]
-    public void NonBoss_archive_ends_the_boss_segment()
+    public void TryBeginBossSegmentCut_rearms_on_run_boundary()
     {
-        var e = Armed(Live());
-        var s = Live() with { BossPresent = true };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in s));
-        e.OnArchived(s.NowMs, ArchiveReason.BossPhase);
-        e.OnArchived(s.NowMs + 1000, ArchiveReason.Manual);      // user archived mid-boss — segment over
-        var later = s with { NowMs = s.NowMs + 1000 + AutoArchiveEngine.CooldownMs + 1 };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in later));
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));            // adopt flow version
+        Assert.True(e.TryBeginBossSegmentCut());    // first cut this run
+        Assert.False(e.TryBeginBossSegmentCut());   // gated within the run
+        // Leaving the instanced run re-arms the segment latch (UpdateLatches, every tick).
+        Assert.Null(e.Evaluate(Live() with { InstancedRun = false, BossPresent = false }));
+        Assert.True(e.TryBeginBossSegmentCut());    // next run's boss cuts fresh
     }
 
     [Fact]
-    public void Boss_seen_and_gone_entirely_within_cooldown_still_cuts_once_lifted()
+    public void TryBeginBossSegmentCut_rearms_on_confirmed_death_recut_off()
     {
-        // Judgment call (Fix 3, review round): a boss that starts AND ends inside one cooldown
-        // window used to be lost entirely (fire branch unreachable while cooldown blocks, and
-        // BossPresent reads false again by the time cooldown lifts). Bank the sighting like
-        // _stagePending and consume it once the cooldown clears.
-        var e = Armed(Live());
-        e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);              // arm the cooldown
-        var sighted = Live() with { BossPresent = true, NowMs = Live().NowMs + 2000 };
-        Assert.Null(e.Evaluate(in sighted));                                // cooldown swallows the live fire
-        var goneAlready = sighted with { BossPresent = false, BossGone = true, NowMs = sighted.NowMs + 3000 };
-        Assert.Null(e.Evaluate(in goneAlready));                            // boss already left, still cooling down
-        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in cooldownLifted)); // banked sighting fires once able
+        var e = new AutoArchiveEngine();            // BossRecutOnRedetect defaults false
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut());
+        // A CONFIRMED death ends the segment even with re-cut off.
+        Assert.Null(e.Evaluate(Live() with { BossDead = true, BossGone = true, BossPresent = false }));
+        Assert.True(e.TryBeginBossSegmentCut());    // a genuinely new fight after the kill re-cuts
     }
 
     [Fact]
-    public void Boss_pending_cleared_by_a_superseding_nonboss_archive()
+    public void TryBeginBossSegmentCut_no_rearm_on_transient_eviction_recut_off()
     {
-        // A banked boss sighting must not resurface once another trigger already cut a fresh
-        // segment boundary in the meantime — same "supersede" rule as _stagePending.
-        var e = Armed(Live());
-        e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);
-        var sighted = Live() with { BossPresent = true, NowMs = Live().NowMs + 2000 };
-        Assert.Null(e.Evaluate(in sighted));                                // banks _bossPending
-        e.OnArchived(sighted.NowMs, ArchiveReason.Manual);                  // manual archive supersedes it
-        var later = sighted with
-        {
-            BossPresent = false, NowMs = sighted.NowMs + AutoArchiveEngine.CooldownMs + 1,
-        };
-        Assert.Null(e.Evaluate(in later));                                  // no stale BossPhase resurfaces
+        var e = new AutoArchiveEngine();            // recut off (default)
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut());
+        // Transient vitals eviction (gone but NOT confirmed dead) must NOT re-arm with recut off —
+        // one fight, one cut (the pinned Boss_transient_eviction_does_not_recut_when_recut_off behavior).
+        Assert.Null(e.Evaluate(Live() with { BossGone = true, BossDead = false, BossPresent = false }));
+        Assert.False(e.TryBeginBossSegmentCut());
     }
 
     [Fact]
-    public void Boss_stale_banked_fire_does_not_wedge_next_real_boss()
+    public void TryBeginBossSegmentCut_rearms_on_eviction_when_recut_on()
     {
-        // RED-first pin (round 2): firing off a stale banked _bossPending where BossPresent is
-        // ALREADY false (boss came and went entirely inside one cooldown window) must not mark a
-        // boss segment "active" — there is no live segment to close later. On ea58a42 the fire
-        // branch unconditionally sets _bossSegmentActive = true, and OnArchived's re-arm only
-        // clears it on a NON-boss archive — so a BossPhase archive never clears it, wedging every
-        // later real boss engagement behind the !_bossSegmentActive gate forever. This FAILS on
-        // ea58a42.
-        var e = Armed(Live());
-        e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);                 // arm the cooldown
-        var sighted = Live() with { BossPresent = true, NowMs = Live().NowMs + 2000 };
-        Assert.Null(e.Evaluate(in sighted));                                   // banks _bossPending, cooldown blocks
-        var goneAlready = sighted with { BossPresent = false, BossGone = true, NowMs = sighted.NowMs + 3000 };
-        Assert.Null(e.Evaluate(in goneAlready));                               // boss already left, still cooling down
-        var cooldownLifted = goneAlready with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in cooldownLifted));  // stale banked sighting fires once able
-        e.OnArchived(cooldownLifted.NowMs, ArchiveReason.BossPhase);
+        var e = new AutoArchiveEngine { BossRecutOnRedetect = true };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut());
+        // Legacy re-detect: any "gone" (incl. transient eviction) re-arms.
+        Assert.Null(e.Evaluate(Live() with { BossGone = true, BossPresent = false }));
+        Assert.True(e.TryBeginBossSegmentCut());
+    }
 
-        // A genuinely new boss engagement, well after, must fire too — not wedged by a phantom
-        // "segment active" left over from the stale fire above.
-        var newBoss = cooldownLifted with
-        {
-            BossPresent = true, BossGone = false, NowMs = cooldownLifted.NowMs + AutoArchiveEngine.CooldownMs + 1,
-        };
-        Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newBoss));
+    [Fact]
+    public void TryBeginBossSegmentCut_nonboss_archive_rearms_when_recut_on()
+    {
+        // Preserves NonBoss_archive_ends_the_boss_segment: with recut ON, a non-boss archive
+        // (manual/wipe/idle) mid-boss ends the segment so the next boss engagement re-cuts.
+        var e = new AutoArchiveEngine { BossRecutOnRedetect = true };
+        Assert.True(e.TryBeginBossSegmentCut());
+        Assert.False(e.TryBeginBossSegmentCut());               // segment active
+        e.OnArchived(1_000, ArchiveReason.Manual);              // user archived mid-boss — recut on ends it
+        Assert.True(e.TryBeginBossSegmentCut());                // re-armed → re-cut
+    }
+
+    [Fact]
+    public void TryBeginBossSegmentCut_nonboss_archive_no_rearm_when_recut_off()
+    {
+        // Preserves Boss_intervening_manual_archive_does_not_recut_when_recut_off: with recut OFF,
+        // a manual/wipe/idle archive mid-boss must NOT restart boss detection — one fight, one cut.
+        var e = new AutoArchiveEngine();                        // recut off (default)
+        Assert.True(e.TryBeginBossSegmentCut());
+        e.OnArchived(1_000, ArchiveReason.Manual);              // manual archive mid-boss
+        Assert.False(e.TryBeginBossSegmentCut());               // segment still active — no re-cut
     }
 
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
@@ -312,12 +396,17 @@ public class AutoArchiveEngineTests
         // StageChange archive once stats re-accumulate IS a double-archive in slow motion — pin that
         // OnArchived consumes any pending transition, whichever trigger actually fired.
         var e = new AutoArchiveEngine();
+        // Isolates ITSELF from revive-grace (the wipe below must win the tick over StageChange on the
+        // SAME tick allDead turns true) — this test pins the OnArchived-consumes-pending-transition
+        // behavior, not the wipe/stage tie-break. See Wipe_and_stage_tie_at_default_grace_labels_stagechange
+        // for the canonical pin of what happens at the DEFAULT grace when the two genuinely tie.
+        e.WipeGraceMs = 0;
         Assert.Null(e.Evaluate(Live()));                                  // adopt flow version 1
         // Transition into End (a run-END state that DOES arm under the new rule) AND a wipe overlap.
         var overlap = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End, DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in overlap));          // wipe is checked first, wins the tick
         e.OnArchived(overlap.NowMs, ArchiveReason.Wipe);
-        var later = overlap with { NowMs = overlap.NowMs + AutoArchiveEngine.CooldownMs + 1, DeadCount = 0 };
+        var later = overlap with { NowMs = overlap.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1, DeadCount = 0 };
         Assert.Null(e.Evaluate(in later));                                // no stale StageChange fires later
     }
 
@@ -363,9 +452,9 @@ public class AutoArchiveEngineTests
         var s = Live() with { NowMs = 221_000 };   // 61s after last damage, 60s of content — idle fires
         Assert.Equal(ArchiveReason.Idle, e.Evaluate(in s));
         e.OnArchived(s.NowMs, ArchiveReason.Idle);
-        var cleared = s with { CombatActive = false, NowMs = s.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var cleared = s with { CombatActive = false, NowMs = s.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in cleared));       // past cooldown, but CombatActive=false blocks
-        var stillInactive = cleared with { NowMs = cleared.NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var stillInactive = cleared with { NowMs = cleared.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in stillInactive)); // a second window later — still no refire
     }
 
@@ -445,7 +534,7 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in banked));                                   // banks _stagePending (into End), cooldown blocks
         var reset = banked with { FlowStateVersion = 1, NowMs = banked.NowMs + 1000 };
         Assert.Null(e.Evaluate(in reset));                                    // decrease discards the banked pending
-        var cooldownLifted = reset with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
+        var cooldownLifted = reset with { NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };
         Assert.Null(e.Evaluate(in cooldownLifted));                           // no stale StageChange resurfaces
     }
 
@@ -493,7 +582,7 @@ public class AutoArchiveEngineTests
         var end = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End };
         Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in end));
         e.OnArchived(end.NowMs, ArchiveReason.StageChange);
-        var redelivered = end with { NowMs = end.NowMs + AutoArchiveEngine.CooldownMs + 1 };   // same version, still End
+        var redelivered = end with { NowMs = end.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1 };   // same version, still End
         Assert.Null(e.Evaluate(in redelivered));
     }
 
@@ -511,10 +600,29 @@ public class AutoArchiveEngineTests
         // condition persists through the suppressed tick because `_wipeArchived` is only latched
         // true at the moment of an actual fire, never while cooldown-suppressed.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // the fire below lands only 2ms after allDead turns true (well under the 2000ms default grace) — isolate from revive-grace
         e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);    // scene archive arms the cooldown
-        var s = Live() with { DeadCount = 4, NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs - 1 };
+        var s = Live() with { DeadCount = 4, NowMs = Live().NowMs + AutoArchiveEngine.DefaultCooldownMs - 1 };
         Assert.Null(e.Evaluate(in s));                            // wipe suppressed inside the window
         var later = s with { NowMs = s.NowMs + 2 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in later));
+    }
+
+    [Fact]
+    public void Cooldown_is_configurable()
+    {
+        var e = Armed(Live());
+        e.WipeGraceMs = 0;   // isolate CooldownMs configurability from the unrelated revive-grace
+                              // debounce — both fires below land on the SAME tick allDead turns true
+        e.CooldownMs = 30_000;
+        var dead = Live() with { DeadCount = 4, NowMs = 210_000 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in dead));
+        e.OnArchived(dead.NowMs, ArchiveReason.Wipe);
+        var revived = dead with { DeadCount = 0, NowMs = dead.NowMs + 1000 };  // re-arm the episode
+        Assert.Null(e.Evaluate(in revived));
+        var deadAgain = revived with { DeadCount = 4, NowMs = dead.NowMs + 20_000 }; // <30s cooldown
+        Assert.Null(e.Evaluate(in deadAgain));
+        var later = deadAgain with { NowMs = dead.NowMs + 30_001 };            // past 30s
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in later));
     }
 
@@ -537,5 +645,21 @@ public class AutoArchiveEngineTests
             NowMs = 160_000 + 300_001,
         };
         Assert.Null(e.Evaluate(in s));
+    }
+
+    [Fact]
+    public void Master_disabled_never_fires()
+    {
+        // Fix 1 (review round): the master on/off gate used to live ONLY in Plugin.AutoArchive.cs
+        // (untestable plugin field) — moved onto the engine (Enabled) so the policy itself is pinned
+        // here. Placed after the wipe/UpdateLatches bookkeeping in Evaluate, so re-enabling with the
+        // SAME still-true input fires immediately — no stale edge was lost while disabled.
+        var e = Armed(Live());
+        e.WipeGraceMs = 0;   // would-fire on the SAME tick allDead turns true — isolate from revive-grace
+        e.Enabled = false;
+        var s = Live() with { DeadCount = 4 };
+        Assert.Null(e.Evaluate(in s));                          // master gate suppresses the would-fire wipe
+        e.Enabled = true;
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s));      // re-enabled — same input now fires
     }
 }

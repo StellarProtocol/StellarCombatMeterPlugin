@@ -131,4 +131,42 @@ public class ReplayWindowTests
         Assert.Equal(new[] { 0 }, late.Pct);
         Assert.Equal(1500, late.Ms0);
     }
+
+    // ── CapUpper: inline boss-phase upper cap (Task 7) — moves the trash/boss boundary earlier while
+    //    keeping the windows contiguous (the concatenation invariant this whole file guards). ──
+
+    [Fact]
+    public void CapUpper_pulls_the_boundary_earlier_when_the_cap_is_inside_the_window()
+        // now=10_000, cap=7_000 (firstHit − keepBefore), watermark=2_000 → trash window ends at 7_000;
+        // the samples in (7_000, 10_000] survive for the next (boss) window.
+        => Assert.Equal(7_000, ReplayWindow.CapUpper(upperMs: 10_000, capRelMs: 7_000, watermarkMs: 2_000));
+
+    [Fact]
+    public void CapUpper_ignores_a_cap_at_or_below_the_watermark_to_avoid_an_empty_window()
+    {
+        // boss engaged within keepBefore of the previous cut → cap ≤ watermark: don't cap (the run-up
+        // was in the previous segment anyway). No empty/negative window is ever produced.
+        Assert.Equal(10_000, ReplayWindow.CapUpper(upperMs: 10_000, capRelMs: 2_000, watermarkMs: 2_000));
+        Assert.Equal(10_000, ReplayWindow.CapUpper(upperMs: 10_000, capRelMs: 1_500, watermarkMs: 2_000));
+    }
+
+    [Fact]
+    public void CapUpper_ignores_a_cap_at_or_beyond_now()
+        // keepBefore == 0 with the cap already at/after "now" → no clip (windows unchanged).
+        => Assert.Equal(10_000, ReplayWindow.CapUpper(upperMs: 10_000, capRelMs: 10_000, watermarkMs: 2_000));
+
+    [Fact]
+    public void CapUpper_capped_and_next_window_lower_are_the_SAME_boundary_no_gap_no_overlap()
+    {
+        // The capped upper becomes the advanced watermark, which is the next window's lower-exclusive
+        // bound — so the trash window (…, cap] and the boss window (cap, …] tile exactly. Prove the
+        // sample at the boundary belongs to exactly ONE window.
+        const long cap = 7_000;
+        var upper = ReplayWindow.CapUpper(upperMs: 10_000, capRelMs: cap, watermarkMs: 2_000);
+        var all = new[] { S(6_500), S(7_000), S(7_500) };
+        var trash = ReplayWindow.SlicePositions(all, lowerExclusive: 2_000, upperInclusive: upper);
+        var boss  = ReplayWindow.SlicePositions(all, lowerExclusive: upper, upperInclusive: 10_000);
+        Assert.Equal(new[] { 6_500, 7_000 }, trash.Select(s => s.Ms));   // boundary sample in trash
+        Assert.Equal(new[] { 7_500 },        boss.Select(s => s.Ms));    // none duplicated, none dropped
+    }
 }

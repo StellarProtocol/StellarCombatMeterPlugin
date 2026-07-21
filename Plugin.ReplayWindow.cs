@@ -13,6 +13,13 @@ namespace Stellar.CombatMeter;
 // Plugin-side adapters over the live capture buffers.
 public sealed partial class Plugin
 {
+    // Sentinel for "no upper-bound cap on the replay window" — passed for every non-boss archive
+    // (Task 7). The inline boss-phase trash cut (Plugin.AutoArchive.cs MaybeCutForBossPhase) passes a
+    // real server-clock cap so its window ends at (firstBossHit − keepBefore) and the run-up movement
+    // flows into the following boss window instead of the trash one (boundary moves earlier; windows
+    // stay contiguous → concatenation unbroken). Consumed in PrepareReplayDoc via ReplayWindow.CapUpper.
+    internal const long ReplayUpperCapUnset = long.MaxValue;
+
     // Slices the position buffer to the window (lowerExclusive, upperInclusive]; keeps only entities
     // with at least one sample in the window (they define the window's meta set). Pure slicing via
     // ReplayWindow; the source buffers are not mutated here (freeing happens in AdvanceReplayWatermark).

@@ -34,6 +34,9 @@ internal readonly record struct AutoArchiveInputs
     public bool OutcomeFailed { get; init; }     // IDungeonState.LastOutcome == Failed
     public bool BossPresent { get; init; }       // a boss-tagged entity is currently resolved + alive
     public bool BossGone { get; init; }          // the previously resolved boss died / despawned / evicted
+    /// <summary>A CONFIRMED boss death — HP observed &lt;=0 — as opposed to a transient cache
+    /// eviction, which <see cref="BossGone"/> also covers.</summary>
+    public bool BossDead { get; init; }
     public bool InstancedRun { get; init; }      // IDungeonState.CurrentRunId != 0
     public int FlowStateVersion { get; init; }   // IDungeonState.FlowStateVersion
     public DungeonFlowState CurrentFlowState { get; init; }  // IDungeonState.CurrentFlowState — the run
@@ -49,14 +52,27 @@ internal readonly record struct AutoArchiveInputs
 /// </summary>
 internal sealed class AutoArchiveEngine
 {
-    internal const long CooldownMs   = 10_000;   // shared across every trigger AND manual/scene archives
+    internal const long DefaultCooldownMs = 10_000;   // shared cooldown default (tests reference this)
     internal const long MinContentMs = 30_000;   // idle content guard: >= 30 s of actual combat span
 
+    // Master enable (Fix 1, review round): the on/off gate used to live ONLY in Plugin.AutoArchive.cs
+    // (a plugin field with no unit coverage) — moved here so the policy is testable in isolation. Sits
+    // AFTER the wipe recovery/edge-stamp + UpdateLatches bookkeeping in Evaluate, so latch/flow-adoption
+    // state keeps advancing while disabled and re-enabling never sees a stale edge; only FIRING is
+    // suppressed. See Master_disabled_never_fires.
+    public bool Enabled = true;
+    public long CooldownMs = DefaultCooldownMs;   // shared across every trigger AND manual/scene archives; configurable at runtime via prefs
     public bool WipeEnabled   = true;
     public bool BossEnabled   = true;
     public bool IdleEnabled   = true;
     public bool StageEnabled  = true;
     public long IdleTimeoutMs = 60_000;
+    public bool BossRecutOnRedetect;   // false = one fight, one cut (transient eviction / intervening archive never re-arms the boss segment). true = legacy re-detect re-cut.
+    public long WipeGraceMs = 2000;    // allDead must PERSIST this long before it counts toward a wipe, so a
+                                       // momentary solo down->revive doesn't cut the run. OutcomeFailed
+                                       // (server-authoritative) bypasses this grace entirely.
+    public bool WipeIgnoreSolo;        // when true, an all-dead roster of size 1 (solo) never wipes — only a
+                                       // party wipe (RosterSize > 1) counts. OutcomeFailed still bypasses this.
 
     private long _lastArchiveMs;
 
@@ -94,10 +110,15 @@ internal sealed class AutoArchiveEngine
     // <see cref="AutoArchiveEngineTests.Wipe_outcomefailed_only_edge_lost_inside_unrelated_cooldown_is_accepted_residual"/>).
     private bool _wipeArchived;          // this wipe episode has already been archived
     private bool _prevOutcomeFailed;     // previous tick's OutcomeFailed reading (one-shot edge only)
+    private long _allDeadSinceMs;        // 0 = not currently all-dead; else the ms the current all-dead
+                                          // episode began (revive-grace debounce)
 
-    private bool _bossSegmentActive;    // a boss segment is running; re-arms on boss-gone / non-boss archive
-    private bool _bossPending;          // a boss sighting the cooldown gate swallowed, banked for when it lifts;
-                                         // cleared by OnArchived on any non-boss archive (see its doc)
+    // A boss segment is running. The INLINE cut (Plugin.Capture.cs MaybeCutForBossPhase, via
+    // TryBeginBossSegmentCut) is the sole thing that SETS this true; UpdateLatches re-arms it (false)
+    // on a confirmed death (or, legacy BossRecutOnRedetect=true, any boss-gone/non-boss archive) — or
+    // unconditionally on leaving the instanced run (run/scene boundary), so the trigger re-arms per run.
+    // The inline gate consults it via BossSegmentActive so a re-detect cuts again (capped) once re-armed.
+    private bool _bossSegmentActive;
     private int  _lastFlowVersion = -1; // -1 = never observed (first sight adopts silently)
     private bool _stagePending;         // a flow transition happened and hasn't been consumed yet;
                                          // cleared by OnArchived (ANY archive consumes it — see its doc)
@@ -114,11 +135,18 @@ internal sealed class AutoArchiveEngine
         // level, not an edge — see the field-doc comment above for why the two need different
         // treatment.
         bool outcomeEdge = s.OutcomeFailed && !_prevOutcomeFailed;
-        bool wipeWanted = !_wipeArchived && (allDead || outcomeEdge);
+        // Revive-grace debounce: allDead must PERSIST >= WipeGraceMs before it counts, so a momentary
+        // solo down->revive doesn't cut the run. OutcomeFailed (server-authoritative) bypasses grace.
+        if (!allDead) _allDeadSinceMs = 0;
+        else if (_allDeadSinceMs == 0) _allDeadSinceMs = s.NowMs;
+        bool soloSkip = WipeIgnoreSolo && s.RosterSize == 1;
+        bool allDeadHeld = allDead && !soloSkip && s.NowMs - _allDeadSinceMs >= WipeGraceMs;
+        bool wipeWanted = !_wipeArchived && (allDeadHeld || outcomeEdge);
         if (!allDead) _wipeArchived = false;   // recovery re-arm: >=1 alive member => episode over
         _prevOutcomeFailed = s.OutcomeFailed;  // stamp every tick regardless of fire/cooldown
         UpdateLatches(in s);
 
+        if (!Enabled) return null;      // master gate — bookkeeping above already ran; only firing is suppressed
         if (!s.HasStats) return null;   // ManualArchive would no-op anyway — don't consume the cooldown
         if (_lastArchiveMs != 0 && s.NowMs - _lastArchiveMs < CooldownMs) return null;
 
@@ -133,41 +161,59 @@ internal sealed class AutoArchiveEngine
             return ArchiveReason.Wipe;
         }
         if (StageEnabled && _stagePending)                        { _stagePending = false;  return ArchiveReason.StageChange; }
-        if (BossEnabled && !_bossSegmentActive && (s.BossPresent || _bossPending))
-        {
-            // Only mark a segment active when firing off a boss that is genuinely present RIGHT
-            // NOW. A stale banked _bossPending firing after the boss already left (!s.BossPresent)
-            // archives the pre-boss segment but starts no live segment — there's nothing to close
-            // later, so marking one active here would wedge the NEXT real boss engagement behind
-            // this !_bossSegmentActive gate forever (round 2 fix; pinned by
-            // <see cref="AutoArchiveEngineTests.Boss_stale_banked_fire_does_not_wedge_next_real_boss"/>).
-            _bossSegmentActive = s.BossPresent;
-            _bossPending = false;
-            return ArchiveReason.BossPhase;
-        }
+        // NOTE (recut-fix, 2026-07-21): the engine NEVER fires BossPhase. ALL boss cuts route through
+        // the INLINE capped path (Plugin.Capture.cs MaybeCutForBossPhase → TryBeginBossSegmentCut →
+        // ManualArchive(BossPhase, replayUpperCapServerMs)). The old Evaluate boss branch fired an
+        // UNCAPPED archive at the engine-tick "now" and, on a re-detect where _bossSegmentActive was
+        // re-armed but the boss was still known (inline gate skipped), placed the keep-before boundary
+        // at "now" instead of firstHit − keepBefore (owner run sea/U051Yv8lf2, 0:55 vs 0:48). The branch
+        // (+ its MinBossSegmentMs floor and _bossPending cooldown-bank, both meaningless in the
+        // deterministic inline model) is removed. The engine keeps ONLY the _bossSegmentActive latch
+        // (re-armed in UpdateLatches) that the inline gate consults. Pinned by Evaluate_never_returns_bossphase.
         if (IdleEnabled && IdleExpired(in s))                     { return ArchiveReason.Idle; }
         return null;
     }
 
-    /// <summary>Every archive — ANY path, including manual, hotkey, and scene change — reports here:
-    /// arms the shared cooldown, and a non-boss archive ends the running boss segment (so the next
-    /// boss sighting cuts a fresh pre-boss segment). A boss-phase archive STARTS its segment, unless
-    /// it fired off a stale banked sighting with no boss actually present (see <see cref="Evaluate"/>
-    /// — that case leaves no segment active to end). This re-arm-on-any-OTHER-archive reading is a
-    /// deliberate spec-intent interpretation — a literal "any archive re-arms" would make the boss-
-    /// phase archive that STARTS a segment immediately re-fire on the still-present boss every
-    /// cooldown — controller-approved 2026-07-17, pinned by
-    /// <see cref="AutoArchiveEngineTests.NonBoss_archive_ends_the_boss_segment"/>. Also consumes any
-    /// pending stage transition (see <see cref="_stagePending"/>): the shared-cooldown spec intent
-    /// ("prevents double-archives when triggers overlap") means an overlapping transition that lost
-    /// the race to another trigger must not resurface as a stale StageChange archive later. Wipe
-    /// needs no bookkeeping here at all — <c>_wipeArchived</c>'s recovery clear and
-    /// <c>_prevOutcomeFailed</c>'s edge stamp both live in <see cref="Evaluate"/> and run every
-    /// tick regardless of which path (if any) actually archived.</summary>
+    /// <summary>Read the boss-segment latch — the inline cut's gate (Plugin.Capture.cs). True while a
+    /// boss fight segment is running; UpdateLatches re-arms it false on death / run boundary.</summary>
+    public bool BossSegmentActive => _bossSegmentActive;
+
+    /// <summary>Inline boss-phase cut gate (2026-07-21). The boss cut happens INLINE in
+    /// <c>Plugin.Capture.cs</c> at the first boss combat event, BEFORE that hit is accumulated, so the
+    /// first boss hit lands in the fresh boss segment and the cut is never delayed to the settle cap
+    /// mid-fight (the owner's chopped-fight bug) — and it routes through <c>ManualArchive(BossPhase,
+    /// replayUpperCapServerMs)</c>, so the keep-before replay boundary is honoured. This is the sole
+    /// thing that SETS <see cref="_bossSegmentActive"/> (the engine no longer fires BossPhase). It is the
+    /// once-per-fight latch: <see cref="UpdateLatches"/> re-arms it every tick (run-boundary +
+    /// confirmed-death re-arm, transient-eviction ignored when <see cref="BossRecutOnRedetect"/> is
+    /// false), so a transient vitals blink / intervening non-boss archive never re-cuts and each new
+    /// instanced run — and, with recut on, each re-engage after the boss leaves — re-arms. Returns true
+    /// and marks the segment active when no segment is active; false when boss auto-archive is off or a
+    /// segment is already running.</summary>
+    public bool TryBeginBossSegmentCut()
+    {
+        if (!BossEnabled || _bossSegmentActive) return false;
+        _bossSegmentActive = true;
+        return true;
+    }
+
+    /// <summary>Every archive — ANY path, including manual, hotkey, scene change, and the inline boss
+    /// cut — reports here: arms the shared cooldown, and (legacy re-detect model only) a non-boss
+    /// archive ends the running boss segment so the next boss sighting cuts a fresh segment. This
+    /// re-arm-on-any-OTHER-archive reading is a deliberate spec-intent interpretation — a literal "any
+    /// archive re-arms" would make the boss-phase archive that STARTS a segment immediately re-cut on
+    /// the still-present boss — controller-approved 2026-07-17, pinned by
+    /// <see cref="AutoArchiveEngineTests.TryBeginBossSegmentCut_nonboss_archive_rearms_when_recut_on"/>.
+    /// Also consumes any pending stage transition (see <see cref="_stagePending"/>): an overlapping
+    /// transition that lost the race to another trigger must not resurface as a stale StageChange
+    /// archive later. Wipe needs no bookkeeping here — <c>_wipeArchived</c>'s recovery clear and
+    /// <c>_prevOutcomeFailed</c>'s edge stamp both live in <see cref="Evaluate"/>.</summary>
     public void OnArchived(long nowMs, ArchiveReason reason)
     {
         _lastArchiveMs = nowMs;
-        if (reason != ArchiveReason.BossPhase) { _bossSegmentActive = false; _bossPending = false; }
+        // Legacy re-arm on any non-boss archive is part of the re-detect model; with re-cut OFF a
+        // manual/wipe/idle archive mid-boss must NOT restart boss detection (round the owner's run).
+        if (reason != ArchiveReason.BossPhase && BossRecutOnRedetect) _bossSegmentActive = false;
         _stagePending = false;
     }
 
@@ -176,11 +222,14 @@ internal sealed class AutoArchiveEngine
     // wipe latch's own recovery clear + edge stamp live directly in Evaluate — see its body.)
     private void UpdateLatches(in AutoArchiveInputs s)
     {
-        if (s.BossGone) _bossSegmentActive = false;    // boss died/despawned — next boss is a new segment
-        // Bank a boss sighting even if the cooldown gate below is about to swallow the fire this
-        // tick, so a boss that starts AND ends entirely inside one cooldown window still gets cut
-        // once the cooldown lifts, instead of silently merging into the surrounding trash segment.
-        if (BossEnabled && s.BossPresent && !_bossSegmentActive) _bossPending = true;
+        // Leaving the instanced run (open world between dungeons) ends any boss segment, so the NEXT
+        // run's boss gets a fresh cut. This is the "scene/run change ends it" half of the fix — a
+        // mid-fight cache blink keeps InstancedRun true, so it never re-cuts during one fight.
+        if (!s.InstancedRun) _bossSegmentActive = false;
+        // Boss segment ends only on a CONFIRMED death (or, legacy, any "gone" incl. transient
+        // eviction). Default: a cache blink mid-fight must NOT re-arm — one fight, one cut. Re-arming
+        // here lets the inline cut fire again (capped) on the next boss combat event.
+        if (BossRecutOnRedetect ? s.BossGone : s.BossDead) _bossSegmentActive = false;
 
         if (_lastFlowVersion != s.FlowStateVersion)
         {

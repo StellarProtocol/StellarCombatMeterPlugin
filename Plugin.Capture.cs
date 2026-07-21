@@ -19,10 +19,20 @@ public sealed partial class Plugin
         if (evt is CombatEvent.EntitySummonAppeared sa) { ObserveSummonAppeared(sa); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
+        // Inline boss-phase cut (Task 7, 2026-07-21). Capture whether combat was ALREADY running before
+        // this event establishes it, then — on the FIRST combat event involving the boss — cut the
+        // pre-boss trash into its own segment IMMEDIATELY (no settle defer) so this first boss hit lands
+        // in the FRESH boss segment. MUST run BEFORE _agg/EnsureCombatStarted/CaptureTaken/Accumulate
+        // below, or the first hit leaks into the archived trash (the owner's chopped-fight bug). O(1) +
+        // alloc-free once the boss is identified (the _autoArchiveBossId guard short-circuits).
+        bool priorCombat = _combatActive;
+        MaybeCutForBossPhase(d.SourceId, d.TargetId, d.TimestampMs, priorCombat);
+
         // All-channel combat-activity clock (dealt / heal / taken are all DamageDealt) — feeds the
         // auto-archive idle-settle delay so a deferred AUTO archive waits out trailing DoTs / the
         // killing-blow tick before snapshotting. Distinct from _lastDamageMs (dealt-only, set in
-        // AccumulateDamage) which the Idle trigger depends on — do not conflate the two.
+        // AccumulateDamage) which the Idle trigger depends on — do not conflate the two. Set AFTER the
+        // boss cut above (whose Clear() zeroes it) so it still reflects THIS event.
         _lastCombatEventMs = d.TimestampMs;
 
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
@@ -39,8 +49,9 @@ public sealed partial class Plugin
 
         // Replay: note both source and target BEFORE the player-only early-out so boss/add target ids
         // (e.g. a mob being hit by a player) also enter the entity set for position tracking.
+        // (Boss detection for the auto-archive trigger moved to MaybeCutForBossPhase above, which runs
+        // before accumulation — see the inline-cut comment at the top of OnCombatEvent.)
         NoteReplayEntity(d.SourceId, d.TargetId);
-        ObserveAutoArchiveBoss(d.SourceId, d.TargetId);
 
         // Per-source stats/timeline: PLAYERS ONLY — mirror the _agg guard above. Mob sources are never
         // shown (live rows come from _agg, which discards non-players; History/SkillBreakdown are

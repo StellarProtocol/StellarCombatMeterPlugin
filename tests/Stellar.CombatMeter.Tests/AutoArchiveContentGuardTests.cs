@@ -88,4 +88,31 @@ public class AutoArchiveContentGuardTests
     [Fact] public void Activity_banks_wipe()  => Assert.False(SuppressWithActivity(AutoArchive.ArchiveReason.Wipe));
     [Fact] public void Activity_banks_scene() => Assert.False(SuppressWithActivity(AutoArchive.ArchiveReason.SceneChange));
     [Fact] public void Activity_banks_idle()  => Assert.False(SuppressWithActivity(AutoArchive.ArchiveReason.Idle));
+
+    // ── Inline boss-phase cut: archive the pre-boss trash ONLY when there was prior combat (Task 7) ──
+    // Direct engage (no combat before the boss) must NOT emit a spurious pre-fight archive — the boss
+    // fight is one clean segment starting at the first hit (owner spec point 2). Trash→boss archives the
+    // accumulated trash as its own segment (owner spec point 3). The boss-enabled + once-per-fight
+    // gating is applied separately by AutoArchiveEngine.TryBeginBossSegmentCut (see AutoArchiveEngineTests).
+
+    [Fact]
+    public void ShouldArchiveTrashForBoss_true_only_with_prior_combat()
+    {
+        Assert.True(Plugin.ShouldArchiveTrashForBoss(priorCombat: true));    // trash → boss: bank the trash
+        Assert.False(Plugin.ShouldArchiveTrashForBoss(priorCombat: false));  // direct engage: no spurious archive
+    }
+
+    // ── Inline boss cut is considered only when enabled, NO segment active, AND in an instanced run ──
+    // (recut-fix, 2026-07-21). Keying on segment-active (NOT "boss already known") is what makes a
+    // re-detect cut again capped once UpdateLatches re-arms the latch. The inRun gate keeps the cut out
+    // of the open world.
+
+    [Fact]
+    public void ShouldConsiderInlineBossCut_requires_enabled_no_active_segment_and_in_run()
+    {
+        Assert.True(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: true));   // fresh OR re-detect → cut (capped)
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: false, bossSegmentActive: false, inRun: true));  // boss auto-archive off
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: true,  inRun: true));  // segment running → fast-exit
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
+    }
 }

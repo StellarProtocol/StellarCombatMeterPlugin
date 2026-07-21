@@ -40,9 +40,23 @@ public sealed partial class Plugin
         }
         // Enforce the cap BEFORE hydrating so evicted runs are never rooted by _uploadStatus; the Forget loop
         // matches the archive path (ManualArchive) and stays correct even if hydration order ever changes.
-        foreach (var evicted in TrimToCapacity(_history)) _uploadStatus.Forget(evicted);
+        foreach (var evicted in TrimToCapacity(_history)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }
         HydrateUploadStatesFromSidecar();   // restore "✓ Uploaded" + URL for the surviving entries
+        SweepOrphanReUploads();   // belt-and-braces: drop any container left by a crash mid-evict
         if (skipped > 0) _services.Log.Info($"[CombatMeter] history: skipped {skipped} malformed entr{(skipped == 1 ? "y" : "ies")} on load");
+    }
+
+    // Delete a run's retained re-upload payload (mirrors _uploadStatus.Forget). No-op when absent.
+    private void ForgetReUpload(EncounterHistoryEntry e)
+        => _services.Data.Delete(ReUploadContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
+
+    // Belt-and-braces: drop any container file with no matching live entry (e.g. left by a crash mid-evict).
+    private void SweepOrphanReUploads()
+    {
+        var live = new List<(long, long)>(_history.Count);
+        foreach (var e in _history) live.Add((e.LevelUuid, e.ArchivedAtMs));
+        foreach (var name in ReUploadContainer.OrphanContainerNames(_services.Data.List("replay/"), live))
+            _services.Data.Delete(name);
     }
 
     // Match the persisted sidecar records back to the loaded entries by their stable (LevelUuid, ArchivedAtMs)
@@ -107,6 +121,7 @@ public sealed partial class Plugin
     // guard (the drilled Session is no longer in _history) on the next RebuildSkillRows.
     internal void ClearAllHistory()
     {
+        foreach (var e in _history) ForgetReUpload(e);
         _history.Clear();
         _uploadStatus.Clear();   // drop all per-entry upload status so evicted runs aren't rooted
         ResetHistorySelection();
@@ -125,6 +140,7 @@ public sealed partial class Plugin
         var deleted = _history[historyIndex];
         _history.RemoveAt(historyIndex);
         _uploadStatus.Forget(deleted);   // drop this run's upload status so it isn't rooted after delete
+        ForgetReUpload(deleted);
 
         if (ReferenceEquals(wasSelected, deleted)) ResetHistorySelection();
         else if (wasSelected is not null)

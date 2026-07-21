@@ -57,39 +57,7 @@ public sealed partial class Plugin
                         ToggleGroup(Party5Toggles),
                         ToggleGroup(Party20Toggles))),
                 SettingsScrollH),
-            BuildAutoArchiveSection(),
-            new SeparatorElement(),
-            new TextElement(() => "Uploads", Emphasis: true),
-            ToggleRow("Auto-upload runs", () => AutoUpload, v => AutoUpload = v),
-            ToggleRow("Upload replay position track (dungeon/raid)", () => UploadReplay, v => UploadReplay = v),
         }, Gap: 4f);
-
-    // Auto-archive triggers (Plugin.AutoArchive.cs) — when a run gets captured, sitting between
-    // element visibility (scroll, above) and what happens to captured runs (Uploads, below).
-    private HudElement BuildAutoArchiveSection()
-        => new ColumnElement(new HudElement[]
-        {
-            new SeparatorElement(),
-            new TextElement(() => "Auto archive", Emphasis: true),
-            ToggleRow("Team wipe",             () => AutoArchiveWipe,  v => AutoArchiveWipe  = v),
-            ToggleRow("Boss phase",            () => AutoArchiveBoss,  v => AutoArchiveBoss  = v),
-            ToggleRow("Combat idle",           () => AutoArchiveIdle,  v => AutoArchiveIdle  = v),
-            IdleTimeoutRow(),
-            ToggleRow("Dungeon stage change",  () => AutoArchiveStage, v => AutoArchiveStage = v),
-        }, Gap: 4f);
-
-    private HudElement IdleTimeoutRow()
-        => new RowElement(new HudElement[]
-        {
-            new SpacerElement(Width: 16f),
-            new TextElement(() => "Idle timeout", MutedCol, Width: 72f),
-            IdleTimeoutBtn("30s", 30), IdleTimeoutBtn("60s", 60),
-            IdleTimeoutBtn("120s", 120), IdleTimeoutBtn("300s", 300),
-        }, Gap: 6f);
-
-    private HudElement IdleTimeoutBtn(string label, int seconds)
-        => new ButtonElement(() => label, () => AutoArchiveIdleTimeoutS = seconds,
-            Active: () => AutoArchiveIdleTimeoutS == seconds, Enabled: () => AutoArchiveIdle, Width: 56f);
 
     private HudElement ToggleGroup(MeterElementToggles t)
         => new ColumnElement(new HudElement[]
@@ -131,12 +99,17 @@ public sealed partial class Plugin
     private HudElement SectionLabel(string text)
         => new TextElement(() => text, MutedCol);
 
-    private HudElement ToggleRow(string label, Func<bool> get, Action<bool> set, Func<bool>? enabled = null)
-        => new RowElement(new HudElement[]
-        {
-            new ToggleElement(() => "", get, v => { set(v); PersistToggles(); }, enabled),
-            new TextElement(() => label),
-        }, Gap: 8f);
+    // indent=true prepends a small spacer so the toggle (checkbox + label) nests visually under a
+    // parent trigger row — the same left inset PillRow uses — for sub-options like "Re-cut if boss
+    // re-detected" (under Boss phase) and "Ignore when solo" (under Team wipe).
+    private HudElement ToggleRow(string label, Func<bool> get, Action<bool> set, Func<bool>? enabled = null, bool indent = false)
+    {
+        var toggle = new ToggleElement(() => "", get, v => { set(v); PersistToggles(); }, enabled);
+        var text   = new TextElement(() => label);
+        return indent
+            ? new RowElement(new HudElement[] { new SpacerElement(Width: 8f), toggle, text }, Gap: 8f)
+            : new RowElement(new HudElement[] { toggle, text }, Gap: 8f);
+    }
 
     private HudElement ImagineShowRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
