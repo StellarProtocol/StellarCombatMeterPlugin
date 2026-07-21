@@ -29,6 +29,7 @@ public class AutoArchiveEngineTests
     public void Wipe_fires_when_every_member_reads_dead()
     {
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // pre-existing test fires on the SAME tick allDead turns true — grace default (2000ms) would suppress it; isolate the wipe-fire assertion from the new revive-grace debounce
         var s = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s));
     }
@@ -57,6 +58,7 @@ public class AutoArchiveEngineTests
         // refire), a revive (allDead false) consumes the edge with no fire, and a fresh death after
         // that IS a new rising edge and fires again. Same intent, edge semantics give it for free.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // both fires below happen on the SAME tick allDead turns true — isolate from revive-grace
         var dead = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in dead));
         e.OnArchived(dead.NowMs, ArchiveReason.Wipe);
@@ -90,6 +92,7 @@ public class AutoArchiveEngineTests
         // between. The level condition, not the timing relative to the cooldown, is what proves
         // single-fire here.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // s1 fires on the SAME tick allDead turns true — isolate from revive-grace
         var s1 = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s1));
         e.OnArchived(s1.NowMs, ArchiveReason.Wipe);
@@ -121,6 +124,7 @@ public class AutoArchiveEngineTests
         // AND re-arm (`!allDead && !OutcomeFailed`) can never clear once OutcomeFailed sticks true,
         // wedging every later independent wipe in the same run. This FAILS on ea58a42.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // wipe2's fire relies on allDead's fresh edge alone (OutcomeFailed can't re-edge, sticky) on the SAME tick it turns true — isolate from revive-grace
         var wipe1 = Live() with { DeadCount = 4, OutcomeFailed = true };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in wipe1));
         e.OnArchived(wipe1.NowMs, ArchiveReason.Wipe);
@@ -148,6 +152,7 @@ public class AutoArchiveEngineTests
         // vs the 60s IdleTimeoutMs default — so this pins ONLY the wipe double-fire, not a
         // coincidental Idle fire from the elapsed time.)
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // wipe1 fires on the SAME tick allDead turns true — isolate from revive-grace
         var wipe1 = Live() with { DeadCount = 4 };
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in wipe1));
         e.OnArchived(wipe1.NowMs, ArchiveReason.Wipe);
@@ -199,6 +204,42 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in rising));                                             // suppressed — edge consumed here
         var afterLift = rising with { NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs + 1 };
         Assert.Null(e.Evaluate(in afterLift));   // accepted loss: sticky signal, no new edge, allDead never true
+    }
+
+    // ---- wipe revive-grace + ignore-solo ----
+
+    [Fact]
+    public void Wipe_waits_out_revive_grace_and_a_revive_cancels_it()
+    {
+        var e = Armed(Live());
+        var t0 = Live() with { DeadCount = 4, NowMs = 210_000 };
+        Assert.Null(e.Evaluate(in t0));                                   // all-dead just started — within grace
+        var revived = t0 with { DeadCount = 3, NowMs = 211_000 };          // revive inside the 2s grace
+        Assert.Null(e.Evaluate(in revived));                              // cancelled, no wipe
+        var deadAgain = revived with { DeadCount = 4, NowMs = 212_000 };   // dies again — grace restarts
+        Assert.Null(e.Evaluate(in deadAgain));
+        var held = deadAgain with { NowMs = deadAgain.NowMs + AutoArchiveEngine.CooldownMs + 2001 }; // held >= grace, cooldown clear
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in held));
+    }
+
+    [Fact]
+    public void Wipe_outcome_failed_fires_immediately_ignoring_grace()
+    {
+        var e = Armed(Live());
+        var failed = Live() with { OutcomeFailed = true, NowMs = 210_000 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in failed));   // server-authoritative fail = immediate
+    }
+
+    [Fact]
+    public void Wipe_ignore_solo_skips_a_solo_death_but_party_wipe_still_fires()
+    {
+        var e = Armed(Live());
+        e.WipeIgnoreSolo = true;
+        e.WipeGraceMs = 0;   // isolate the solo gate from grace
+        var solo = Live() with { RosterSize = 1, DeadCount = 1, NowMs = 210_000 };
+        Assert.Null(e.Evaluate(in solo));
+        var party = Live() with { RosterSize = 4, DeadCount = 4, NowMs = 220_000 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in party));
     }
 
     // ---- boss phase ----
@@ -396,6 +437,7 @@ public class AutoArchiveEngineTests
         // StageChange archive once stats re-accumulate IS a double-archive in slow motion — pin that
         // OnArchived consumes any pending transition, whichever trigger actually fired.
         var e = new AutoArchiveEngine();
+        e.WipeGraceMs = 0;   // the wipe below must win the tick over StageChange on the SAME tick allDead turns true — isolate from revive-grace
         Assert.Null(e.Evaluate(Live()));                                  // adopt flow version 1
         // Transition into End (a run-END state that DOES arm under the new rule) AND a wipe overlap.
         var overlap = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End, DeadCount = 4 };
@@ -595,6 +637,7 @@ public class AutoArchiveEngineTests
         // condition persists through the suppressed tick because `_wipeArchived` is only latched
         // true at the moment of an actual fire, never while cooldown-suppressed.
         var e = Armed(Live());
+        e.WipeGraceMs = 0;   // the fire below lands only 2ms after allDead turns true (well under the 2000ms default grace) — isolate from revive-grace
         e.OnArchived(Live().NowMs, ArchiveReason.SceneChange);    // scene archive arms the cooldown
         var s = Live() with { DeadCount = 4, NowMs = Live().NowMs + AutoArchiveEngine.CooldownMs - 1 };
         Assert.Null(e.Evaluate(in s));                            // wipe suppressed inside the window

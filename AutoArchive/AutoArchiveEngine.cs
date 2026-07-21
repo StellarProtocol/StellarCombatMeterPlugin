@@ -61,6 +61,11 @@ internal sealed class AutoArchiveEngine
     public bool StageEnabled  = true;
     public long IdleTimeoutMs = 60_000;
     public bool BossRecutOnRedetect;   // false = one fight, one cut (transient eviction / intervening archive never re-arms the boss segment). true = legacy re-detect re-cut.
+    public long WipeGraceMs = 2000;    // allDead must PERSIST this long before it counts toward a wipe, so a
+                                       // momentary solo down->revive doesn't cut the run. OutcomeFailed
+                                       // (server-authoritative) bypasses this grace entirely.
+    public bool WipeIgnoreSolo;        // when true, an all-dead roster of size 1 (solo) never wipes — only a
+                                       // party wipe (RosterSize > 1) counts. OutcomeFailed still bypasses this.
 
     private long _lastArchiveMs;
 
@@ -98,6 +103,8 @@ internal sealed class AutoArchiveEngine
     // <see cref="AutoArchiveEngineTests.Wipe_outcomefailed_only_edge_lost_inside_unrelated_cooldown_is_accepted_residual"/>).
     private bool _wipeArchived;          // this wipe episode has already been archived
     private bool _prevOutcomeFailed;     // previous tick's OutcomeFailed reading (one-shot edge only)
+    private long _allDeadSinceMs;        // 0 = not currently all-dead; else the ms the current all-dead
+                                          // episode began (revive-grace debounce)
 
     private bool _bossSegmentActive;    // a boss segment is running; re-arms on confirmed death (or,
                                          // legacy BossRecutOnRedetect=true, any boss-gone/non-boss
@@ -121,7 +128,13 @@ internal sealed class AutoArchiveEngine
         // level, not an edge — see the field-doc comment above for why the two need different
         // treatment.
         bool outcomeEdge = s.OutcomeFailed && !_prevOutcomeFailed;
-        bool wipeWanted = !_wipeArchived && (allDead || outcomeEdge);
+        // Revive-grace debounce: allDead must PERSIST >= WipeGraceMs before it counts, so a momentary
+        // solo down->revive doesn't cut the run. OutcomeFailed (server-authoritative) bypasses grace.
+        if (!allDead) _allDeadSinceMs = 0;
+        else if (_allDeadSinceMs == 0) _allDeadSinceMs = s.NowMs;
+        bool soloSkip = WipeIgnoreSolo && s.RosterSize == 1;
+        bool allDeadHeld = allDead && !soloSkip && s.NowMs - _allDeadSinceMs >= WipeGraceMs;
+        bool wipeWanted = !_wipeArchived && (allDeadHeld || outcomeEdge);
         if (!allDead) _wipeArchived = false;   // recovery re-arm: >=1 alive member => episode over
         _prevOutcomeFailed = s.OutcomeFailed;  // stamp every tick regardless of fire/cooldown
         UpdateLatches(in s);
