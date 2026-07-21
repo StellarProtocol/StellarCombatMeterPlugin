@@ -122,7 +122,7 @@ public sealed partial class Plugin
     // One line per auto-archive fire — the Task 10 verification artifact. With the idle-settle delay
     // this marks the moment the engine DECIDED (the pending was armed); the commit lands once combat
     // goes quiet — see LogAutoArchiveCommit. The gap between the two lines is the trailing-damage
-    // settle window (the pending waits out ArchiveIdleSettleMs of no combat events).
+    // settle window (the pending waits out _archiveSettleMs of no combat events).
     private void LogAutoArchiveFired(AutoArchive.ArchiveReason reason, in AutoArchive.AutoArchiveInputs s)
     {
         if (!StellarDiagnostics.IsEnabled) return;

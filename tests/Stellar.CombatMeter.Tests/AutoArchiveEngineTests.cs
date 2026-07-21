@@ -481,6 +481,24 @@ public class AutoArchiveEngineTests
         Assert.Equal(ArchiveReason.BossPhase, e.Evaluate(in newRunBoss));   // new run's boss re-cuts
     }
 
+    [Fact]
+    public void Boss_out_of_run_sighting_does_not_bank_pending_for_next_run()
+    {
+        // Fix 2 (review round): the _bossPending re-bank line used to fire unconditionally on
+        // BossPresent, even while OUT of an instanced run (only the segment-active/pending RESET was
+        // InstancedRun-gated). A stale BossPresent=true reading while out of run, landing inside an
+        // unrelated cooldown, would bank _bossPending; re-entering the run before the cooldown lifts
+        // (no further out-of-run tick to reset it) then fired a phantom BossPhase off nothing.
+        var (e, on) = BossEngaged();   // first boss cut fired; segment active; recut off (default)
+        var outOfRunStale = on with { InstancedRun = false, BossPresent = true, NowMs = on.NowMs + 2_000 };
+        Assert.Null(e.Evaluate(in outOfRunStale));   // still cooling down from the first cut — must not bank pending
+        var backInRunNoBoss = outOfRunStale with
+        {
+            InstancedRun = true, BossPresent = false, NowMs = outOfRunStale.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1,
+        };
+        Assert.Null(e.Evaluate(in backInRunNoBoss));   // cooldown clear, no boss — no stale pending fires
+    }
+
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
 
     [Fact]
@@ -740,5 +758,21 @@ public class AutoArchiveEngineTests
             NowMs = 160_000 + 300_001,
         };
         Assert.Null(e.Evaluate(in s));
+    }
+
+    [Fact]
+    public void Master_disabled_never_fires()
+    {
+        // Fix 1 (review round): the master on/off gate used to live ONLY in Plugin.AutoArchive.cs
+        // (untestable plugin field) — moved onto the engine (Enabled) so the policy itself is pinned
+        // here. Placed after the wipe/UpdateLatches bookkeeping in Evaluate, so re-enabling with the
+        // SAME still-true input fires immediately — no stale edge was lost while disabled.
+        var e = Armed(Live());
+        e.WipeGraceMs = 0;   // would-fire on the SAME tick allDead turns true — isolate from revive-grace
+        e.Enabled = false;
+        var s = Live() with { DeadCount = 4 };
+        Assert.Null(e.Evaluate(in s));                          // master gate suppresses the would-fire wipe
+        e.Enabled = true;
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s));      // re-enabled — same input now fires
     }
 }

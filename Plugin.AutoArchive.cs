@@ -35,7 +35,7 @@ public sealed partial class Plugin
     internal const long ArchiveIdleCapMs = 15_000;
 
     // The single pending deferred-archive slot. Set when the engine returns a deferrable reason;
-    // committed once combat has been quiet for ArchiveIdleSettleMs (or the cap elapses); cleared by
+    // committed once combat has been quiet for _archiveSettleMs (or the cap elapses); cleared by
     // ManualArchive on ANY commit (so a manual/scene archive during the wait supersedes it — never a
     // stale double-fire). While set, TickAutoArchiveTriggers holds off evaluating new triggers so the
     // engine can't re-fire. _pendingArchiveArmedMs is the server clock when the trigger armed (cap base).
@@ -72,13 +72,15 @@ public sealed partial class Plugin
     private const string PrefAaBossRecut      = "autoArchive.bossRecut";
     private const string PrefAaMinBossSegS    = "autoArchive.minBossSegmentS";
 
-    // Master enable: gates TickAutoArchiveTriggers entirely (below _paused). When off, no AUTO
-    // trigger evaluates or fires — manual/hotkey/scene archives are unaffected (separate paths).
-    private bool _autoArchiveEnabled = true;
+    // Master enable (Fix 1, review round): the gate now lives on the pure engine (_autoArchive.Enabled)
+    // — the single source of truth — so the policy is unit-testable (Master_disabled_never_fires).
+    // This accessor is a thin persisted wrapper; TickAutoArchiveTriggers still short-circuits on it
+    // below _paused as a perf optimization (skip building the input snapshot entirely when off), but
+    // the engine enforces the policy itself even if called directly.
     internal bool AutoArchiveEnabled
     {
-        get => _autoArchiveEnabled;
-        set { _autoArchiveEnabled = value; _prefs.Set(PrefAaEnabled, value); _prefs.Save(); }
+        get => _autoArchive.Enabled;
+        set { _autoArchive.Enabled = value; _prefs.Set(PrefAaEnabled, value); _prefs.Save(); }
     }
 
     internal bool AutoArchiveWipe
@@ -164,7 +166,7 @@ public sealed partial class Plugin
         _autoArchive.StageEnabled  = _prefs.Get(PrefAaStage, true);
         _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 60) * 1000L;
 
-        _autoArchiveEnabled              = _prefs.Get(PrefAaEnabled, true);
+        _autoArchive.Enabled             = _prefs.Get(PrefAaEnabled, true);
         _autoArchive.BossRecutOnRedetect = _prefs.Get(PrefAaBossRecut, false);
         _autoArchive.WipeIgnoreSolo      = _prefs.Get(PrefAaWipeIgnoreSolo, false);
         _autoArchive.WipeGraceMs         = _prefs.Get(PrefAaWipeGraceS, 2) * 1000L;
@@ -174,12 +176,16 @@ public sealed partial class Plugin
     }
 
     // ~10 Hz from OnUpdate's throttled region (Plugin.cs). An AUTO trigger is deferred until combat
-    // goes quiet for ArchiveIdleSettleMs so trailing damage lands before the snapshot (see the field
+    // goes quiet for _archiveSettleMs so trailing damage lands before the snapshot (see the field
     // docs); during the wait we stop evaluating new triggers so the engine can't re-fire/duplicate.
     private void TickAutoArchiveTriggers()
     {
         if (_paused) return;
-        if (!_autoArchiveEnabled) return;   // master toggle: manual/hotkey/scene archives are unaffected
+        // Master toggle: manual/hotkey/scene archives are unaffected (separate paths). This is a perf
+        // short-circuit only — the engine (_autoArchive.Enabled) is the actual policy source of truth
+        // (Fix 1, review round) — but we still clear any stranded pending here so a mid-wait master-off
+        // doesn't leave a deferred AUTO archive to fire later once re-enabled (Minor, review round).
+        if (!_autoArchive.Enabled) { _pendingArchiveReason = null; return; }
 
         // Arm a fresh pending only when none is outstanding — while one waits, the engine is skipped.
         if (_pendingArchiveReason is null)

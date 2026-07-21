@@ -55,6 +55,12 @@ internal sealed class AutoArchiveEngine
     internal const long DefaultCooldownMs = 10_000;   // shared cooldown default (tests reference this)
     internal const long MinContentMs = 30_000;   // idle content guard: >= 30 s of actual combat span
 
+    // Master enable (Fix 1, review round): the on/off gate used to live ONLY in Plugin.AutoArchive.cs
+    // (a plugin field with no unit coverage) — moved here so the policy is testable in isolation. Sits
+    // AFTER the wipe recovery/edge-stamp + UpdateLatches bookkeeping in Evaluate, so latch/flow-adoption
+    // state keeps advancing while disabled and re-enabling never sees a stale edge; only FIRING is
+    // suppressed. See Master_disabled_never_fires.
+    public bool Enabled = true;
     public long CooldownMs = DefaultCooldownMs;   // shared across every trigger AND manual/scene archives; configurable at runtime via prefs
     public bool WipeEnabled   = true;
     public bool BossEnabled   = true;
@@ -141,6 +147,7 @@ internal sealed class AutoArchiveEngine
         _prevOutcomeFailed = s.OutcomeFailed;  // stamp every tick regardless of fire/cooldown
         UpdateLatches(in s);
 
+        if (!Enabled) return null;      // master gate — bookkeeping above already ran; only firing is suppressed
         if (!s.HasStats) return null;   // ManualArchive would no-op anyway — don't consume the cooldown
         if (_lastArchiveMs != 0 && s.NowMs - _lastArchiveMs < CooldownMs) return null;
 
@@ -224,7 +231,11 @@ internal sealed class AutoArchiveEngine
         // Bank a boss sighting even if the cooldown gate below is about to swallow the fire this
         // tick, so a boss that starts AND ends entirely inside one cooldown window still gets cut
         // once the cooldown lifts, instead of silently merging into the surrounding trash segment.
-        if (BossEnabled && s.BossPresent && !_bossSegmentActive) _bossPending = true;
+        // Gated on InstancedRun (Fix 2, review round): a stale BossPresent reading while OUT of an
+        // instanced run must not bank a pending cut — otherwise re-entering a run before the next
+        // out-of-run tick resets it (the reset above only fires while STILL out of run) would fire a
+        // phantom BossPhase archive off a sighting that was never part of any real run.
+        if (BossEnabled && s.InstancedRun && s.BossPresent && !_bossSegmentActive) _bossPending = true;
 
         if (_lastFlowVersion != s.FlowStateVersion)
         {

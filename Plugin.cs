@@ -97,7 +97,7 @@ public sealed partial class Plugin : IStellarPlugin
     private long _lastDamageMs;
     // Timestamp of the most recent combat event of ANY channel (dealt / heal / taken) — distinct from
     // _lastDamageMs (dealt-only, which the Idle trigger depends on). Feeds the auto-archive idle-settle
-    // delay: a deferred AUTO archive waits until this has gone quiet for ArchiveIdleSettleMs so trailing
+    // delay: a deferred AUTO archive waits until this has gone quiet for _archiveSettleMs so trailing
     // DoTs / killing-blow ticks land before the snapshot (Plugin.AutoArchive.cs).
     private long _lastCombatEventMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
