@@ -178,13 +178,13 @@ public sealed partial class Plugin
         _autoArchive.BossEnabled   = _prefs.Get(PrefAaBoss, true);
         _autoArchive.IdleEnabled   = _prefs.Get(PrefAaIdle, true);
         _autoArchive.StageEnabled  = _prefs.Get(PrefAaStage, true);
-        _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 60) * 1000L;
+        _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 300) * 1000L;   // ship default 300s (owner Image #25, 2026-07-21)
 
         _autoArchive.Enabled             = _prefs.Get(PrefAaEnabled, true);
-        _autoArchive.BossRecutOnRedetect = _prefs.Get(PrefAaBossRecut, false);
+        _autoArchive.BossRecutOnRedetect = _prefs.Get(PrefAaBossRecut, true);       // ship default ON (owner Image #25)
         _autoArchive.WipeIgnoreSolo      = _prefs.Get(PrefAaWipeIgnoreSolo, false);
         _autoArchive.WipeGraceMs         = _prefs.Get(PrefAaWipeGraceS, 2) * 1000L;
-        _autoArchive.CooldownMs          = _prefs.Get(PrefAaCooldownS, 10) * 1000L;
+        _autoArchive.CooldownMs          = _prefs.Get(PrefAaCooldownS, 5) * 1000L;  // ship default 5s Min gap (owner Image #25)
         _archiveSettleMs                 = _prefs.Get(PrefAaSettleS, 2) * 1000L;
         _autoArchiveKeepBeforeMs         = _prefs.Get(PrefAaKeepBeforeS, 0) * 1000L;   // Task 7: default 0 = cut at first hit
     }
