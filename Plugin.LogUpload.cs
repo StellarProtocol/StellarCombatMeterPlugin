@@ -172,7 +172,40 @@ public sealed partial class Plugin
             _services.Log.Warning("[CombatMeter.SP1] Cannot upload: run has no levelUuid (archived before run-identity was persisted). Re-run the fight to upload it.");
             return;
         }
+
+        if (TryLoadReUpload(entry, out var payload)) { ReplayReUpload(entry, payload); return; }
+
+        // Pre-feature entry (no retained payload): today's fallback — assemble from the entry, no chunks/positions.
         AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true, flushBuffer: false, replayDoc: null);
+    }
+
+    /// <summary>Loads the retained first-send payload for <paramref name="entry"/>, if one exists. The
+    /// testable seam: absent/garbage container ⇒ <c>false</c> so the caller falls back to today's
+    /// assemble-from-entry behavior (a run archived before this feature has nothing retained).</summary>
+    private bool TryLoadReUpload(EncounterHistoryEntry entry, out ReUploadPayload payload)
+    {
+        payload = default!;
+        var bytes = _services.Data.Read(ReUploadContainer.ContainerName(entry.LevelUuid, entry.ArchivedAtMs));
+        return bytes is not null && ReUploadContainer.TryDeserialize(bytes, out payload);
+    }
+
+    // Verbatim replay: re-POST the stored summary, then (on success, preserving ordering) the stored
+    // chunk envelopes + positions. Byte-for-byte reproduction of the first send.
+    private void ReplayReUpload(EncounterHistoryEntry entry, ReUploadPayload payload)
+    {
+        var url = UploadVerdict.SiteBase + "/run/" + payload.Region + "/" + payload.LevelUuid.ToString(CultureInfo.InvariantCulture);
+        _uploadStatus.Set(entry, UploadPhase.InFlight, url);
+        _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count} chunk(s), positions={(payload.Positions is not null)}).");
+        LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err) =>
+        {
+            _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+            _uploadStateDirty = true;
+            if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
+            if (payload.Chunks.Count > 0)
+                ChunkUploader.PostRawEnvelopesFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.Chunks, m => _services.Log.Warning(m));
+            if (payload.Positions is not null)
+                PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions);
+        });
     }
 
     // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
