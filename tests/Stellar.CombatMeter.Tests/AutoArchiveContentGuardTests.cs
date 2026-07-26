@@ -115,4 +115,21 @@ public class AutoArchiveContentGuardTests
         Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: true,  inRun: true));  // segment running → fast-exit
         Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
     }
+
+    // ---- killed-boss marks (2026-07-26): the corpse-readoption loop that produced the sliver spam ----
+
+    [Fact]
+    public void A_live_boss_is_adopted()
+        => Assert.True(Plugin.ShouldAdoptBossCandidate(isBoss: true, alreadyKilled: false));
+
+    [Fact]
+    public void A_killed_boss_is_never_readopted()
+        // The loop: death pulse re-armed the latch, the next boss-tagged event re-adopted the DEAD boss
+        // (still cached isBoss=true), the inline cut fired, the next tick saw the corpse dead again...
+        // one 0 ms archive per turn. Barring re-adoption breaks it at the source.
+        => Assert.False(Plugin.ShouldAdoptBossCandidate(isBoss: true, alreadyKilled: true));
+
+    [Fact]
+    public void A_nonboss_entity_is_never_adopted()
+        => Assert.False(Plugin.ShouldAdoptBossCandidate(isBoss: false, alreadyKilled: false));
 }

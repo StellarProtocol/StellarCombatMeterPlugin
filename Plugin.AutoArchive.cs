@@ -48,6 +48,17 @@ public sealed partial class Plugin
     private const int MaxBossCheckEntries = 512;
     private readonly Dictionary<EntityId, bool> _bossCheck = new();
 
+    // Bosses whose fight has already been observed dead THIS RUN. A corpse must never re-open a boss
+    // segment: without this, the death pulse re-armed the latch, CheckBossCandidate re-adopted the dead
+    // boss (still cached isBoss=true in _bossCheck), the inline cut fired, and the next engine tick
+    // observed the same corpse as dead again — one 0 ms archive per turn of that loop (owner runs
+    // sea/696115723671437312, sea/420833196448415744, archives 1 s apart). Keyed on the ENTITY uuid, so
+    // a respawned boss with a fresh uuid is a NEW identity and cuts normally. BOUNDED (the FPS-leak
+    // lesson) and cleared at the scene boundary — NOT by Clear(), which runs on every archive and would
+    // make the meter forget which bosses are already dead mid-run.
+    private const int MaxKilledBossEntries = 64;
+    private readonly HashSet<EntityId> _killedBosses = new();
+
     // The currently-identified boss for trigger purposes. NOT cleared by Clear(): the framework's
     // vitals cache outlives a plugin archive, so BossStatus keeps tracking the same boss across
     // the boss-phase archive; scene resets / AOI disappear / the idle sweep wipe its vitals row,
@@ -317,7 +328,13 @@ public sealed partial class Plugin
         var v = _services.CombatLookup.GetVitals(_autoArchiveBossId);
         bool dead    = v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
         bool evicted = !v.IsKnown;
-        if (dead || evicted) { _autoArchiveBossId = default; return (false, true, dead); }
+        if (dead || evicted)
+        {
+            // Mark BEFORE clearing — this is the only place that still knows which entity died.
+            if (dead && _killedBosses.Count < MaxKilledBossEntries) _killedBosses.Add(_autoArchiveBossId);
+            _autoArchiveBossId = default;
+            return (false, true, dead);
+        }
         return (true, false, false);
     }
 
@@ -340,8 +357,14 @@ public sealed partial class Plugin
             isBoss = info.HasValue && info.Value.IsBoss;           // ResolveBossEntity's exact test
             _bossCheck[id] = isBoss;
         }
-        if (isBoss) _autoArchiveBossId = id;
+        if (ShouldAdoptBossCandidate(isBoss, _killedBosses.Contains(id))) _autoArchiveBossId = id;
     }
+
+    /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that
+    /// has not already been observed dead this run. Barring an already-killed boss is what stops the
+    /// post-kill cut loop (2026-07-26). Unit-tested headless.</summary>
+    internal static bool ShouldAdoptBossCandidate(bool isBoss, bool alreadyKilled)
+        => isBoss && !alreadyKilled;
 
     /// <summary>Pure decision (Task 7): on the first-detected boss hit, should the accumulated pre-boss
     /// trash be archived as its own boss-phase segment? Only when there WAS prior combat (trash) to

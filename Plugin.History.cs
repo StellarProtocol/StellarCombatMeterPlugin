@@ -66,6 +66,9 @@ public sealed partial class Plugin
         // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
         // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
         _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
+        // New scene = new run: forget which bosses died in the previous one, so the same boss template
+        // in the next run cuts normally. Deliberately NOT in Clear() — that runs on every archive.
+        _killedBosses.Clear();
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;
