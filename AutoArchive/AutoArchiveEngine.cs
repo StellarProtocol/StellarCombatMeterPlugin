@@ -140,7 +140,8 @@ internal sealed class AutoArchiveEngine
 
     // A confirmed boss death was observed while a boss segment was open, and that fight has not been
     // banked yet. LATCHED rather than edge-consumed: BossStatus clears _autoArchiveBossId the instant
-    // it sees the death (Plugin.AutoArchive.cs:325), so BossDead is a ONE-TICK pulse, and
+    // it sees the death (Plugin.BossDetection.cs, moved there from Plugin.AutoArchive.cs by the Minor E
+    // extraction, review round 2026-07-27 second pass), so BossDead is a ONE-TICK pulse, and
     // TickAutoArchiveTriggers skips Evaluate entirely while another archive is pending — an edge would
     // be lost in both cases and the fight would never bank. Same shape as _wipeArchived: a level the
     // fire gates read, set only from bookkeeping and cleared only on an actual fire / run exit.

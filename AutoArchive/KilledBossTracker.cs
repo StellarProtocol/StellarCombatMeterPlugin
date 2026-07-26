@@ -20,7 +20,8 @@ namespace Stellar.CombatMeter.AutoArchive;
 /// line. An earlier version dropped the NEW mark at capacity (<c>if (... &amp;&amp; Count &lt;
 /// Max) Add(...)</c>) — that fails OPEN: the corpse that just triggered saturation would itself go
 /// unmarked and become re-adoptable, reopening the exact loop this class closes. (Contrast the sibling
-/// boss-lookup cache, Plugin.AutoArchive.cs's <c>_bossCheck</c>, which fails CLOSED — dropping a new
+/// boss-lookup cache, Plugin.BossDetection.cs's <c>_bossCheck</c> (moved there from Plugin.AutoArchive.cs
+/// by the Minor E extraction, review round 2026-07-27 second pass), which fails CLOSED — dropping a new
 /// entry there only means one non-boss id gets re-resolved next time, never a re-adoption.) BOUNDED (the
 /// FPS-leak lesson) and cleared at the scene boundary (<c>Plugin.OnSceneChanged</c>) — NOT on every
 /// archive, which would make the meter forget which bosses are already dead mid-run.</para>

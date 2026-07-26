@@ -10,7 +10,8 @@ namespace Stellar.CombatMeter.Tests;
 // headless — Plugin cannot be instantiated in tests (it needs the IL2CPP service surface). The one
 // piece this suite does NOT cover — that BossStatus calls MarkKilled strictly BEFORE clearing
 // _autoArchiveBossId — is a documented, accepted residual (see the comment on BossStatus in
-// Plugin.AutoArchive.cs); everything the tracker itself decides is covered here.
+// Plugin.BossDetection.cs, moved there from Plugin.AutoArchive.cs by the Minor E extraction, review
+// round 2026-07-27 second pass); everything the tracker itself decides is covered here.
 public class KilledBossTrackerTests
 {
     private static EntityId Id(long v) => new(v);
