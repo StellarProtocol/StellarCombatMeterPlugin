@@ -72,7 +72,6 @@ internal sealed class AutoArchiveEngine
     public bool IdleEnabled   = true;
     public bool StageEnabled  = true;
     public long IdleTimeoutMs = 60_000;
-    public bool BossRecutOnRedetect;   // false = one fight, one cut (transient eviction / intervening archive never re-arms the boss segment). true = legacy re-detect re-cut.
     public long WipeGraceMs = 2000;    // allDead must PERSIST this long before it counts toward a wipe, so a
                                        // momentary solo down->revive doesn't cut the run. OutcomeFailed
                                        // (server-authoritative) bypasses this grace entirely.
@@ -267,10 +266,11 @@ internal sealed class AutoArchiveEngine
         // run's boss gets a fresh cut, and drops any unbanked kill want with it.
         if (!s.InstancedRun) { _bossSegmentActive = false; _bossKillWanted = false; }
         // A confirmed death ENDS THE FIGHT but does not itself end the segment: the BossKill archive
-        // does, via OnArchived, after the caller's settle window. Removing the old
-        // `if (BossRecutOnRedetect ? s.BossGone : s.BossDead) _bossSegmentActive = false;` re-arm is
-        // what kills the post-kill cut loop — the dead boss used to be re-adopted by
-        // CheckBossCandidate, re-arm, cut, and repeat once per tick (0 ms archives ~1 s apart).
+        // does, via OnArchived, after the caller's settle window. A raw death/eviction reading directly
+        // re-arming the segment here is what caused the post-kill cut loop — the dead boss kept getting
+        // re-adopted by CheckBossCandidate, re-armed, and re-cut once per tick (0 ms archives ~1 s
+        // apart). That re-arm (and the BossRecutOnRedetect toggle that used to gate it) is retired for
+        // good (2026-07-26, Task 4) — no raw gone/dead reading closes the segment any more.
         if (s.BossDead && _bossSegmentActive) _bossKillWanted = true;
 
         if (_lastFlowVersion != s.FlowStateVersion)

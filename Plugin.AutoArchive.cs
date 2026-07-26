@@ -69,7 +69,6 @@ public sealed partial class Plugin
     private const string PrefAaSettleS        = "autoArchive.settleS";
     private const string PrefAaWipeGraceS     = "autoArchive.wipeGraceS";
     private const string PrefAaWipeIgnoreSolo = "autoArchive.wipeIgnoreSolo";
-    private const string PrefAaBossRecut      = "autoArchive.bossRecut";
 
     // Boss-phase "keep before" (2026-07-21, Task 7): how much of the pre-hit run-up rides with the boss
     // segment when the inline boss cut fires (Plugin.Capture.cs MaybeCutForBossPhase). Default 0 = cut
@@ -128,12 +127,6 @@ public sealed partial class Plugin
     // ---- Task 4 accessors: the Tasks 1-3 engine knobs, wired the same get-engine/set-engine+persist
     // way as the accessors above. ----
 
-    internal bool AutoArchiveBossRecut
-    {
-        get => _autoArchive.BossRecutOnRedetect;
-        set { _autoArchive.BossRecutOnRedetect = value; _prefs.Set(PrefAaBossRecut, value); _prefs.Save(); }
-    }
-
     internal bool AutoArchiveWipeIgnoreSolo
     {
         get => _autoArchive.WipeIgnoreSolo;
@@ -181,7 +174,8 @@ public sealed partial class Plugin
         _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 300) * 1000L;   // ship default 300s (owner Image #25, 2026-07-21)
 
         _autoArchive.Enabled             = _prefs.Get(PrefAaEnabled, true);
-        _autoArchive.BossRecutOnRedetect = _prefs.Get(PrefAaBossRecut, true);       // ship default ON (owner Image #25)
+        // NOTE: the retired autoArchive.bossRecut key (2026-07-26) is deliberately NOT read — any value
+        // left on disk from an older build is inert. See the BossKill spec § 2.8.
         _autoArchive.WipeIgnoreSolo      = _prefs.Get(PrefAaWipeIgnoreSolo, false);
         _autoArchive.WipeGraceMs         = _prefs.Get(PrefAaWipeGraceS, 2) * 1000L;
         _autoArchive.CooldownMs          = _prefs.Get(PrefAaCooldownS, 5) * 1000L;  // ship default 5s Min gap (owner Image #25)
@@ -315,11 +309,8 @@ public sealed partial class Plugin
 
     // Boss liveness for the engine. Gone = a REAL death observation (HasHpObservation) or the
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
-    // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction) — as of Task 2
-    // (2026-07-26) a confirmed death arms the engine's deferred BossKill want (fired through the
-    // caller's settle window, see IsDeferrableArchive), while a transient eviction (gone but not dead)
-    // is ignored entirely. Neither ends the boss segment directly any more — only an actual archive
-    // (via OnArchived) does.
+    // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction): a death arms
+    // the engine's BossKill want, while an eviction is ignored — only an archive ends a segment.
     private (bool present, bool gone, bool dead) BossStatus()
     {
         if (_autoArchiveBossId.Value == 0) return (false, false, false);

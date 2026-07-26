@@ -310,6 +310,12 @@ public class AutoArchiveEngineTests
     //   • non-boss archive NO re-arm (recut off)  → same two tests above — the close is now unconditional
 
     [Fact]
+    public void Recut_flag_is_gone_from_the_engine_surface()
+        // Pins the retirement: the knob must not come back as a live field. Re-adding it would restore
+        // a path that can cut mid-fight (the 2026-07-26 defect class).
+        => Assert.Null(typeof(AutoArchiveEngine).GetField("BossRecutOnRedetect"));
+
+    [Fact]
     public void TryBeginBossSegmentCut_fires_once_then_gates_until_rearm()
     {
         var e = new AutoArchiveEngine();
