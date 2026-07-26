@@ -160,6 +160,40 @@ public partial class AutoArchiveEngineTests
         Assert.False(e.TryBeginBossSegmentCut(201_000));   // segment still open — one fight, one cut
     }
 
+    [Fact]
+    public void BossKill_want_is_consumed_by_the_fire_so_a_later_tick_cannot_refire()
+    {
+        // Isolates the self-clear in Evaluate's BossKill branch. BossDead is a ONE-TICK pulse
+        // (BossStatus clears the tracked id the moment it sees the death), so the tick after the fire
+        // carries BossDead=false. If the branch stopped clearing the want, that next tick would bank a
+        // second archive for the same fight. OnArchived is deliberately NOT called here — it also
+        // clears the want, which would mask the very regression this test exists to catch.
+        var e = new AutoArchiveEngine { CooldownMs = 0, IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        var dead = Live(nowMs: 205_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in dead));
+        // Pulse gone, no archive reported yet: the want must already be consumed.
+        Assert.Null(e.Evaluate(Live(nowMs: 206_000) with { BossPresent = false }));
+    }
+
+    [Fact]
+    public void A_confirmed_death_alone_does_not_close_the_segment_latch()
+    {
+        // Only an archive closes a segment (OnArchived). A raw BossDead reading must not — that direct
+        // re-arm WAS the defect: it let the next boss-tagged event cut again, one 0 ms archive per tick.
+        var e = new AutoArchiveEngine { CooldownMs = 0, IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        var dead = Live(nowMs: 205_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in dead));
+        // The BossKill has not been reported via OnArchived yet, so the segment is still open.
+        Assert.False(e.TryBeginBossSegmentCut(206_000));
+        // Once the archive lands, the segment closes and a genuinely new boss may cut.
+        e.OnArchived(207_000, ArchiveReason.BossKill);
+        Assert.True(e.TryBeginBossSegmentCut(208_000));
+    }
+
     // ---- end-to-end sequence pin (Task 9): the owner's raid acceptance narrative ----
 
     [Fact]
