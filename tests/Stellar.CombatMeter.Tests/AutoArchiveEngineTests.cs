@@ -662,27 +662,20 @@ public class AutoArchiveEngineTests
     {
         // The death arrives as a one-tick pulse and TickAutoArchiveTriggers skips Evaluate while another
         // archive is pending — so the want must be LATCHED, not edge-consumed, or the fight never banks.
-        //
-        // KNOWN RED at the end of Task 2 (2026-07-26) — flagged per the task brief's own instruction to
-        // "note the situation": the suppression this test relies on ("inside the 10 s cooldown") only
-        // holds if the cooldown clock is anchored to the 215_000 re-open (216_000 - 215_000 = 1_000 <
-        // 10_000 => suppressed; 226_000 - 215_000 = 11_000 >= 10_000 => fires) — the shared archive
-        // cooldown this task wired (_lastArchiveMs, armed by OnArchived at 200_000) does NOT do that:
-        // 216_000 - 200_000 = 16_000, already past CooldownMs, so nothing suppresses the first Evaluate
-        // and the test's own comment doesn't hold given only Task 2's changes. TryBeginBossSegmentCut's
-        // new nowMs parameter is unused in this task by design (Task 3 adds the cooldown check that
-        // consumes it — see the brief) — so no mechanism exists yet to anchor a cooldown off the re-open
-        // timestamp. Expected to go green once Task 3 lands; not weakened or deleted per the "never
-        // weaken a pinned regression" rule, since it isn't pinned yet — this is its origin, not a fix.
-        var e = new AutoArchiveEngine { CooldownMs = 10_000 };
+        // The cooldown must still be RUNNING when the death lands, and the segment must still be OPEN.
+        // Only a BossPhase archive satisfies both: it arms the cooldown without closing the segment it
+        // just opened (the trash bank). Any other reason closes the latch, and then there is no open
+        // segment for BossKill to belong to.
+        var e = new AutoArchiveEngine { CooldownMs = 10_000, IdleEnabled = false };
         Assert.Null(e.Evaluate(Live()));
-        Assert.True(e.TryBeginBossSegmentCut(200_000));
-        e.OnArchived(200_000, ArchiveReason.Wipe);        // unrelated archive arms the cooldown
-        Assert.True(e.TryBeginBossSegmentCut(215_000));   // re-open a segment after that archive closed it
-        var dead = Live(nowMs: 216_000) with { BossDead = true, BossGone = true, BossPresent = false };
-        Assert.Null(e.Evaluate(in dead));                 // inside the 10 s cooldown → suppressed, not lost
+        Assert.True(e.TryBeginBossSegmentCut(200_000));   // segment opens
+        e.OnArchived(200_000, ArchiveReason.BossPhase);   // trash bank: cooldown armed, segment stays open
+        var dead = Live(nowMs: 205_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Null(e.Evaluate(in dead));                 // 5 s in — cooldown suppresses the fire
+        // 11 s in: cooldown lifted. The death PULSE is gone by now (BossDead false), so only a latched
+        // want can still fire — which is exactly the property under test.
         Assert.Equal(ArchiveReason.BossKill,
-            e.Evaluate(Live(nowMs: 226_000) with { BossPresent = false }));   // pulse gone, latch remains
+            e.Evaluate(Live(nowMs: 211_000) with { BossPresent = false }));
     }
 
     [Fact]
