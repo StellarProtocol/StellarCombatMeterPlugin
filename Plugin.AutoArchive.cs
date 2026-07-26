@@ -48,16 +48,14 @@ public sealed partial class Plugin
     private const int MaxBossCheckEntries = 512;
     private readonly Dictionary<EntityId, bool> _bossCheck = new();
 
-    // Bosses whose fight has already been observed dead THIS RUN. A corpse must never re-open a boss
-    // segment: without this, the death pulse re-armed the latch, CheckBossCandidate re-adopted the dead
-    // boss (still cached isBoss=true in _bossCheck), the inline cut fired, and the next engine tick
-    // observed the same corpse as dead again — one 0 ms archive per turn of that loop (owner runs
-    // sea/696115723671437312, sea/420833196448415744, archives 1 s apart). Keyed on the ENTITY uuid, so
-    // a respawned boss with a fresh uuid is a NEW identity and cuts normally. BOUNDED (the FPS-leak
-    // lesson) and cleared at the scene boundary — NOT by Clear(), which runs on every archive and would
-    // make the meter forget which bosses are already dead mid-run.
-    private const int MaxKilledBossEntries = 64;
-    private readonly HashSet<EntityId> _killedBosses = new();
+    // Bosses whose fight has already been observed dead THIS RUN — a corpse must never re-open a boss
+    // segment. Extracted to AutoArchive.KilledBossTracker (review round, 2026-07-26): the mark/consult/
+    // evict wiring is load-bearing and Plugin can't be instantiated in tests, so the pure state lives in
+    // its own class (see its doc for the loop this closes + the FIFO-evicts-oldest cap rationale) and
+    // only the two call sites below (mark in BossStatus, consult in CheckBossCandidate) stay here.
+    // Cleared at the scene boundary (Plugin.History.cs OnSceneChanged) — NOT by Clear(), which runs on
+    // every archive and would make the meter forget which bosses are already dead mid-run.
+    private readonly AutoArchive.KilledBossTracker _killedBosses = new();
 
     // The currently-identified boss for trigger purposes. NOT cleared by Clear(): the framework's
     // vitals cache outlives a plugin archive, so BossStatus keeps tracking the same boss across
@@ -322,6 +320,14 @@ public sealed partial class Plugin
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
     // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction): a death arms
     // the engine's BossKill want, while an eviction is ignored — only an archive ends a segment.
+    //
+    // ACCEPTED RESIDUAL (documented, not fixed, review round 2026-07-26): that the mark below runs
+    // BEFORE _autoArchiveBossId is cleared — the ordering that makes the whole fix correct — cannot
+    // itself be unit-tested. Plugin cannot be instantiated in tests (it needs the IL2CPP service
+    // surface: _services.CombatLookup.GetVitals here), so this method's body is exercised only in-game.
+    // What IS unit-tested headless: the tracker's mark/consult/evict mechanics (KilledBossTrackerTests)
+    // and the pure adopt decision CheckBossCandidate consults (ShouldAdoptBossCandidate,
+    // AutoArchiveContentGuardTests). The ordering itself is a known, named gap — not an invisible one.
     private (bool present, bool gone, bool dead) BossStatus()
     {
         if (_autoArchiveBossId.Value == 0) return (false, false, false);
@@ -330,8 +336,10 @@ public sealed partial class Plugin
         bool evicted = !v.IsKnown;
         if (dead || evicted)
         {
-            // Mark BEFORE clearing — this is the only place that still knows which entity died.
-            if (dead && _killedBosses.Count < MaxKilledBossEntries) _killedBosses.Add(_autoArchiveBossId);
+            // Mark BEFORE clearing — this is the only place that still knows which entity died. Never
+            // marks on a transient eviction, only a confirmed death.
+            if (dead && _killedBosses.MarkKilled(_autoArchiveBossId) is { } evictedBossId)
+                LogKilledBossEviction(evictedBossId, _autoArchiveBossId);
             _autoArchiveBossId = default;
             return (false, true, dead);
         }
@@ -357,7 +365,7 @@ public sealed partial class Plugin
             isBoss = info.HasValue && info.Value.IsBoss;           // ResolveBossEntity's exact test
             _bossCheck[id] = isBoss;
         }
-        if (ShouldAdoptBossCandidate(isBoss, _killedBosses.Contains(id))) _autoArchiveBossId = id;
+        if (ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) _autoArchiveBossId = id;
     }
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that

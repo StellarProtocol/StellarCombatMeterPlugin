@@ -150,4 +150,16 @@ public sealed partial class Plugin
     private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
         => _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs}");
+
+    // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
+    // (review round, 2026-07-26) — deliberately UNGATED Warning, same reasoning as LogArchiveOutcome
+    // above: the standing rule is diagnostics stay gated behind StellarDiagnostics.IsEnabled, but a
+    // saturation here means a correctness guarantee just weakened (the evicted boss id becomes
+    // re-adoptable again — the exact loop this tracker exists to close), and hitting 64 distinct
+    // confirmed-dead bosses in one run is rarer than an ordinary archive. That combination — rare +
+    // correctness-relevant — puts it with the sanctioned ungated [archive] line rather than behind the
+    // per-event diagnostics gate.
+    private void LogKilledBossEviction(EntityId evictedId, EntityId newlyMarkedId)
+        => _services.Log.Warning(
+            $"[CombatMeter][killed-boss] cap hit ({AutoArchive.KilledBossTracker.MaxEntries}) — evicted oldest mark id={evictedId.Value} to record id={newlyMarkedId.Value}; evicted id is re-adoptable again");
 }
