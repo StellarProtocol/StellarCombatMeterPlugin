@@ -95,11 +95,6 @@ public sealed partial class Plugin : IStellarPlugin
     // Combat-timer state (unix ms).
     private long _combatStartMs;
     private long _lastDamageMs;
-    // Timestamp of the most recent combat event of ANY channel (dealt / heal / taken) — distinct from
-    // _lastDamageMs (dealt-only, which the Idle trigger depends on). Feeds the auto-archive idle-settle
-    // delay: a deferred AUTO archive waits until this has gone quiet for _archiveSettleMs so trailing
-    // DoTs / killing-blow ticks land before the snapshot (Plugin.AutoArchive.cs).
-    private long _lastCombatEventMs;
     // Last damage event whose TARGET was a known boss. The settle window for a BossKill archive watches
     // THIS clock, not all combat: after the kill, players cleaning up adds must not hold the boss
     // fight's archive open, while a trailing DoT tick on the boss itself must (owner ruling 2026-07-26,
@@ -347,7 +342,6 @@ public sealed partial class Plugin : IStellarPlugin
         _combatActive  = false;
         _combatStartMs = 0;
         _lastDamageMs  = 0;
-        _lastCombatEventMs = 0;
         _lastBossDamageMs = 0;
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
@@ -359,7 +353,7 @@ public sealed partial class Plugin : IStellarPlugin
         // walk-in-clip root cause, proven 2026-07-19). The recorder is a per-RUN capture: it resets
         // ONLY at true run end (scene-leave / run-id change) via ResetReplay, and each banked archive
         // uploads a watermark window without stopping it. See _replayWatermarkMs / ResetReplay.
-        _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
+        _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId + _settleBossId survive on purpose (see their docs)
     }
 
     private double EncounterElapsedSeconds()

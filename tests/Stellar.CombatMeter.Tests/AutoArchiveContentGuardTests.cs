@@ -1,3 +1,4 @@
+using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter;
 using Xunit;
 
@@ -132,4 +133,37 @@ public class AutoArchiveContentGuardTests
     [Fact]
     public void A_nonboss_entity_is_never_adopted()
         => Assert.False(Plugin.ShouldAdoptBossCandidate(isBoss: false, alreadyKilled: false));
+
+    // ---- finding 4 (review round 2026-07-27): the tracked boss id must survive a transient blink ----
+    // BossStatus used to clear _autoArchiveBossId on ANY "gone" reading (dead OR a vitals-cache
+    // eviction). Re-adoption is gated behind !bossSegmentActive, which stays closed for the WHOLE
+    // fight, so a blink-cleared id was never re-set: no further BossDead could ever rise for that
+    // fight, and it only ever banked at the eventual run-end/scene archive. The fix: clear ONLY on a
+    // confirmed death.
+
+    [Fact]
+    public void ShouldClearTrackedBoss_only_on_confirmed_death()
+    {
+        Assert.True(Plugin.ShouldClearTrackedBoss(confirmedDead: true));
+        Assert.False(Plugin.ShouldClearTrackedBoss(confirmedDead: false));   // a transient eviction (blink) must not clear it
+    }
+
+    // ---- finding 3 (review round 2026-07-27): which damage events feed the BossKill settle clock ----
+    // The old wiring (Plugin.Capture.cs) stamped _lastBossDamageMs off _bossCheck[TargetId] — a cache
+    // Clear() wipes on every banked archive, including the trash→boss bank that OPENS the very fight
+    // the clock is meant to watch, so the clock never engaged for the whole fight. The fix reads a
+    // dedicated _settleBossId that survives both Clear() and the boss's own death.
+
+    [Fact]
+    public void IsSettleBossDamage_true_only_for_damage_targeting_the_settle_boss()
+    {
+        var boss = new EntityId(555);
+        var add  = new EntityId(1);
+        // A corpse DoT tick on the DEAD boss still counts — settleBossId is never cleared by the death,
+        // only by a scene boundary — which is exactly what holds the settle window open post-kill.
+        Assert.True(Plugin.IsSettleBossDamage(isHeal: false, targetId: boss, settleBossId: boss));
+        Assert.False(Plugin.IsSettleBossDamage(isHeal: true, targetId: boss, settleBossId: boss));    // heals never count
+        Assert.False(Plugin.IsSettleBossDamage(isHeal: false, targetId: add, settleBossId: boss));    // add cleanup, not the boss
+        Assert.False(Plugin.IsSettleBossDamage(isHeal: false, targetId: default, settleBossId: default)); // no boss ever adopted this run
+    }
 }

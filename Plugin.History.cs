@@ -69,6 +69,10 @@ public sealed partial class Plugin
         // New scene = new run: forget which bosses died in the previous one, so the same boss template
         // in the next run cuts normally. Deliberately NOT in Clear() — that runs on every archive.
         _killedBosses.Clear();
+        // The BossKill settle-clock id (finding 3, review round 2026-07-27) is scoped THIS RUN the same
+        // way _killedBosses is — a fresh run's boss is a new identity even if it shares an entity uuid
+        // range, and this must not survive into it stale. Also deliberately NOT in Clear().
+        _settleBossId = default;
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;

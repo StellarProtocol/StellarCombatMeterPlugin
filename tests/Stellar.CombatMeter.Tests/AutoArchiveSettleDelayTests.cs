@@ -6,46 +6,48 @@ namespace Stellar.CombatMeter.Tests;
 // Idle-settle guard (2026-07-18): an AUTO-triggered archive (floor-clear stage change, wipe, boss,
 // idle) must NOT commit the instant the engine fires — the mobs' corpses linger and trailing DoT /
 // killing-blow ticks are still landing, so snapshotting immediately loses the last hits from the
-// record. Instead the pending archive waits until combat has gone QUIET: no combat event of any
-// channel (dealt/heal/taken, tracked by _lastCombatEventMs) for ArchiveIdleSettleMs — every event
-// RESETS that window. If it's already been that quiet when the trigger fires, the commit is
+// record. Instead the pending archive waits until the relevant activity clock has gone QUIET for
+// ArchiveIdleSettleMs — every fresh activity event RESETS that window. Owner ruling 2026-07-26: the
+// clock is DAMAGE-only (see SettleClockMs), boss-targeted for a BossKill pending — production feeds
+// PendingArchiveDue that clock's result via its lastActivityMs parameter (a caller-selected clock,
+// not any one fixed field). If it's already been that quiet when the trigger fires, the commit is
 // immediate. A backstop cap (ArchiveIdleCapMs since the trigger armed) prevents an indefinite defer
 // during sustained combat. A MANUAL button/hotkey archive (and the scene-change archive, which must
 // beat the teardown) stays immediate. The decisions are pure statics so they unit-test headless
 // (Plugin can't be instantiated — the AutoArchiveEngine / ShouldSuppressAutoArchive precedent).
 public class AutoArchiveSettleDelayTests
 {
-    // ---- PendingArchiveDue: quiet-window timing (nowMs - lastCombatEventMs >= idleSettleMs) ----
+    // ---- PendingArchiveDue: quiet-window timing (nowMs - lastActivityMs >= idleSettleMs) ----
 
     [Fact]
     public void Not_due_while_combat_still_updating_under_two_seconds()
         // last combat event 1.5 s ago — window not yet elapsed
-        => Assert.False(Plugin.PendingArchiveDue(nowMs: 11_500, lastCombatEventMs: 10_000, idleSettleMs: 2_000));
+        => Assert.False(Plugin.PendingArchiveDue(nowMs: 11_500, lastActivityMs: 10_000, idleSettleMs: 2_000));
 
     [Fact]
     public void Not_due_one_ms_before_the_quiet_window_closes()
-        => Assert.False(Plugin.PendingArchiveDue(nowMs: 11_999, lastCombatEventMs: 10_000, idleSettleMs: 2_000));
+        => Assert.False(Plugin.PendingArchiveDue(nowMs: 11_999, lastActivityMs: 10_000, idleSettleMs: 2_000));
 
     [Fact]
     public void Due_exactly_at_two_seconds_of_no_combat()
-        => Assert.True(Plugin.PendingArchiveDue(nowMs: 12_000, lastCombatEventMs: 10_000, idleSettleMs: 2_000));
+        => Assert.True(Plugin.PendingArchiveDue(nowMs: 12_000, lastActivityMs: 10_000, idleSettleMs: 2_000));
 
     [Fact]
     public void Due_after_more_than_two_seconds_of_no_combat()
-        => Assert.True(Plugin.PendingArchiveDue(nowMs: 13_000, lastCombatEventMs: 10_000, idleSettleMs: 2_000));
+        => Assert.True(Plugin.PendingArchiveDue(nowMs: 13_000, lastActivityMs: 10_000, idleSettleMs: 2_000));
 
     [Fact]
     public void Due_immediately_when_already_quiet_at_arm_time()
         // trigger fires (now) but the last combat event was 5 s ago — already past the window, commit now
-        => Assert.True(Plugin.PendingArchiveDue(nowMs: 15_000, lastCombatEventMs: 10_000, idleSettleMs: 2_000));
+        => Assert.True(Plugin.PendingArchiveDue(nowMs: 15_000, lastActivityMs: 10_000, idleSettleMs: 2_000));
 
     [Fact]
     public void A_fresh_combat_event_resets_the_window()
     {
         // At now=13_000 with last event at 10_000 the window is closed (due)…
-        Assert.True(Plugin.PendingArchiveDue(nowMs: 13_000, lastCombatEventMs: 10_000, idleSettleMs: 2_000));
-        // …but a trailing DoT tick at 12_900 pushes lastCombatEventMs forward, re-opening the wait.
-        Assert.False(Plugin.PendingArchiveDue(nowMs: 13_000, lastCombatEventMs: 12_900, idleSettleMs: 2_000));
+        Assert.True(Plugin.PendingArchiveDue(nowMs: 13_000, lastActivityMs: 10_000, idleSettleMs: 2_000));
+        // …but a trailing DoT tick at 12_900 pushes lastActivityMs forward, re-opening the wait.
+        Assert.False(Plugin.PendingArchiveDue(nowMs: 13_000, lastActivityMs: 12_900, idleSettleMs: 2_000));
     }
 
     // ---- PendingArchiveCapped: the backstop against an indefinite defer during sustained combat ----
@@ -143,7 +145,7 @@ public class AutoArchiveSettleDelayTests
         // up after the kill no longer drags 8 s of prep healing into the boss fight's archive.
         const long lastBossDamage = 10_000;
         Assert.True(Plugin.PendingArchiveDue(nowMs: 12_000,
-            lastCombatEventMs: Plugin.SettleClockMs(AutoArchive.ArchiveReason.BossKill, 11_900, lastBossDamage),
+            lastActivityMs: Plugin.SettleClockMs(AutoArchive.ArchiveReason.BossKill, 11_900, lastBossDamage),
             idleSettleMs: 2_000));
     }
 

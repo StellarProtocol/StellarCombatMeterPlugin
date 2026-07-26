@@ -28,26 +28,17 @@ public sealed partial class Plugin
         bool priorCombat = _combatActive;
         MaybeCutForBossPhase(d.SourceId, d.TargetId, d.TimestampMs, priorCombat);
 
-        // All-channel combat-activity clock (dealt / heal / taken are all DamageDealt) — feeds the
-        // auto-archive idle-settle delay so a deferred AUTO archive waits out trailing DoTs / the
-        // killing-blow tick before snapshotting. Distinct from _lastDamageMs (dealt-only, set in
-        // AccumulateDamage) which the Idle trigger depends on — do not conflate the two. Set AFTER the
-        // boss cut above (whose Clear() zeroes it) so it still reflects THIS event.
-        _lastCombatEventMs = d.TimestampMs;
-
-        // Boss-targeted damage clock for the BossKill settle window (see SettleClockMs). Reads the
-        // already-populated _bossCheck cache — no extra game-data lookup on the hot path, and no
-        // dependency on _autoArchiveBossId, which BossStatus clears the moment the boss dies.
-        //
-        // ACCEPTED RESIDUAL (documented, not fixed, review round 2026-07-26): the two conditions right
-        // here — the !d.IsHeal channel guard, and keying off TargetId (not SourceId, since a boss is
-        // hit, not the hitter) — are verified by inspection and by the in-game run, not by a unit test.
-        // Plugin cannot be instantiated in tests (same limitation Task 5's BossStatus hit), so nothing
-        // headless can drive a real CombatEvent through OnCombatEvent to prove this line fires only on
-        // boss-targeted damage. What IS unit-tested headless: SettleClockMs's selection logic once fed
-        // a value, and PendingArchiveDue's math once fed SettleClockMs's result — not the wiring that
-        // produces _lastBossDamageMs in the first place. Known, named gap — not an invisible one.
-        if (!d.IsHeal && _bossCheck.TryGetValue(d.TargetId, out var tgtIsBoss) && tgtIsBoss)
+        // Boss-targeted damage clock for the BossKill settle window (see SettleClockMs). Reads
+        // _settleBossId — set once at adoption (CheckBossCandidate) and NOT cleared by the boss's own
+        // death or by Clear() (finding 3, review round 2026-07-27: the previous _bossCheck-keyed
+        // condition read a cache that Clear() wipes on every banked archive, including the trash→boss
+        // bank that OPENS the very fight this clock is supposed to watch — so the clock never engaged
+        // for the whole fight and silently fell back to the all-targets damage clock). The decision
+        // itself is pure and unit-tested headless (IsSettleBossDamage); which field feeds it here is an
+        // ACCEPTED RESIDUAL (documented, not fixed) — Plugin cannot be instantiated in tests (same
+        // limitation BossStatus's ordering hits), so nothing headless can drive a real CombatEvent
+        // through OnCombatEvent to prove this call site is reached only on boss-targeted damage.
+        if (IsSettleBossDamage(d.IsHeal, d.TargetId, _settleBossId))
             _lastBossDamageMs = d.TimestampMs;
 
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
