@@ -144,6 +144,18 @@ internal sealed class AutoArchiveEngine
     /// wipe episode latch's recovery clear and the OutcomeFailed edge stamp — runs every tick even
     /// when nothing can fire (cooldown-suppressed or otherwise), so a disabled toggle / empty meter
     /// / cooldown window never banks a stale edge or loses a real one.</summary>
+    /// <remarks>
+    /// NOTE (recut-fix, 2026-07-21): this method NEVER returns BossPhase. ALL boss cuts route through
+    /// the INLINE capped path (Plugin.Capture.cs MaybeCutForBossPhase → TryBeginBossSegmentCut →
+    /// ManualArchive(BossPhase, replayUpperCapServerMs)). The old Evaluate boss branch fired an
+    /// UNCAPPED archive at the engine-tick "now" and, on a re-detect where _bossSegmentActive was
+    /// re-armed but the boss was still known (inline gate skipped), placed the keep-before boundary
+    /// at "now" instead of firstHit − keepBefore (owner run sea/U051Yv8lf2, 0:55 vs 0:48). The branch
+    /// (+ its MinBossSegmentMs floor and _bossPending cooldown-bank, both meaningless in the
+    /// deterministic inline model) is removed. The engine keeps ONLY the _bossSegmentActive latch
+    /// (closed in OnArchived / UpdateLatches, see their docs) that the inline gate consults. Pinned by
+    /// Evaluate_never_returns_bossphase.
+    /// </remarks>
     public ArchiveReason? Evaluate(in AutoArchiveInputs s)
     {
         bool allDead = s.RosterSize > 0 && s.UnknownCount == 0 && s.DeadCount == s.RosterSize;
@@ -184,16 +196,7 @@ internal sealed class AutoArchiveEngine
             return ArchiveReason.BossKill;
         }
         if (StageEnabled && _stagePending)                        { _stagePending = false;  return ArchiveReason.StageChange; }
-        // NOTE (recut-fix, 2026-07-21): the engine NEVER fires BossPhase. ALL boss cuts route through
-        // the INLINE capped path (Plugin.Capture.cs MaybeCutForBossPhase → TryBeginBossSegmentCut →
-        // ManualArchive(BossPhase, replayUpperCapServerMs)). The old Evaluate boss branch fired an
-        // UNCAPPED archive at the engine-tick "now" and, on a re-detect where _bossSegmentActive was
-        // re-armed but the boss was still known (inline gate skipped), placed the keep-before boundary
-        // at "now" instead of firstHit − keepBefore (owner run sea/U051Yv8lf2, 0:55 vs 0:48). The branch
-        // (+ its MinBossSegmentMs floor and _bossPending cooldown-bank, both meaningless in the
-        // deterministic inline model) is removed. The engine keeps ONLY the _bossSegmentActive latch
-        // (closed in OnArchived / UpdateLatches, see their docs) that the inline gate consults. Pinned by
-        // Evaluate_never_returns_bossphase.
+        // Never BossPhase — see the <remarks> on this method's doc comment.
         if (IdleEnabled && IdleExpired(in s))                     { return ArchiveReason.Idle; }
         return null;
     }
