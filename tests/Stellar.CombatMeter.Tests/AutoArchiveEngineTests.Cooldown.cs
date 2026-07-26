@@ -47,6 +47,12 @@ public partial class AutoArchiveEngineTests
     // Inline_boss_cut_is_never_blocked_by_a_recent_archive.
 
     [Fact]
+    public void Recut_flag_is_gone_from_the_engine_surface()
+        // Pins the retirement: the knob must not come back as a live field. Re-adding it would restore
+        // a path that can cut mid-fight (the 2026-07-26 defect class).
+        => Assert.Null(typeof(AutoArchiveEngine).GetField("BossRecutOnRedetect"));
+
+    [Fact]
     public void TryBeginBossSegmentCut_fires_once_then_gates_until_rearm()
     {
         var e = new AutoArchiveEngine();
