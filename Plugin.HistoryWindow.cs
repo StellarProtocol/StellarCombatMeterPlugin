@@ -407,8 +407,12 @@ public sealed partial class Plugin
     }
 
     // Auto-archive segments show WHY they ended; manual/scene stay untagged (pre-v10 default).
-    private static string TriggerSuffix(string trigger)
-        => trigger is "wipe" or "boss" or "idle" or "stage" ? $" · {trigger}" : "";
+    // Finding 5 (review round 2026-07-27): this is a SEPARATE allow-list from ArchiveReasonTag's
+    // switch — a reason can be mapped there and still render with no suffix here if forgotten (as
+    // "bosskill" was), indistinguishable from a manual archive. internal (not private) so
+    // TriggerSuffix_covers_every_auto_reason can pin completeness against every ArchiveReason value.
+    internal static string TriggerSuffix(string trigger)
+        => trigger is "wipe" or "boss" or "idle" or "stage" or "bosskill" ? $" · {trigger}" : "";
 
     private void RebuildSessionRows()
     {
