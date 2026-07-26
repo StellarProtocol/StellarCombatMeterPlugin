@@ -397,6 +397,13 @@ public sealed partial class Plugin
     /// (<see cref="AutoArchiveEngine.TryBeginBossSegmentCut"/>). Unit-tested headless.</summary>
     internal static bool ShouldArchiveTrashForBoss(bool priorCombat) => priorCombat;
 
+    /// <summary>Pure decision: does a fresh boss engagement have to force a still-pending deferred
+    /// archive to commit right now? Yes whenever one is pending — the new fight's opening hit must never
+    /// land inside the previous segment's archive (owner ruling 2026-07-26). The commit is capped at
+    /// (firstHit − keepBefore) exactly like the trash bank, so windows stay contiguous. Unit-tested
+    /// headless.</summary>
+    internal static bool ShouldPreemptPendingForBoss(bool hasPending) => hasPending;
+
     /// <summary>Pure guard: should the inline boss cut even CONSIDER this event — i.e. detect the boss
     /// + (maybe) cut? Only when boss auto-archive is enabled, NO boss segment is currently active, AND
     /// we are in an instanced run. Keying on <c>bossSegmentActive</c> (NOT "boss already known") is the
@@ -438,7 +445,15 @@ public sealed partial class Plugin
         if (!_autoArchive.TryBeginBossSegmentCut(firstHitMs)) return;   // cooldown / one cut per segment
 
         long keepBeforeMs = BossKeepBeforeMs;
-        if (ShouldArchiveTrashForBoss(priorCombat))
+        if (ShouldPreemptPendingForBoss(_pendingArchiveReason is not null))
+        {
+            // A deferred archive (BossKill / wipe / idle / stage) is still waiting out its settle window
+            // when the next fight starts. Commit it NOW at the same capped boundary the trash bank would
+            // use, so the previous segment ends where this fight begins. ManualArchive clears the pending
+            // slot itself, and it has already banked everything accumulated — so no trash bank follows.
+            ManualArchive(_pendingArchiveReason!.Value, replayUpperCapServerMs: firstHitMs - keepBeforeMs);
+        }
+        else if (ShouldArchiveTrashForBoss(priorCombat))
         {
             // Bank the trash IMMEDIATELY (not the settle defer) + cap its replay window at (firstHit −
             // keepBefore) so the run-up movement moves into the boss window. ManualArchive Clear()s the

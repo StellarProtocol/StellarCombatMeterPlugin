@@ -146,4 +146,17 @@ public class AutoArchiveSettleDelayTests
             lastCombatEventMs: Plugin.SettleClockMs(AutoArchive.ArchiveReason.BossKill, 11_900, lastBossDamage),
             idleSettleMs: 2_000));
     }
+
+    // ---- pre-emption (owner ruling 2026-07-26) ----
+
+    [Fact]
+    public void A_pending_archive_is_preempted_by_a_fresh_boss_engagement()
+        // With damage-only settle this should be unreachable (the previous fight closes ~2 s after its
+        // last hit, long before the next pull) — the guard exists so the new fight's opener leaking into
+        // the previous boss's archive is structurally impossible rather than merely unlikely.
+        => Assert.True(Plugin.ShouldPreemptPendingForBoss(hasPending: true));
+
+    [Fact]
+    public void No_pending_means_nothing_to_preempt()
+        => Assert.False(Plugin.ShouldPreemptPendingForBoss(hasPending: false));
 }
