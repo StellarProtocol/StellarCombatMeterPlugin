@@ -64,6 +64,16 @@ public sealed partial class Plugin
     // which BossStatus reads as "gone" (the re-arm signal).
     private EntityId _autoArchiveBossId;
 
+    // Finding 3 (2026-07-27): the boss id the BossKill settle clock watches damage against (see
+    // IsSettleBossDamage). SEPARATE from _autoArchiveBossId — set at the same instant
+    // (CheckBossCandidate) but cleared by NEITHER the confirmed death (BossStatus) NOR Clear() (which
+    // runs on every banked archive, including the trash→boss bank that opens this very fight — the old
+    // _bossCheck-keyed condition got wiped right there and the clock never engaged for the whole
+    // fight). Only the scene boundary resets it (Plugin.History.cs OnSceneChanged), alongside
+    // _killedBosses. A corpse DoT tick on the dead boss still targets this id, correctly holding the
+    // settle window open.
+    private EntityId _settleBossId;
+
     // ---- settings accessors (the AutoUpload pattern, Plugin.LogUpload.cs:79-91: cached in the
     // engine, persisted on set; loaded once by InitAutoArchive from the ctor) ----
     private const string PrefAaWipe         = "autoArchive.wipe";
@@ -227,14 +237,13 @@ public sealed partial class Plugin
     }
 
     /// <summary>True once combat has been quiet for <paramref name="idleSettleMs"/> — no activity on
-    /// <paramref name="lastCombatEventMs"/> in that window, so trailing DoTs / the killing-blow tick
-    /// have landed. Despite the parameter name (a holdover from before the settle window narrowed,
-    /// 2026-07-26), this is a caller-selected activity clock, not necessarily the all-channel
-    /// <c>_lastCombatEventMs</c> field — production now feeds it <see cref="SettleClockMs"/>'s result
-    /// (damage only, boss-targeted for a <see cref="AutoArchive.ArchiveReason.BossKill"/>). Pure so it
-    /// unit-tests headless (the AutoArchiveEngine precedent).</summary>
-    internal static bool PendingArchiveDue(long nowMs, long lastCombatEventMs, long idleSettleMs)
-        => nowMs - lastCombatEventMs >= idleSettleMs;
+    /// <paramref name="lastActivityMs"/> in that window, so trailing DoTs / the killing-blow tick have
+    /// landed. <paramref name="lastActivityMs"/> is a caller-selected activity clock — production feeds
+    /// it <see cref="SettleClockMs"/>'s result (damage only, boss-targeted for a
+    /// <see cref="AutoArchive.ArchiveReason.BossKill"/>). Pure so it unit-tests headless (the
+    /// AutoArchiveEngine precedent).</summary>
+    internal static bool PendingArchiveDue(long nowMs, long lastActivityMs, long idleSettleMs)
+        => nowMs - lastActivityMs >= idleSettleMs;
 
     /// <summary>Backstop for the idle wait: true once <paramref name="capMs"/> has elapsed since the
     /// trigger armed, so sustained combat with no scene change can't defer the archive forever.</summary>
@@ -336,13 +345,22 @@ public sealed partial class Plugin
     // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction): a death arms
     // the engine's BossKill want, while an eviction is ignored — only an archive ends a segment.
     //
-    // ACCEPTED RESIDUAL (documented, not fixed, review round 2026-07-26): that the mark below runs
-    // BEFORE _autoArchiveBossId is cleared — the ordering that makes the whole fix correct — cannot
-    // itself be unit-tested. Plugin cannot be instantiated in tests (it needs the IL2CPP service
-    // surface: _services.CombatLookup.GetVitals here), so this method's body is exercised only in-game.
-    // What IS unit-tested headless: the tracker's mark/consult/evict mechanics (KilledBossTrackerTests)
-    // and the pure adopt decision CheckBossCandidate consults (ShouldAdoptBossCandidate,
-    // AutoArchiveContentGuardTests). The ordering itself is a known, named gap — not an invisible one.
+    // Finding 4 (2026-07-27): _autoArchiveBossId is cleared ONLY on a confirmed death
+    // (ShouldClearTrackedBoss), never on a transient eviction alone. Before this fix a mid-fight
+    // vitals-cache blink cleared the id same as a real death, but re-adoption is gated behind
+    // !bossSegmentActive (ShouldConsiderInlineBossCut), which stays closed for the WHOLE fight — so the
+    // id was never re-set, BossDead never rose again, and no BossKill ever fired for that fight (it
+    // only banked at the eventual run-end archive). Leaving the id in place lets the NEXT tick re-poll
+    // vitals for the SAME entity, so a recovered blink resumes with no re-detect needed. Do NOT instead
+    // move detection outside the !bossSegmentActive gate — a boss-tagged ADD would then get adopted
+    // while the real boss's death is momentarily cleared, and the add's own death would fire a
+    // spurious mid-fight BossKill.
+    //
+    // ACCEPTED RESIDUAL (not fixed, 2026-07-26): the mark below running BEFORE _autoArchiveBossId is
+    // cleared — the ordering that makes the whole fix correct — cannot itself be unit-tested (Plugin
+    // needs the IL2CPP service surface: _services.CombatLookup.GetVitals). What IS unit-tested
+    // headless: the tracker (KilledBossTrackerTests), ShouldAdoptBossCandidate, and
+    // ShouldClearTrackedBoss (all in AutoArchiveContentGuardTests). A known, named gap.
     private (bool present, bool gone, bool dead) BossStatus()
     {
         if (_autoArchiveBossId.Value == 0) return (false, false, false);
@@ -355,11 +373,16 @@ public sealed partial class Plugin
             // marks on a transient eviction, only a confirmed death.
             if (dead && _killedBosses.MarkKilled(_autoArchiveBossId) is { } evictedBossId)
                 LogKilledBossEviction(evictedBossId, _autoArchiveBossId);
-            _autoArchiveBossId = default;
+            if (ShouldClearTrackedBoss(dead)) _autoArchiveBossId = default;
             return (false, true, dead);
         }
         return (true, false, false);
     }
+
+    /// <summary>Pure decision (finding 4): clear the tracked boss id ONLY on a confirmed death — a
+    /// transient eviction (a blink) must not, or the boss can never resume tracking while a segment
+    /// stays open (see BossStatus's doc). Unit-tested headless.</summary>
+    internal static bool ShouldClearTrackedBoss(bool confirmedDead) => confirmedDead;
 
     // Called from OnCombatEvent (Plugin.Capture.cs) BEFORE the player-only early-out, next to
     // NoteReplayEntity — same "both sides of every event" coverage the boss-HP feature uses.
@@ -380,7 +403,9 @@ public sealed partial class Plugin
             isBoss = info.HasValue && info.Value.IsBoss;           // ResolveBossEntity's exact test
             _bossCheck[id] = isBoss;
         }
-        if (ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) _autoArchiveBossId = id;
+        if (!ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) return;
+        _autoArchiveBossId = id;
+        _settleBossId = id;   // finding 3: stamp the settle-clock id at the same instant — see its field doc
     }
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that
@@ -388,6 +413,14 @@ public sealed partial class Plugin
     /// post-kill cut loop (2026-07-26). Unit-tested headless.</summary>
     internal static bool ShouldAdoptBossCandidate(bool isBoss, bool alreadyKilled)
         => isBoss && !alreadyKilled;
+
+    /// <summary>Pure decision (finding 3): does this damage event belong to the BossKill settle clock?
+    /// Damage only (heals never count — owner ruling 2026-07-26: settle cares about DPS only), targeting
+    /// the adopted settle boss (survives Clear() and its own death — see the field's doc — so a corpse
+    /// DoT tick on the dead boss still counts). Zero-guard excludes "no boss adopted this run" (default
+    /// id). Unit-tested headless.</summary>
+    internal static bool IsSettleBossDamage(bool isHeal, EntityId targetId, EntityId settleBossId)
+        => !isHeal && settleBossId.Value != 0 && targetId == settleBossId;
 
     /// <summary>Pure decision (Task 7): on the first-detected boss hit, should the accumulated pre-boss
     /// trash be archived as its own boss-phase segment? Only when there WAS prior combat (trash) to
