@@ -100,6 +100,11 @@ public sealed partial class Plugin : IStellarPlugin
     // delay: a deferred AUTO archive waits until this has gone quiet for _archiveSettleMs so trailing
     // DoTs / killing-blow ticks land before the snapshot (Plugin.AutoArchive.cs).
     private long _lastCombatEventMs;
+    // Last damage event whose TARGET was a known boss. The settle window for a BossKill archive watches
+    // THIS clock, not all combat: after the kill, players cleaning up adds must not hold the boss
+    // fight's archive open, while a trailing DoT tick on the boss itself must (owner ruling 2026-07-26,
+    // "the settle time only care about DPS — if no DPS to boss left, start settle time as configured").
+    private long _lastBossDamageMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
     private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
                                             // run-id change (e.g. a fail-out to a new scene) that can precede archive.
@@ -343,6 +348,7 @@ public sealed partial class Plugin : IStellarPlugin
         _combatStartMs = 0;
         _lastDamageMs  = 0;
         _lastCombatEventMs = 0;
+        _lastBossDamageMs = 0;
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;

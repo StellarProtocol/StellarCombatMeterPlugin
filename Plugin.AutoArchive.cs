@@ -16,8 +16,9 @@ public sealed partial class Plugin
     // ended (a floor clear bumps EDungeonState, a wipe reads all-dead, etc.), but the mobs' corpses
     // are still present and trailing damage (DoTs, the killing-blow tick) is still landing — so
     // committing the snapshot immediately loses those last hits from the archived record. Rather than
-    // wait a fixed interval, hold an AUTO archive until combat has gone QUIET: no combat event of any
-    // channel for this long (every dealt/heal/taken event resets the window via _lastCombatEventMs).
+    // wait a fixed interval, hold an AUTO archive until combat has gone QUIET: no damage event for this
+    // long (owner ruling 2026-07-26: settle cares about DPS only — see SettleClockMs for which damage
+    // clock a given reason watches; BossKill narrows to damage aimed at the boss).
     // If it's already been this quiet when the trigger fires, the archive commits immediately. There
     // is a comfortable window: after a floor clear the game shows "Enter the next floor in 5s". A
     // MANUAL (button/hotkey) archive and the SceneChange archive (which must beat the entity teardown)
@@ -218,9 +219,10 @@ public sealed partial class Plugin
 
         if (_pendingArchiveReason is not { } pending) return;
         var now = _services.CombatSnapshot.ServerNowMs;
-        if (!PendingArchiveDue(now, _lastCombatEventMs, _archiveSettleMs) &&
+        var settleClock = SettleClockMs(pending, _lastDamageMs, _lastBossDamageMs);
+        if (!PendingArchiveDue(now, settleClock, _archiveSettleMs) &&
             !PendingArchiveCapped(now, _pendingArchiveArmedMs, ArchiveIdleCapMs)) return;
-        LogAutoArchiveCommit(pending, now);
+        LogAutoArchiveCommit(pending, now, settleClock);
         ManualArchive(pending);   // ManualArchive clears _pendingArchiveReason on commit
     }
 
@@ -235,6 +237,16 @@ public sealed partial class Plugin
     /// trigger armed, so sustained combat with no scene change can't defer the archive forever.</summary>
     internal static bool PendingArchiveCapped(long nowMs, long armedMs, long capMs)
         => nowMs - armedMs >= capMs;
+
+    /// <summary>Which activity clock the settle window watches for a given reason. Owner ruling
+    /// 2026-07-26: settle cares about DAMAGE only — heals and damage-taken no longer reset it, so
+    /// post-kill topping-up lands in the next segment instead of the fight. A
+    /// <see cref="AutoArchive.ArchiveReason.BossKill"/> narrows that further to damage aimed at the
+    /// boss, falling back to the general damage clock when no boss damage was recorded (an archive in
+    /// between cleared it) so the window can never read "quiet forever" and commit instantly. Pure so
+    /// it unit-tests headless.</summary>
+    internal static long SettleClockMs(AutoArchive.ArchiveReason reason, long lastDamageMs, long lastBossDamageMs)
+        => reason == AutoArchive.ArchiveReason.BossKill && lastBossDamageMs != 0 ? lastBossDamageMs : lastDamageMs;
 
     /// <summary>True for the engine-driven AUTO reasons that should wait out the settle delay
     /// (a floor-clear <see cref="AutoArchive.ArchiveReason.StageChange"/>, wipe, idle). A

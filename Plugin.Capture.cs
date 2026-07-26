@@ -35,6 +35,12 @@ public sealed partial class Plugin
         // boss cut above (whose Clear() zeroes it) so it still reflects THIS event.
         _lastCombatEventMs = d.TimestampMs;
 
+        // Boss-targeted damage clock for the BossKill settle window (see SettleClockMs). Reads the
+        // already-populated _bossCheck cache — no extra game-data lookup on the hot path, and no
+        // dependency on _autoArchiveBossId, which BossStatus clears the moment the boss dies.
+        if (!d.IsHeal && _bossCheck.TryGetValue(d.TargetId, out var tgtIsBoss) && tgtIsBoss)
+            _lastBossDamageMs = d.TimestampMs;
+
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
         // the latch lived in AccumulateDamage, so an encounter that opened with a heal or an incoming hit
         // dropped those events from the timeline (the `if (_combatActive)` guards were unsatisfied) and

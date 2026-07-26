@@ -133,13 +133,15 @@ public sealed partial class Plugin
 
     // One line per deferred AUTO archive that actually commits after the idle-settle wait — pair it
     // with the preceding [auto-archive] fired line to confirm the quiet-window gap in-game. quietMs is
-    // how long combat had been silent (all channels) at commit; armedMs is the wait since the trigger.
-    private void LogAutoArchiveCommit(AutoArchive.ArchiveReason reason, long nowMs)
+    // how long the settle clock (see SettleClockMs — damage only, boss-targeted for BossKill) had been
+    // silent at commit; armedMs is the wait since the trigger. Takes the already-computed settle clock
+    // rather than re-deriving it, so this line can never drift from what PendingArchiveDue actually used.
+    private void LogAutoArchiveCommit(AutoArchive.ArchiveReason reason, long nowMs, long settleClockMs)
     {
         if (!StellarDiagnostics.IsEnabled) return;
         _services.Log.Info(
             $"[CombatMeter][auto-archive] commit reason={ArchiveReasonTag(reason)} now={nowMs} " +
-            $"quietMs={nowMs - _lastCombatEventMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={_archiveSettleMs}");
+            $"quietMs={nowMs - settleClockMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={_archiveSettleMs}");
     }
 
     // One line per ManualArchive ATTEMPT with its outcome (skip-empty | suppressed | banked |

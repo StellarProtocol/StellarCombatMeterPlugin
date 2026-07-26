@@ -112,4 +112,38 @@ public class AutoArchiveSettleDelayTests
         // the post-kill tail (trailing DoTs, killing blow) lands INSIDE the fight's archive. Contrast
         // BossPhase_archive_is_immediate above — the trash->boss cut must stay immediate.
         => Assert.True(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.BossKill));
+
+    // ---- which clock the settle window watches (owner ruling 2026-07-26: DPS only) ----
+
+    [Fact]
+    public void BossKill_settle_watches_boss_damage()
+        // Add cleanup elsewhere must not hold the boss archive open; a corpse DoT tick on the boss must.
+        => Assert.Equal(9_000L, Plugin.SettleClockMs(AutoArchive.ArchiveReason.BossKill,
+                                                     lastDamageMs: 12_000, lastBossDamageMs: 9_000));
+
+    [Fact]
+    public void BossKill_settle_falls_back_to_general_damage_when_no_boss_damage_was_seen()
+        // Defensive: a BossKill implies boss damage, but a cleared clock (an archive landed in between)
+        // must not make the window read "quiet since epoch" and commit instantly.
+        => Assert.Equal(12_000L, Plugin.SettleClockMs(AutoArchive.ArchiveReason.BossKill,
+                                                      lastDamageMs: 12_000, lastBossDamageMs: 0));
+
+    [Fact]
+    public void Other_reasons_settle_on_general_damage()
+    {
+        Assert.Equal(12_000L, Plugin.SettleClockMs(AutoArchive.ArchiveReason.StageChange, 12_000, 9_000));
+        Assert.Equal(12_000L, Plugin.SettleClockMs(AutoArchive.ArchiveReason.Wipe, 12_000, 9_000));
+        Assert.Equal(12_000L, Plugin.SettleClockMs(AutoArchive.ArchiveReason.Idle, 12_000, 9_000));
+    }
+
+    [Fact]
+    public void Post_kill_heals_do_not_extend_a_bosskill_window()
+    {
+        // The behavioural consequence: heals stopped resetting the window, so a healer topping the party
+        // up after the kill no longer drags 8 s of prep healing into the boss fight's archive.
+        const long lastBossDamage = 10_000;
+        Assert.True(Plugin.PendingArchiveDue(nowMs: 12_000,
+            lastCombatEventMs: Plugin.SettleClockMs(AutoArchive.ArchiveReason.BossKill, 11_900, lastBossDamage),
+            idleSettleMs: 2_000));
+    }
 }
