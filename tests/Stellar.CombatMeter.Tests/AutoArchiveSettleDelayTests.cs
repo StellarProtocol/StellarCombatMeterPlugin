@@ -105,4 +105,11 @@ public class AutoArchiveSettleDelayTests
     [Fact]
     public void Idle_archive_is_deferred()
         => Assert.True(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.Idle));
+
+    [Fact]
+    public void BossKill_archive_is_deferred()
+        // The whole point of the 2026-07-26 fix: a confirmed boss death waits out the settle window so
+        // the post-kill tail (trailing DoTs, killing blow) lands INSIDE the fight's archive. Contrast
+        // BossPhase_archive_is_immediate above — the trash->boss cut must stay immediate.
+        => Assert.True(Plugin.IsDeferrableArchive(AutoArchive.ArchiveReason.BossKill));
 }

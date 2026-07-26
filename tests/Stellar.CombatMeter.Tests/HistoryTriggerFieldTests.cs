@@ -31,5 +31,6 @@ public class HistoryTriggerFieldTests
         Assert.Equal("boss",   Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.BossPhase));
         Assert.Equal("idle",   Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.Idle));
         Assert.Equal("stage",  Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.StageChange));
+        Assert.Equal("bosskill", Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.BossKill));
     }
 }

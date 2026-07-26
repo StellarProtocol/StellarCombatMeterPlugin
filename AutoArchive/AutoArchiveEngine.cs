@@ -17,6 +17,11 @@ internal enum ArchiveReason
     Idle = 4,
     /// <summary>EDungeonState flow transition inside an instanced run.</summary>
     StageChange = 5,
+    /// <summary>A CONFIRMED boss death ended the fight. Deferred through the settle window so the
+    /// post-kill tail (trailing DoTs, the killing-blow tick) lands inside the fight's archive rather
+    /// than in a sliver after it (2026-07-26 fix; owner runs sea/696115723671437312,
+    /// sea/420833196448415744).</summary>
+    BossKill = 6,
 }
 
 /// <summary>Facts snapshot for one engine tick — assembled by Plugin.AutoArchive.cs (~10 Hz). Record

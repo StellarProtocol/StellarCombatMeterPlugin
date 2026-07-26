@@ -214,6 +214,7 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.BossPhase   => "boss",
         AutoArchive.ArchiveReason.Idle        => "idle",
         AutoArchive.ArchiveReason.StageChange => "stage",
+        AutoArchive.ArchiveReason.BossKill    => "bosskill",
         _                                     => "manual",
     };
 

@@ -251,6 +251,7 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.Wipe        => true,
         AutoArchive.ArchiveReason.Idle        => true,
         AutoArchive.ArchiveReason.StageChange => true,
+        AutoArchive.ArchiveReason.BossKill    => true,
         _                                     => false,   // Manual + SceneChange + BossPhase stay immediate
     };
 
