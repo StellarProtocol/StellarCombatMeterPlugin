@@ -392,7 +392,7 @@ public sealed partial class Plugin
         if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchive.BossSegmentActive, IsInstancedRun())) return;
         ObserveAutoArchiveBoss(src, tgt);              // sets _autoArchiveBossId iff this event involves the boss (no-op if already set)
         if (_autoArchiveBossId.Value == 0) return;     // this event didn't involve the boss — nothing to do
-        if (!_autoArchive.TryBeginBossSegmentCut()) return;   // race guard: a segment became active — one cut per segment
+        if (!_autoArchive.TryBeginBossSegmentCut(firstHitMs)) return;   // cooldown / one cut per segment
 
         long keepBeforeMs = BossKeepBeforeMs;
         if (ShouldArchiveTrashForBoss(priorCombat))

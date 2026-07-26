@@ -119,11 +119,23 @@ internal sealed class AutoArchiveEngine
                                           // episode began (revive-grace debounce)
 
     // A boss segment is running. The INLINE cut (Plugin.Capture.cs MaybeCutForBossPhase, via
-    // TryBeginBossSegmentCut) is the sole thing that SETS this true; UpdateLatches re-arms it (false)
-    // on a confirmed death (or, legacy BossRecutOnRedetect=true, any boss-gone/non-boss archive) — or
-    // unconditionally on leaving the instanced run (run/scene boundary), so the trigger re-arms per run.
-    // The inline gate consults it via BossSegmentActive so a re-detect cuts again (capped) once re-armed.
+    // TryBeginBossSegmentCut) is the sole thing that SETS this true. As of 2026-07-26 (Task 2) it is
+    // cleared to false ONLY by OnArchived (any reason except BossPhase, which is the trash bank that
+    // OPENS a segment) or by leaving the instanced run (run/scene boundary) — NOT by a raw BossDead/
+    // BossGone reading. A confirmed death instead sets _bossKillWanted, which Evaluate turns into a
+    // BossKill archive; it is that archive's OnArchived call, after the caller's settle window, that
+    // actually closes the segment. This is what stops the old re-arm→cut→re-arm loop (a dead boss kept
+    // getting re-adopted and re-cut once per tick). The inline gate consults this via BossSegmentActive
+    // so a genuinely new fight (after an archive closed the segment) cuts again.
     private bool _bossSegmentActive;
+
+    // A confirmed boss death was observed while a boss segment was open, and that fight has not been
+    // banked yet. LATCHED rather than edge-consumed: BossStatus clears _autoArchiveBossId the instant
+    // it sees the death (Plugin.AutoArchive.cs:325), so BossDead is a ONE-TICK pulse, and
+    // TickAutoArchiveTriggers skips Evaluate entirely while another archive is pending — an edge would
+    // be lost in both cases and the fight would never bank. Same shape as _wipeArchived: a level the
+    // fire gates read, set only from bookkeeping and cleared only on an actual fire / run exit.
+    private bool _bossKillWanted;
     private int  _lastFlowVersion = -1; // -1 = never observed (first sight adopts silently)
     private bool _stagePending;         // a flow transition happened and hasn't been consumed yet;
                                          // cleared by OnArchived (ANY archive consumes it — see its doc)
@@ -165,6 +177,13 @@ internal sealed class AutoArchiveEngine
             _wipeArchived = true;
             return ArchiveReason.Wipe;
         }
+        if (BossEnabled && _bossKillWanted)
+        {
+            // Latch cleared only here, after the cooldown gate above — a suppressed tick keeps the want
+            // alive (the _wipeArchived discipline), so a death inside a cooldown is deferred, not lost.
+            _bossKillWanted = false;
+            return ArchiveReason.BossKill;
+        }
         if (StageEnabled && _stagePending)                        { _stagePending = false;  return ArchiveReason.StageChange; }
         // NOTE (recut-fix, 2026-07-21): the engine NEVER fires BossPhase. ALL boss cuts route through
         // the INLINE capped path (Plugin.Capture.cs MaybeCutForBossPhase → TryBeginBossSegmentCut →
@@ -174,13 +193,16 @@ internal sealed class AutoArchiveEngine
         // at "now" instead of firstHit − keepBefore (owner run sea/U051Yv8lf2, 0:55 vs 0:48). The branch
         // (+ its MinBossSegmentMs floor and _bossPending cooldown-bank, both meaningless in the
         // deterministic inline model) is removed. The engine keeps ONLY the _bossSegmentActive latch
-        // (re-armed in UpdateLatches) that the inline gate consults. Pinned by Evaluate_never_returns_bossphase.
+        // (closed in OnArchived / UpdateLatches, see their docs) that the inline gate consults. Pinned by
+        // Evaluate_never_returns_bossphase.
         if (IdleEnabled && IdleExpired(in s))                     { return ArchiveReason.Idle; }
         return null;
     }
 
     /// <summary>Read the boss-segment latch — the inline cut's gate (Plugin.Capture.cs). True while a
-    /// boss fight segment is running; UpdateLatches re-arms it false on death / run boundary.</summary>
+    /// boss fight segment is running; cleared only by <see cref="OnArchived"/> (any reason except
+    /// BossPhase) or by leaving the instanced run (2026-07-26, Task 2) — a raw death/eviction reading no
+    /// longer closes it directly.</summary>
     public bool BossSegmentActive => _bossSegmentActive;
 
     /// <summary>Inline boss-phase cut gate (2026-07-21). The boss cut happens INLINE in
@@ -189,36 +211,40 @@ internal sealed class AutoArchiveEngine
     /// mid-fight (the owner's chopped-fight bug) — and it routes through <c>ManualArchive(BossPhase,
     /// replayUpperCapServerMs)</c>, so the keep-before replay boundary is honoured. This is the sole
     /// thing that SETS <see cref="_bossSegmentActive"/> (the engine no longer fires BossPhase). It is the
-    /// once-per-fight latch: <see cref="UpdateLatches"/> re-arms it every tick (run-boundary +
-    /// confirmed-death re-arm, transient-eviction ignored when <see cref="BossRecutOnRedetect"/> is
-    /// false), so a transient vitals blink / intervening non-boss archive never re-cuts and each new
-    /// instanced run — and, with recut on, each re-engage after the boss leaves — re-arms. Returns true
-    /// and marks the segment active when no segment is active; false when boss auto-archive is off or a
-    /// segment is already running.</summary>
-    public bool TryBeginBossSegmentCut()
+    /// once-per-fight latch: as of 2026-07-26 (Task 2) it closes ONLY via <see cref="OnArchived"/> (any
+    /// reason except BossPhase, which is the trash bank that opens a segment) or via leaving the
+    /// instanced run — a confirmed death sets <see cref="_bossKillWanted"/> instead, and it is the
+    /// resulting <see cref="ArchiveReason.BossKill"/> archive's OnArchived call that actually closes the
+    /// segment, once the caller's settle window has let the trailing damage land. A transient vitals
+    /// blink (gone but not confirmed dead) never closes it at all — one fight, one cut — and each new
+    /// instanced run, or any archive that ends the fight, re-arms it. Returns true and marks the segment
+    /// active when no segment is active; false when boss auto-archive is off or a segment is already
+    /// running.
+    /// <para><paramref name="nowMs"/> (2026-07-26, Task 2): accepted now so the signature is in place for
+    /// the Task 3 cooldown check (a minimum gap between successive boss cuts) — not read here yet.</para>
+    /// </summary>
+    public bool TryBeginBossSegmentCut(long nowMs)
     {
         if (!BossEnabled || _bossSegmentActive) return false;
         _bossSegmentActive = true;
         return true;
     }
 
-    /// <summary>Every archive — ANY path, including manual, hotkey, scene change, and the inline boss
-    /// cut — reports here: arms the shared cooldown, and (legacy re-detect model only) a non-boss
-    /// archive ends the running boss segment so the next boss sighting cuts a fresh segment. This
-    /// re-arm-on-any-OTHER-archive reading is a deliberate spec-intent interpretation — a literal "any
-    /// archive re-arms" would make the boss-phase archive that STARTS a segment immediately re-cut on
-    /// the still-present boss — controller-approved 2026-07-17, pinned by
-    /// <see cref="AutoArchiveEngineTests.TryBeginBossSegmentCut_nonboss_archive_rearms_when_recut_on"/>.
-    /// Also consumes any pending stage transition (see <see cref="_stagePending"/>): an overlapping
-    /// transition that lost the race to another trigger must not resurface as a stale StageChange
-    /// archive later. Wipe needs no bookkeeping here — <c>_wipeArchived</c>'s recovery clear and
-    /// <c>_prevOutcomeFailed</c>'s edge stamp both live in <see cref="Evaluate"/>.</summary>
+    /// <summary>Every archive — ANY path, including manual, hotkey, scene change, and the boss cuts
+    /// themselves (inline BossPhase, and now BossKill) — reports here: arms the shared cooldown and
+    /// closes the running boss segment (2026-07-26, Task 2 — see the unconditional-except-BossPhase rule
+    /// below), so the NEXT boss sighting cuts a fresh segment. Also consumes any pending stage transition
+    /// (see <see cref="_stagePending"/>): an overlapping transition that lost the race to another trigger
+    /// must not resurface as a stale StageChange archive later. Wipe needs no bookkeeping here —
+    /// <c>_wipeArchived</c>'s recovery clear and <c>_prevOutcomeFailed</c>'s edge stamp both live in
+    /// <see cref="Evaluate"/>.</summary>
     public void OnArchived(long nowMs, ArchiveReason reason)
     {
         _lastArchiveMs = nowMs;
-        // Legacy re-arm on any non-boss archive is part of the re-detect model; with re-cut OFF a
-        // manual/wipe/idle archive mid-boss must NOT restart boss detection (round the owner's run).
-        if (reason != ArchiveReason.BossPhase && BossRecutOnRedetect) _bossSegmentActive = false;
+        // ANY archive closes the boss segment — an archive means the segment ended. The lone exception
+        // is the BossPhase trash bank, which is the archive that OPENS a segment; closing on it would
+        // let the still-present boss immediately re-cut (controller-approved reading, 2026-07-17).
+        if (reason != ArchiveReason.BossPhase) _bossSegmentActive = false;
         _stagePending = false;
     }
 
@@ -228,13 +254,14 @@ internal sealed class AutoArchiveEngine
     private void UpdateLatches(in AutoArchiveInputs s)
     {
         // Leaving the instanced run (open world between dungeons) ends any boss segment, so the NEXT
-        // run's boss gets a fresh cut. This is the "scene/run change ends it" half of the fix — a
-        // mid-fight cache blink keeps InstancedRun true, so it never re-cuts during one fight.
-        if (!s.InstancedRun) _bossSegmentActive = false;
-        // Boss segment ends only on a CONFIRMED death (or, legacy, any "gone" incl. transient
-        // eviction). Default: a cache blink mid-fight must NOT re-arm — one fight, one cut. Re-arming
-        // here lets the inline cut fire again (capped) on the next boss combat event.
-        if (BossRecutOnRedetect ? s.BossGone : s.BossDead) _bossSegmentActive = false;
+        // run's boss gets a fresh cut, and drops any unbanked kill want with it.
+        if (!s.InstancedRun) { _bossSegmentActive = false; _bossKillWanted = false; }
+        // A confirmed death ENDS THE FIGHT but does not itself end the segment: the BossKill archive
+        // does, via OnArchived, after the caller's settle window. Removing the old
+        // `if (BossRecutOnRedetect ? s.BossGone : s.BossDead) _bossSegmentActive = false;` re-arm is
+        // what kills the post-kill cut loop — the dead boss used to be re-adopted by
+        // CheckBossCandidate, re-arm, cut, and repeat once per tick (0 ms archives ~1 s apart).
+        if (s.BossDead && _bossSegmentActive) _bossKillWanted = true;
 
         if (_lastFlowVersion != s.FlowStateVersion)
         {

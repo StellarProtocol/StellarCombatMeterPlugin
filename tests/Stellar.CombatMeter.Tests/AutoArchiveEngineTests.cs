@@ -289,101 +289,51 @@ public class AutoArchiveEngineTests
     // The boss cut is INLINE (Plugin.Capture.cs, fires at the first boss hit, before accumulation) and
     // is the SOLE boss-cut path — the engine's old Evaluate boss branch was removed (recut-fix,
     // 2026-07-21; see Evaluate_never_returns_bossphase). These tests pin the once-per-fight +
-    // re-arm-per-run/death protections the removed Evaluate-based boss tests used to cover, now driven
-    // through the real production gate: TryBeginBossSegmentCut() + UpdateLatches (via Evaluate ticks)
-    // + OnArchived. The behaviors preserved from the deleted tests:
-    //   • one-fight-one-cut                     → TryBeginBossSegmentCut_fires_once_then_gates_until_rearm
-    //   • re-arm on run boundary                → TryBeginBossSegmentCut_rearms_on_run_boundary
-    //   • re-arm on confirmed death (recut off) → TryBeginBossSegmentCut_rearms_on_confirmed_death_recut_off
-    //   • NO re-arm on transient eviction (off) → TryBeginBossSegmentCut_no_rearm_on_transient_eviction_recut_off
-    //   • re-arm on any "gone" (recut on)       → TryBeginBossSegmentCut_rearms_on_eviction_when_recut_on
-    //   • non-boss archive re-arm (recut on)    → TryBeginBossSegmentCut_nonboss_archive_rearms_when_recut_on
-    //   • non-boss archive NO re-arm (recut off)→ TryBeginBossSegmentCut_nonboss_archive_no_rearm_when_recut_off
+    // re-arm-per-run protections the removed Evaluate-based boss tests used to cover, now driven
+    // through the real production gate: TryBeginBossSegmentCut(nowMs) + UpdateLatches (via Evaluate
+    // ticks) + OnArchived. The behaviors preserved from the deleted tests:
+    //   • one-fight-one-cut       → TryBeginBossSegmentCut_fires_once_then_gates_until_rearm
+    //   • re-arm on run boundary  → TryBeginBossSegmentCut_rearms_on_run_boundary
     // The removed MinBossSegment / _bossPending (cooldown-bank) tests pinned mechanics that no longer
     // exist in the deterministic inline model (no min-segment floor, no cooldown-swallow-then-rebank).
+    //
+    // 2026-07-26 (Task 2): a raw BossDead/BossGone reading no longer closes the segment by itself — only
+    // an actual archive (via OnArchived) does — so the confirmed-death re-arm and BossRecutOnRedetect
+    // branch tests that used to live in this block are retired; their coverage now lives in the BossKill
+    // block above:
+    //   • re-arm on confirmed death (recut off)  → BossKill_fires_on_confirmed_death_while_segment_open
+    //                                                + Any_nonboss_archive_closes_the_segment_so_a_wipe_retry_recuts
+    //   • NO re-arm on transient eviction (off)   → Transient_eviction_never_ends_the_segment
+    //   • re-arm on any "gone" (recut on)         → retired outright — BossRecutOnRedetect is retired in Task 4
+    //   • non-boss archive re-arm (recut on)      → Any_nonboss_archive_closes_the_segment_so_a_wipe_retry_recuts
+    //                                                + A_bossphase_archive_does_not_close_the_segment_it_just_opened
+    //   • non-boss archive NO re-arm (recut off)  → same two tests above — the close is now unconditional
 
     [Fact]
     public void TryBeginBossSegmentCut_fires_once_then_gates_until_rearm()
     {
         var e = new AutoArchiveEngine();
-        Assert.True(e.TryBeginBossSegmentCut());    // first boss this fight → cut permitted, marks segment active
-        Assert.False(e.TryBeginBossSegmentCut());   // segment active → one fight, one cut
+        Assert.True(e.TryBeginBossSegmentCut(200_000));    // first boss this fight → cut permitted, marks segment active
+        Assert.False(e.TryBeginBossSegmentCut(200_000));   // segment active → one fight, one cut
     }
 
     [Fact]
     public void TryBeginBossSegmentCut_blocked_when_boss_disabled()
     {
         var e = new AutoArchiveEngine { BossEnabled = false };
-        Assert.False(e.TryBeginBossSegmentCut());
+        Assert.False(e.TryBeginBossSegmentCut(200_000));
     }
 
     [Fact]
     public void TryBeginBossSegmentCut_rearms_on_run_boundary()
     {
         var e = new AutoArchiveEngine();
-        Assert.Null(e.Evaluate(Live()));            // adopt flow version
-        Assert.True(e.TryBeginBossSegmentCut());    // first cut this run
-        Assert.False(e.TryBeginBossSegmentCut());   // gated within the run
+        Assert.Null(e.Evaluate(Live()));                   // adopt flow version
+        Assert.True(e.TryBeginBossSegmentCut(200_000));    // first cut this run
+        Assert.False(e.TryBeginBossSegmentCut(200_000));   // gated within the run
         // Leaving the instanced run re-arms the segment latch (UpdateLatches, every tick).
         Assert.Null(e.Evaluate(Live() with { InstancedRun = false, BossPresent = false }));
-        Assert.True(e.TryBeginBossSegmentCut());    // next run's boss cuts fresh
-    }
-
-    [Fact]
-    public void TryBeginBossSegmentCut_rearms_on_confirmed_death_recut_off()
-    {
-        var e = new AutoArchiveEngine();            // BossRecutOnRedetect defaults false
-        Assert.Null(e.Evaluate(Live()));
-        Assert.True(e.TryBeginBossSegmentCut());
-        // A CONFIRMED death ends the segment even with re-cut off.
-        Assert.Null(e.Evaluate(Live() with { BossDead = true, BossGone = true, BossPresent = false }));
-        Assert.True(e.TryBeginBossSegmentCut());    // a genuinely new fight after the kill re-cuts
-    }
-
-    [Fact]
-    public void TryBeginBossSegmentCut_no_rearm_on_transient_eviction_recut_off()
-    {
-        var e = new AutoArchiveEngine();            // recut off (default)
-        Assert.Null(e.Evaluate(Live()));
-        Assert.True(e.TryBeginBossSegmentCut());
-        // Transient vitals eviction (gone but NOT confirmed dead) must NOT re-arm with recut off —
-        // one fight, one cut (the pinned Boss_transient_eviction_does_not_recut_when_recut_off behavior).
-        Assert.Null(e.Evaluate(Live() with { BossGone = true, BossDead = false, BossPresent = false }));
-        Assert.False(e.TryBeginBossSegmentCut());
-    }
-
-    [Fact]
-    public void TryBeginBossSegmentCut_rearms_on_eviction_when_recut_on()
-    {
-        var e = new AutoArchiveEngine { BossRecutOnRedetect = true };
-        Assert.Null(e.Evaluate(Live()));
-        Assert.True(e.TryBeginBossSegmentCut());
-        // Legacy re-detect: any "gone" (incl. transient eviction) re-arms.
-        Assert.Null(e.Evaluate(Live() with { BossGone = true, BossPresent = false }));
-        Assert.True(e.TryBeginBossSegmentCut());
-    }
-
-    [Fact]
-    public void TryBeginBossSegmentCut_nonboss_archive_rearms_when_recut_on()
-    {
-        // Preserves NonBoss_archive_ends_the_boss_segment: with recut ON, a non-boss archive
-        // (manual/wipe/idle) mid-boss ends the segment so the next boss engagement re-cuts.
-        var e = new AutoArchiveEngine { BossRecutOnRedetect = true };
-        Assert.True(e.TryBeginBossSegmentCut());
-        Assert.False(e.TryBeginBossSegmentCut());               // segment active
-        e.OnArchived(1_000, ArchiveReason.Manual);              // user archived mid-boss — recut on ends it
-        Assert.True(e.TryBeginBossSegmentCut());                // re-armed → re-cut
-    }
-
-    [Fact]
-    public void TryBeginBossSegmentCut_nonboss_archive_no_rearm_when_recut_off()
-    {
-        // Preserves Boss_intervening_manual_archive_does_not_recut_when_recut_off: with recut OFF,
-        // a manual/wipe/idle archive mid-boss must NOT restart boss detection — one fight, one cut.
-        var e = new AutoArchiveEngine();                        // recut off (default)
-        Assert.True(e.TryBeginBossSegmentCut());
-        e.OnArchived(1_000, ArchiveReason.Manual);              // manual archive mid-boss
-        Assert.False(e.TryBeginBossSegmentCut());               // segment still active — no re-cut
+        Assert.True(e.TryBeginBossSegmentCut(200_000));    // next run's boss cuts fresh
     }
 
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
@@ -661,5 +611,124 @@ public class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(in s));                          // master gate suppresses the would-fire wipe
         e.Enabled = true;
         Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in s));      // re-enabled — same input now fires
+    }
+
+    // ---- BossKill (2026-07-26): the confirmed-death archive, deferred by the caller's settle window ----
+
+    [Fact]
+    public void BossKill_fires_on_confirmed_death_while_segment_open()
+    {
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));                 // adopt flow version
+        Assert.True(e.TryBeginBossSegmentCut(200_000));   // a boss segment is now open
+        var s = Live(nowMs: 260_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in s));
+    }
+
+    [Fact]
+    public void BossKill_does_not_fire_without_an_open_segment()
+    {
+        // A corpse observed with no segment open (died to someone else / segment already banked) must
+        // never bank. This is the guard that made the old post-kill spam impossible to reproduce here.
+        // IdleEnabled=false isolates this from the UNRELATED idle trigger: at nowMs=260_000 the fixed
+        // Live() LastDamageMs (160_000) is > IdleTimeoutMs (60_000 default) stale, which would otherwise
+        // fire Idle and mask the assertion this test actually cares about (no segment => no BossKill).
+        var e = new AutoArchiveEngine { IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live()));
+        var s = Live(nowMs: 260_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Null(e.Evaluate(in s));
+    }
+
+    [Fact]
+    public void BossKill_fires_once_per_segment_no_matter_how_many_death_readings_arrive()
+    {
+        // THE regression pin for the reported bug: repeated post-death readings produced one archive
+        // per engine tick (owner log: durMs=0 archives ~1 s apart). Exactly one fire per open segment.
+        // IdleEnabled=false isolates this from the UNRELATED idle trigger — see the comment on
+        // BossKill_does_not_fire_without_an_open_segment; the same nowMs-vs-fixed-LastDamageMs staleness
+        // applies to every tick in the loop below.
+        var e = new AutoArchiveEngine { IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        var dead = Live(nowMs: 260_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in dead));
+        e.OnArchived(260_000, ArchiveReason.BossKill);
+        for (long t = 271_000; t <= 300_000; t += 1_000)
+            Assert.Null(e.Evaluate(Live(nowMs: t) with { BossDead = true, BossGone = true, BossPresent = false }));
+    }
+
+    [Fact]
+    public void BossKill_survives_a_cooldown_and_fires_when_it_lifts()
+    {
+        // The death arrives as a one-tick pulse and TickAutoArchiveTriggers skips Evaluate while another
+        // archive is pending — so the want must be LATCHED, not edge-consumed, or the fight never banks.
+        //
+        // KNOWN RED at the end of Task 2 (2026-07-26) — flagged per the task brief's own instruction to
+        // "note the situation": the suppression this test relies on ("inside the 10 s cooldown") only
+        // holds if the cooldown clock is anchored to the 215_000 re-open (216_000 - 215_000 = 1_000 <
+        // 10_000 => suppressed; 226_000 - 215_000 = 11_000 >= 10_000 => fires) — the shared archive
+        // cooldown this task wired (_lastArchiveMs, armed by OnArchived at 200_000) does NOT do that:
+        // 216_000 - 200_000 = 16_000, already past CooldownMs, so nothing suppresses the first Evaluate
+        // and the test's own comment doesn't hold given only Task 2's changes. TryBeginBossSegmentCut's
+        // new nowMs parameter is unused in this task by design (Task 3 adds the cooldown check that
+        // consumes it — see the brief) — so no mechanism exists yet to anchor a cooldown off the re-open
+        // timestamp. Expected to go green once Task 3 lands; not weakened or deleted per the "never
+        // weaken a pinned regression" rule, since it isn't pinned yet — this is its origin, not a fix.
+        var e = new AutoArchiveEngine { CooldownMs = 10_000 };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        e.OnArchived(200_000, ArchiveReason.Wipe);        // unrelated archive arms the cooldown
+        Assert.True(e.TryBeginBossSegmentCut(215_000));   // re-open a segment after that archive closed it
+        var dead = Live(nowMs: 216_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Null(e.Evaluate(in dead));                 // inside the 10 s cooldown → suppressed, not lost
+        Assert.Equal(ArchiveReason.BossKill,
+            e.Evaluate(Live(nowMs: 226_000) with { BossPresent = false }));   // pulse gone, latch remains
+    }
+
+    [Fact]
+    public void BossKill_blocked_when_boss_disabled()
+    {
+        // IdleEnabled=false isolates this from the UNRELATED idle trigger — see the comment on
+        // BossKill_does_not_fire_without_an_open_segment.
+        var e = new AutoArchiveEngine { BossEnabled = false, IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.False(e.TryBeginBossSegmentCut(200_000));
+        Assert.Null(e.Evaluate(Live(nowMs: 260_000) with { BossDead = true, BossGone = true, BossPresent = false }));
+    }
+
+    [Fact]
+    public void Transient_eviction_never_ends_the_segment()
+    {
+        // A mid-fight AOI/vitals blink archives nothing, so it must not re-open the cut. Replaces the
+        // retired recut-flag pair (TryBeginBossSegmentCut_no_rearm_on_transient_eviction_recut_off /
+        // _rearms_on_eviction_when_recut_on) — the flag is gone in Task 4, the invariant is not.
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        Assert.Null(e.Evaluate(Live(nowMs: 210_000) with { BossGone = true, BossDead = false, BossPresent = false }));
+        Assert.False(e.TryBeginBossSegmentCut(210_000));   // fight continues — no second cut
+    }
+
+    [Fact]
+    public void Any_nonboss_archive_closes_the_segment_so_a_wipe_retry_recuts()
+    {
+        // Owner scenario: wipe on the boss, then retry the SAME boss. The wipe archive closes the
+        // segment; the retry's first hit must be allowed to cut again (with keep-before applied by the
+        // caller). This used to require BossRecutOnRedetect=true; it is now unconditional.
+        var e = new AutoArchiveEngine { CooldownMs = 0 };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        e.OnArchived(230_000, ArchiveReason.Wipe);
+        Assert.True(e.TryBeginBossSegmentCut(240_000));
+    }
+
+    [Fact]
+    public void A_bossphase_archive_does_not_close_the_segment_it_just_opened()
+    {
+        var e = new AutoArchiveEngine { CooldownMs = 0 };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        e.OnArchived(200_000, ArchiveReason.BossPhase);    // the trash bank that STARTS the fight
+        Assert.False(e.TryBeginBossSegmentCut(201_000));   // segment still open — one fight, one cut
     }
 }
