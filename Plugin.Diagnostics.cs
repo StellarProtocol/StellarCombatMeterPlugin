@@ -156,6 +156,11 @@ public sealed partial class Plugin
     // quietMs is how long the relevant DAMAGE clock had been silent at this attempt (see
     // SettleClockMs); armedMs is the deferred wait and reads 0 for an immediate archive.
     //
+    // quietMs uses a sentinel "n/a" when the clock was never set (no damage landed in that segment);
+    // a numeric reading is a real elapsed age. This avoids ambiguity: a segment with only heals and
+    // damage-taken carries _lastDamageMs=0 (never incremented), which would collide with a legitimately
+    // 0-ms quiet segment if we printed the numeric 0.
+    //
     // armedMs is gated on IsDeferrableArchive deliberately: ManualArchive nulls _pendingArchiveReason
     // on entry but _pendingArchiveArmedMs is never cleared, so an immediate archive (manual / scene /
     // the inline BossPhase cut) would otherwise print the age of some earlier, unrelated pending.
@@ -163,13 +168,13 @@ public sealed partial class Plugin
     {
         var now = _services.CombatSnapshot.ServerNowMs;
         var clock = SettleClockMs(reason, _lastDamageMs, _lastBossDamageMs);
-        var quietMs = clock == 0 ? 0 : now - clock;
+        var quietMsText = clock == 0 ? "n/a" : (now - clock).ToString();
         var armedMs = IsDeferrableArchive(reason) && _pendingArchiveArmedMs != 0
             ? now - _pendingArchiveArmedMs
             : 0;
         _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
-            $"quietMs={quietMs} armedMs={armedMs} settle={_archiveSettleMs}");
+            $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs}");
     }
 
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
