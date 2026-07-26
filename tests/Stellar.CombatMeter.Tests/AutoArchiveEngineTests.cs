@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter.AutoArchive;
 using Xunit;
@@ -767,5 +768,53 @@ public class AutoArchiveEngineTests
         Assert.True(e.TryBeginBossSegmentCut(200_000));
         e.OnArchived(200_000, ArchiveReason.BossPhase);    // the trash bank that STARTS the fight
         Assert.False(e.TryBeginBossSegmentCut(201_000));   // segment still open — one fight, one cut
+    }
+
+    // ---- end-to-end sequence pin (Task 9): the owner's raid acceptance narrative ----
+
+    [Fact]
+    public void Raid_sequence_produces_one_archive_per_boss_and_no_slivers()
+    {
+        // Owner's acceptance narrative: one raid map, pull boss B, wipe, retry B, kill it. The engine
+        // side of the six-archive sequence — trash cut, wipe, run-back cut, BossKill — with the post-kill
+        // corpse readings producing NOTHING (the reported bug).
+        // IdleEnabled = false is REQUIRED here, not cosmetic: Live() pins LastDamageMs at 160_000, so
+        // every tick past 220_000 also satisfies the Idle trigger (60 s timeout, 30 s content floor).
+        // The post-kill loop below runs to 298_000 and would report Idle instead of the null it asserts.
+        var e = new AutoArchiveEngine { CooldownMs = 5_000, WipeGraceMs = 0, IdleEnabled = false };
+        var fired = new List<ArchiveReason>();
+
+        Assert.Null(e.Evaluate(Live(nowMs: 100_000)));            // adopt flow version
+
+        // 1. trash -> boss B: the inline cut opens the fight (caller banks the trash as BossPhase).
+        Assert.True(e.TryBeginBossSegmentCut(110_000));
+        e.OnArchived(110_000, ArchiveReason.BossPhase);
+        fired.Add(ArchiveReason.BossPhase);
+
+        // 2. wipe on B: the party dies, the wipe archive banks attempt 1 and closes the segment.
+        var wipe = Live(nowMs: 160_000) with { DeadCount = 4 };
+        Assert.Equal(ArchiveReason.Wipe, e.Evaluate(in wipe));
+        e.OnArchived(160_000, ArchiveReason.Wipe);
+        fired.Add(ArchiveReason.Wipe);
+
+        // 3. run-back: B is alive and unkilled, the latch is closed -> the retry cuts again.
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        e.OnArchived(200_000, ArchiveReason.BossPhase);
+        fired.Add(ArchiveReason.BossPhase);
+
+        // 4. B dies: BossKill fires once (the caller defers it through the settle window).
+        var dead = Live(nowMs: 260_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in dead));
+        e.OnArchived(262_000, ArchiveReason.BossKill);
+        fired.Add(ArchiveReason.BossKill);
+
+        // 5. corpse DoTs / add cleanup for the next 30 s: the reported bug produced one 0 ms archive
+        //    per tick here. Now: nothing at all.
+        for (long t = 268_000; t <= 298_000; t += 1_000)
+            Assert.Null(e.Evaluate(Live(nowMs: t) with { BossDead = true, BossGone = true, BossPresent = false }));
+
+        Assert.Equal(
+            new[] { ArchiveReason.BossPhase, ArchiveReason.Wipe, ArchiveReason.BossPhase, ArchiveReason.BossKill },
+            fired);
     }
 }
