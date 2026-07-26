@@ -37,8 +37,18 @@ internal readonly record struct AutoArchiveInputs
     public int DeadCount { get; init; }
     public int UnknownCount { get; init; }       // members with NO usable HP observation — block wipe
     public bool OutcomeFailed { get; init; }     // IDungeonState.LastOutcome == Failed
-    public bool BossPresent { get; init; }       // a boss-tagged entity is currently resolved + alive
-    public bool BossGone { get; init; }          // the previously resolved boss died / despawned / evicted
+    /// <summary>DIAGNOSTIC-ONLY (Minor F, review round 2026-07-27): a boss-tagged entity is currently
+    /// resolved + alive. No engine decision reads this — <see cref="Evaluate"/> and
+    /// <see cref="UpdateLatches"/> consult only <see cref="BossDead"/>. Kept on the snapshot as an
+    /// observability breadcrumb for callers/logging that want to see boss presence without re-deriving
+    /// it; do not wire new trigger logic off it without updating this doc.</summary>
+    public bool BossPresent { get; init; }
+    /// <summary>DIAGNOSTIC-ONLY (Minor F, review round 2026-07-27): the previously resolved boss died,
+    /// despawned, or was evicted from the vitals cache. Like <see cref="BossPresent"/>, not read by any
+    /// engine decision — <see cref="BossDead"/> is the confirmed-death subset the engine actually acts
+    /// on. This is now the only trace, in the snapshot, that a transient blink (gone but NOT confirmed
+    /// dead) happened at all; useful for logging/telemetry, not for control flow.</summary>
+    public bool BossGone { get; init; }
     /// <summary>A CONFIRMED boss death — HP observed &lt;=0 — as opposed to a transient cache
     /// eviction, which <see cref="BossGone"/> also covers.</summary>
     public bool BossDead { get; init; }
@@ -138,6 +148,24 @@ internal sealed class AutoArchiveEngine
     // One-shot guard armed by TryBeginBossSegmentCutAcrossPreemption (finding 2, review round
     // 2026-07-27) and consumed by the very next OnArchived call, so that call's unconditional segment
     // close cannot undo a reopen that predates it. See both members' docs for the full defect.
+    //
+    // Important D (review round 2026-07-27, second pass): "consumed by the very next OnArchived call"
+    // is load-bearing on the guard's ONLY caller, Plugin.Capture.cs's MaybeCutForBossPhase, actually
+    // reaching OnArchived at all. ManualArchive (Plugin.History.cs) has a skip-empty early return
+    // (`if (_stats.Count == 0) { ...; return; }`) that sits BEFORE its call into OnArchived — if the
+    // guarded commit took that path, OnArchived would never run and the guard would leak onto whatever
+    // archive fires next, wrongly sparing ITS segment close. That path is unreachable here: the guard is
+    // armed only when TryBeginBossSegmentCutAcrossPreemption is called with a pending archive reason to
+    // commit (ShouldPreemptPendingForBoss), and a reason only ever becomes pending when the engine's own
+    // Evaluate returned it — which requires `s.HasStats` (`_stats.Count > 0` at that moment; see
+    // Evaluate's `if (!s.HasStats) return null;` gate). Nothing between arming the pending reason and
+    // this guarded commit can drop _stats back to empty without going through an archive of its own —
+    // and ManualArchive nulls `_pendingArchiveReason` unconditionally on entry, so any such intervening
+    // archive would already have cleared the very reason this commit is about to fire, making it a no-op
+    // rather than a guarded call. So the guarded commit always finds `_stats.Count > 0` and always runs
+    // the full ManualArchive body through to OnArchived. Not independently unit-tested — it is a
+    // property of Plugin (which cannot be instantiated headless; see BossStatus's ACCEPTED RESIDUAL doc
+    // for the same limitation), not of this pure engine.
     private bool _preemptGuard;
     private int  _lastFlowVersion = -1; // -1 = never observed (first sight adopts silently)
     private bool _stagePending;         // a flow transition happened and hasn't been consumed yet;
