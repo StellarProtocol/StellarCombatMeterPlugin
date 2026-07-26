@@ -226,10 +226,13 @@ public sealed partial class Plugin
         ManualArchive(pending);   // ManualArchive clears _pendingArchiveReason on commit
     }
 
-    /// <summary>True once combat has been quiet for <paramref name="idleSettleMs"/> — no combat event
-    /// (any dealt/heal/taken channel, tracked by <c>_lastCombatEventMs</c>) in that window, so trailing
-    /// DoTs / the killing-blow tick have landed. Pure so it unit-tests headless (the AutoArchiveEngine
-    /// precedent).</summary>
+    /// <summary>True once combat has been quiet for <paramref name="idleSettleMs"/> — no activity on
+    /// <paramref name="lastCombatEventMs"/> in that window, so trailing DoTs / the killing-blow tick
+    /// have landed. Despite the parameter name (a holdover from before the settle window narrowed,
+    /// 2026-07-26), this is a caller-selected activity clock, not necessarily the all-channel
+    /// <c>_lastCombatEventMs</c> field — production now feeds it <see cref="SettleClockMs"/>'s result
+    /// (damage only, boss-targeted for a <see cref="AutoArchive.ArchiveReason.BossKill"/>). Pure so it
+    /// unit-tests headless (the AutoArchiveEngine precedent).</summary>
     internal static bool PendingArchiveDue(long nowMs, long lastCombatEventMs, long idleSettleMs)
         => nowMs - lastCombatEventMs >= idleSettleMs;
 

@@ -38,6 +38,15 @@ public sealed partial class Plugin
         // Boss-targeted damage clock for the BossKill settle window (see SettleClockMs). Reads the
         // already-populated _bossCheck cache — no extra game-data lookup on the hot path, and no
         // dependency on _autoArchiveBossId, which BossStatus clears the moment the boss dies.
+        //
+        // ACCEPTED RESIDUAL (documented, not fixed, review round 2026-07-26): the two conditions right
+        // here — the !d.IsHeal channel guard, and keying off TargetId (not SourceId, since a boss is
+        // hit, not the hitter) — are verified by inspection and by the in-game run, not by a unit test.
+        // Plugin cannot be instantiated in tests (same limitation Task 5's BossStatus hit), so nothing
+        // headless can drive a real CombatEvent through OnCombatEvent to prove this line fires only on
+        // boss-targeted damage. What IS unit-tested headless: SettleClockMs's selection logic once fed
+        // a value, and PendingArchiveDue's math once fed SettleClockMs's result — not the wiring that
+        // produces _lastBossDamageMs in the first place. Known, named gap — not an invisible one.
         if (!d.IsHeal && _bossCheck.TryGetValue(d.TargetId, out var tgtIsBoss) && tgtIsBoss)
             _lastBossDamageMs = d.TimestampMs;
 
