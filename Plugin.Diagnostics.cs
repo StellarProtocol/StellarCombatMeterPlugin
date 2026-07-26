@@ -149,9 +149,28 @@ public sealed partial class Plugin
     // rare per-run lifecycle events, and their SILENT skip variants are exactly what field
     // debugging needs (2026-07-19: a full dungeon run produced no history entry and no upload
     // with zero log evidence; the overwritten-on-boot BepInEx log then destroyed the trail).
+    //
+    // 2026-07-26: extended with the settle facts (quietMs / armedMs / settle). The gated
+    // [auto-archive] fired|commit pair was the only place these appeared, so a 1.6 MB owner log
+    // carried ZERO evidence of why a boss archive cut mid-damage — the diagnosis needed a site chart.
+    // quietMs is how long the relevant DAMAGE clock had been silent at this attempt (see
+    // SettleClockMs); armedMs is the deferred wait and reads 0 for an immediate archive.
+    //
+    // armedMs is gated on IsDeferrableArchive deliberately: ManualArchive nulls _pendingArchiveReason
+    // on entry but _pendingArchiveArmedMs is never cleared, so an immediate archive (manual / scene /
+    // the inline BossPhase cut) would otherwise print the age of some earlier, unrelated pending.
     private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
-        => _services.Log.Info(
-            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs}");
+    {
+        var now = _services.CombatSnapshot.ServerNowMs;
+        var clock = SettleClockMs(reason, _lastDamageMs, _lastBossDamageMs);
+        var quietMs = clock == 0 ? 0 : now - clock;
+        var armedMs = IsDeferrableArchive(reason) && _pendingArchiveArmedMs != 0
+            ? now - _pendingArchiveArmedMs
+            : 0;
+        _services.Log.Info(
+            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
+            $"quietMs={quietMs} armedMs={armedMs} settle={_archiveSettleMs}");
+    }
 
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
     // (review round, 2026-07-26) — deliberately UNGATED Warning, same reasoning as LogArchiveOutcome
