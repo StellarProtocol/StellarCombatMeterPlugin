@@ -62,8 +62,8 @@ public sealed partial class Plugin
     private const string PrefAaIdleTimeoutS = "autoArchive.idleTimeoutS";
     private const string PrefAaStage        = "autoArchive.stageChange";
 
-    // Task 4 additions (2026-07-21): master enable + the Task 1-3 engine knobs (boss recut,
-    // wipe grace/ignore-solo, shared cooldown, min-boss-segment floor) + the settle delay.
+    // Task 4 additions (2026-07-21): master enable + the Task 1-3 engine knobs (wipe grace/ignore-solo,
+    // shared cooldown, min-boss-segment floor) + the settle delay.
     private const string PrefAaEnabled        = "autoArchive.enabled";
     private const string PrefAaCooldownS      = "autoArchive.cooldownS";
     private const string PrefAaSettleS        = "autoArchive.settleS";
@@ -354,13 +354,15 @@ public sealed partial class Plugin
     /// <summary>Pure guard: should the inline boss cut even CONSIDER this event — i.e. detect the boss
     /// + (maybe) cut? Only when boss auto-archive is enabled, NO boss segment is currently active, AND
     /// we are in an instanced run. Keying on <c>bossSegmentActive</c> (NOT "boss already known") is the
-    /// recut-fix (2026-07-21, run sea/U051Yv8lf2): once <see cref="AutoArchiveEngine.UpdateLatches"/>
-    /// re-arms the segment latch (confirmed death / run boundary / recut-on boss-gone), the inline cut
-    /// must fire AGAIN — capped at firstHit − keepBefore — even if <c>_autoArchiveBossId</c> is still
-    /// set. The old "boss already known" gate skipped the re-detect, and the engine's now-removed boss
-    /// branch fired an UNCAPPED archive at the tick "now" instead (keep-before boundary at 0:55 vs 0:48).
-    /// The <c>inRun</c> gate keeps <c>_autoArchiveBossId</c> + the cut out of the open world. When a
-    /// segment IS active the fight is running and this fast-exits (hot-path). Unit-tested headless.</summary>
+    /// recut-fix (2026-07-21, run sea/U051Yv8lf2): once an archive closes the segment (<see
+    /// cref="AutoArchiveEngine.OnArchived"/>, any reason except BossPhase) or a run/scene boundary clears
+    /// it (<see cref="AutoArchiveEngine.UpdateLatches"/>), the inline cut must fire AGAIN — capped at
+    /// firstHit − keepBefore — even if <c>_autoArchiveBossId</c> is still set. A transient eviction (boss
+    /// gone but not confirmed dead) re-arms nothing on its own. The old "boss already known" gate skipped
+    /// the re-detect, and the engine's now-removed boss branch fired an UNCAPPED archive at the tick "now"
+    /// instead (keep-before boundary at 0:55 vs 0:48). The <c>inRun</c> gate keeps
+    /// <c>_autoArchiveBossId</c> + the cut out of the open world. When a segment IS active the fight is
+    /// running and this fast-exits (hot-path). Unit-tested headless.</summary>
     internal static bool ShouldConsiderInlineBossCut(bool bossEnabled, bool bossSegmentActive, bool inRun)
         => bossEnabled && !bossSegmentActive && inRun;
 
@@ -374,8 +376,9 @@ public sealed partial class Plugin
     //     movement rides with the boss window (boundary moves earlier; windows stay contiguous).
     //   • direct engage (!priorCombat): NO archive — the fight naturally starts at this event; we only
     //     mark the segment active and backdate the combat clock by keepBefore.
-    // Re-cuts (recut on, or after a confirmed death / run boundary) fire here too, CAPPED, because the
-    // gate keys on the re-armable segment latch (BossSegmentActive), not "boss already known".
+    // Re-cuts — after an archive closes the segment (any reason except BossPhase) or a run/scene
+    // boundary clears it — fire here too, CAPPED, because the gate keys on the re-armable segment latch
+    // (BossSegmentActive), not "boss already known".
     // Hot-path safe: returns in O(1) with no allocation once a boss segment is active (gate fast-exit)
     // or boss auto-archive is off.
     private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
