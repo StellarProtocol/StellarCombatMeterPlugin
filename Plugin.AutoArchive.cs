@@ -453,51 +453,47 @@ public sealed partial class Plugin
         => bossEnabled && !bossSegmentActive && inRun;
 
     // Inline boss-phase cut (2026-07-21). Called from OnCombatEvent (Plugin.Capture.cs) on every
-    // DamageDealt, BEFORE that event is accumulated. This is the SOLE boss-cut path (the engine no
-    // longer fires BossPhase). On the first boss combat event of a fresh (or re-armed) boss segment,
-    // when boss auto-archive is enabled and no segment is active, it cuts IMMEDIATELY:
-    //   • trash→boss (priorCombat): archive the accumulated pre-boss trash as its own segment (immediate
-    //     ManualArchive(BossPhase) → Clear()), then start the boss segment's combat clock at
-    //     (firstHit − keepBefore). The trash replay window is CAPPED at the same instant so the run-up
-    //     movement rides with the boss window (boundary moves earlier; windows stay contiguous).
-    //   • direct engage (!priorCombat): NO archive — the fight naturally starts at this event; we only
-    //     mark the segment active and backdate the combat clock by keepBefore.
-    // Re-cuts — after an archive closes the segment (any reason except BossPhase) or a run/scene
-    // boundary clears it — fire here too, CAPPED, because the gate keys on the re-armable segment latch
-    // (BossSegmentActive), not "boss already known".
-    // Hot-path safe: returns in O(1) with no allocation once a boss segment is active (gate fast-exit)
-    // or boss auto-archive is off.
+    // DamageDealt, BEFORE that event is accumulated — the SOLE boss-cut path. On the first boss combat
+    // event of a fresh (or re-armed) boss segment, when enabled and no segment is active, cuts
+    // IMMEDIATELY:
+    //   • pre-emption (a deferred archive is still pending): open the NEW segment FIRST via
+    //     TryBeginBossSegmentCutAcrossPreemption (finding 2, 2026-07-27), THEN commit the old pending —
+    //     a one-shot engine guard stops that commit's OnArchived from closing the segment just opened.
+    //   • trash→boss (priorCombat, no pending): bank the pre-boss trash as its own segment (immediate
+    //     ManualArchive(BossPhase) → Clear()), capped at (firstHit − keepBefore) so run-up movement
+    //     rides with the boss window (windows stay contiguous).
+    //   • direct engage (!priorCombat, no pending): NO archive — mark the segment active and backdate
+    //     the combat clock by keepBefore.
+    // Re-cuts fire here too (CAPPED) once an archive or run/scene boundary re-arms the segment latch.
+    // Hot-path safe: O(1), no allocation once a segment is active or boss auto-archive is off.
     private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
     {
-        // off / a boss segment is already active / not in an instanced run. Keying on BossSegmentActive
-        // (recut-fix) makes re-detects cut again capped; the InstancedRun gate keeps the cut out of the
-        // open world.
         if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchive.BossSegmentActive, IsInstancedRun())) return;
         ObserveAutoArchiveBoss(src, tgt);              // sets _autoArchiveBossId iff this event involves the boss (no-op if already set)
         if (_autoArchiveBossId.Value == 0) return;     // this event didn't involve the boss — nothing to do
-        if (!_autoArchive.TryBeginBossSegmentCut(firstHitMs)) return;   // cooldown / one cut per segment
 
         long keepBeforeMs = BossKeepBeforeMs;
-        if (ShouldPreemptPendingForBoss(_pendingArchiveReason is not null))
+        bool preempting = ShouldPreemptPendingForBoss(_pendingArchiveReason is not null);
+        bool cut = preempting
+            ? _autoArchive.TryBeginBossSegmentCutAcrossPreemption()   // guards the commit below (finding 2)
+            : _autoArchive.TryBeginBossSegmentCut();                  // once cut per segment (no cooldown — finding 1)
+        if (!cut) return;
+
+        if (preempting)
         {
-            // A deferred archive (BossKill / wipe / idle / stage) is still waiting out its settle window
-            // when the next fight starts. Commit it NOW at the same capped boundary the trash bank would
-            // use, so the previous segment ends where this fight begins. ManualArchive clears the pending
-            // slot itself, and it has already banked everything accumulated — so no trash bank follows.
+            // The deferred archive commits NOW, capped at the same boundary the trash bank would use —
+            // it has already banked everything accumulated, so no trash bank follows. The segment
+            // opened above (TryBeginBossSegmentCutAcrossPreemption) survives this commit.
             ManualArchive(_pendingArchiveReason!.Value, replayUpperCapServerMs: firstHitMs - keepBeforeMs);
         }
         else if (ShouldArchiveTrashForBoss(priorCombat))
         {
-            // Bank the trash IMMEDIATELY (not the settle defer) + cap its replay window at (firstHit −
-            // keepBefore) so the run-up movement moves into the boss window. ManualArchive Clear()s the
+            // Bank the trash IMMEDIATELY, capped at (firstHit − keepBefore). ManualArchive Clear()s the
             // combat clock; EnsureCombatStarted below re-establishes it for the boss segment.
             ManualArchive(AutoArchive.ArchiveReason.BossPhase, replayUpperCapServerMs: firstHitMs - keepBeforeMs);
         }
-        // Start (trash→boss) or backdate (direct engage) the boss segment's combat clock at
-        // (firstHit − keepBefore). In the trash case ManualArchive Clear()ed _combatActive so this
-        // establishes the fresh segment; in direct engage it pre-empts OnCombatEvent's own
-        // EnsureCombatStarted(firstHit) so keepBefore is honoured. With keepBefore == 0 and direct
-        // engage this is identical to the normal EnsureCombatStarted(firstHit) (a no-op refinement).
+        // Start (trash→boss/preempt) or backdate (direct engage) the boss segment's clock at
+        // (firstHit − keepBefore). With keepBefore == 0 and direct engage this is a no-op refinement.
         EnsureCombatStarted(firstHitMs - keepBeforeMs);
     }
 }

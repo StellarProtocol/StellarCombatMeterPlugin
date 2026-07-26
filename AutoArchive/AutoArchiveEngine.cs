@@ -135,6 +135,10 @@ internal sealed class AutoArchiveEngine
     // be lost in both cases and the fight would never bank. Same shape as _wipeArchived: a level the
     // fire gates read, set only from bookkeeping and cleared only on an actual fire / run exit.
     private bool _bossKillWanted;
+    // One-shot guard armed by TryBeginBossSegmentCutAcrossPreemption (finding 2, review round
+    // 2026-07-27) and consumed by the very next OnArchived call, so that call's unconditional segment
+    // close cannot undo a reopen that predates it. See both members' docs for the full defect.
+    private bool _preemptGuard;
     private int  _lastFlowVersion = -1; // -1 = never observed (first sight adopts silently)
     private bool _stagePending;         // a flow transition happened and hasn't been consumed yet;
                                          // cleared by OnArchived (ANY archive consumes it — see its doc)
@@ -222,16 +226,50 @@ internal sealed class AutoArchiveEngine
     /// instanced run, or any archive that ends the fight, re-arms it. Returns true and marks the segment
     /// active when no segment is active; false when boss auto-archive is off or a segment is already
     /// running.
-    /// <para><paramref name="nowMs"/> (2026-07-26, Task 2): accepted now so the signature is in place for
-    /// the Task 3 cooldown check (a minimum gap between successive boss cuts).</para>
+    /// <para><b>No cooldown check (finding 1, review round 2026-07-27 — REVERTED):</b> a 2026-07-26
+    /// revision made this consult <c>_lastArchiveMs</c>/<c>CooldownMs</c> against a re-adoption spam
+    /// loop. That check has a worse failure mode than the one it guarded against: while the cooldown
+    /// held, this method just returned false and the new boss's damage kept accumulating in the
+    /// still-open PREVIOUS segment; once the cooldown lifted, the (now-delayed) cut fired with
+    /// <c>priorCombat</c> now true and banked the fight's own opening seconds as a "boss" TRASH
+    /// archive — with a 60 s Min gap, the first MINUTE of the fight. The spam that check guarded
+    /// against is already structurally impossible without it: a killed boss can never be re-adopted
+    /// (<see cref="KilledBossTracker"/>) and this method cannot fire again while a segment is open
+    /// (<c>_bossSegmentActive</c>) — so cut-spam would require ARCHIVE-spam, and Min gap still blocks
+    /// that everywhere it always did (<see cref="Evaluate"/>'s own fire gate). A boss pull must
+    /// therefore cut immediately no matter how recently the previous archive landed.</para>
     /// </summary>
-    public bool TryBeginBossSegmentCut(long nowMs)
+    public bool TryBeginBossSegmentCut()
     {
         if (!BossEnabled || _bossSegmentActive) return false;
-        // The inline cut is the one archive path that used to bypass the shared cooldown entirely
-        // (2026-07-26). Same gate Evaluate uses, same _lastArchiveMs, so Min gap now spans every path.
-        if (_lastArchiveMs != 0 && nowMs - _lastArchiveMs < CooldownMs) return false;
         _bossSegmentActive = true;
+        return true;
+    }
+
+    /// <summary>Open a fresh boss segment for a NEW engagement that is pre-empting a still-pending
+    /// archive (owner ruling 2026-07-26, §2.7: a fresh boss pull forces a still-waiting deferred
+    /// archive to commit immediately rather than leak into the new fight). Same gate as <see
+    /// cref="TryBeginBossSegmentCut"/> (BossEnabled + once-per-fight), PLUS a one-shot guard consumed
+    /// by the very next <see cref="OnArchived"/> call, so that call — which reports the OLD pending
+    /// archive being committed to make room, never this new segment — cannot undo the open this method
+    /// just performed.
+    /// <para><b>Finding 2 (review round 2026-07-27):</b> the naive sequence — open the new segment,
+    /// then commit the old pending — let <see cref="OnArchived"/>'s unconditional "any non-BossPhase
+    /// reason closes the segment" rule fire against the WRONG segment (the one just opened for the NEW
+    /// fight, not the one the archive being committed actually belongs to), leaving the new fight with
+    /// NO open segment and therefore no BossKill when its boss eventually died — the fight would only
+    /// ever bank at run-end. Reordering alone (commit first, open second) does not read as more robust
+    /// than an explicit guard: it would make correctness depend on OnArchived's side effects never
+    /// reaching further than intended as more call sites are added later. The engine instead owns the
+    /// transition end-to-end via this one-shot guard, so the caller cannot get the sequencing wrong.</para>
+    /// <para>Call this INSTEAD OF <see cref="TryBeginBossSegmentCut"/> only when a pending archive is
+    /// about to be pre-empted; the caller must still commit that pending archive (which calls
+    /// OnArchived) immediately afterward.</para>
+    /// </summary>
+    public bool TryBeginBossSegmentCutAcrossPreemption()
+    {
+        if (!TryBeginBossSegmentCut()) return false;
+        _preemptGuard = true;
         return true;
     }
 
@@ -246,10 +284,18 @@ internal sealed class AutoArchiveEngine
     public void OnArchived(long nowMs, ArchiveReason reason)
     {
         _lastArchiveMs = nowMs;
+        if (_preemptGuard)
+        {
+            // This archive is the OLD pending being committed to make room for a segment the caller
+            // already reopened (TryBeginBossSegmentCutAcrossPreemption, finding 2) — that reopen
+            // predates this call and must survive it. One-shot: consumed here, never suppresses a
+            // later, unrelated close.
+            _preemptGuard = false;
+        }
         // ANY archive closes the boss segment — an archive means the segment ended. The lone exception
         // is the BossPhase trash bank, which is the archive that OPENS a segment; closing on it would
         // let the still-present boss immediately re-cut (controller-approved reading, 2026-07-17).
-        if (reason != ArchiveReason.BossPhase) _bossSegmentActive = false;
+        else if (reason != ArchiveReason.BossPhase) _bossSegmentActive = false;
         _stagePending = false;
         // Same race _stagePending already guards against (2026-07-26, review round): the boss dies and
         // arms _bossKillWanted, but before the deferred BossKill fires (a window as wide as the shared
@@ -266,8 +312,10 @@ internal sealed class AutoArchiveEngine
     private void UpdateLatches(in AutoArchiveInputs s)
     {
         // Leaving the instanced run (open world between dungeons) ends any boss segment, so the NEXT
-        // run's boss gets a fresh cut, and drops any unbanked kill want with it.
-        if (!s.InstancedRun) { _bossSegmentActive = false; _bossKillWanted = false; }
+        // run's boss gets a fresh cut, and drops any unbanked kill want with it. _preemptGuard is
+        // always consumed synchronously by the very next OnArchived (same call stack as the reopen
+        // that armed it), so this reset is defensive insurance, not a reachable path in production.
+        if (!s.InstancedRun) { _bossSegmentActive = false; _bossKillWanted = false; _preemptGuard = false; }
         // A confirmed death ENDS THE FIGHT but does not itself end the segment: the BossKill archive
         // does, via OnArchived, after the caller's settle window. A raw death/eviction reading directly
         // re-arming the segment here is what caused the post-kill cut loop — the dead boss kept getting

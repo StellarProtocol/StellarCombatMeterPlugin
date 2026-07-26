@@ -4,10 +4,10 @@ using Xunit;
 
 namespace Stellar.CombatMeter.Tests;
 
-// The inline boss-cut gate (TryBeginBossSegmentCut once-per-fight + cooldown + run-boundary
-// re-arm) and the shared gates that span every trigger (cooldown, no-stats, master/per-trigger
-// toggles). Split out of AutoArchiveEngineTests.cs (2026-07-26, review round) — see that file's
-// banner for the full partial map. Live()/Armed() live there.
+// The inline boss-cut gate (TryBeginBossSegmentCut once-per-fight + run-boundary re-arm) and the
+// shared gates that span every trigger (cooldown, no-stats, master/per-trigger toggles). Split out
+// of AutoArchiveEngineTests.cs (2026-07-26, review round) — see that file's banner for the full
+// partial map. Live()/Armed() live there.
 public partial class AutoArchiveEngineTests
 {
     // ---- inline boss-phase cut gate: TryBeginBossSegmentCut ----
@@ -15,7 +15,7 @@ public partial class AutoArchiveEngineTests
     // is the SOLE boss-cut path — the engine's old Evaluate boss branch was removed (recut-fix,
     // 2026-07-21; see Evaluate_never_returns_bossphase). These tests pin the once-per-fight +
     // re-arm-per-run protections the removed Evaluate-based boss tests used to cover, now driven
-    // through the real production gate: TryBeginBossSegmentCut(nowMs) + UpdateLatches (via Evaluate
+    // through the real production gate: TryBeginBossSegmentCut() + UpdateLatches (via Evaluate
     // ticks) + OnArchived. The behaviors preserved from the deleted tests:
     //   • one-fight-one-cut       → TryBeginBossSegmentCut_fires_once_then_gates_until_rearm
     //   • re-arm on run boundary  → TryBeginBossSegmentCut_rearms_on_run_boundary
@@ -33,26 +33,32 @@ public partial class AutoArchiveEngineTests
     //   • non-boss archive re-arm (recut on)      → Any_nonboss_archive_closes_the_segment_so_a_wipe_retry_recuts
     //                                                + A_bossphase_archive_does_not_close_the_segment_it_just_opened
     //   • non-boss archive NO re-arm (recut off)  → same two tests above — the close is now unconditional
-
-    [Fact]
-    public void Recut_flag_is_gone_from_the_engine_surface()
-        // Pins the retirement: the knob must not come back as a live field. Re-adding it would restore
-        // a path that can cut mid-fight (the 2026-07-26 defect class).
-        => Assert.Null(typeof(AutoArchiveEngine).GetField("BossRecutOnRedetect"));
+    //
+    // 2026-07-27 (finding 1, review round): TryBeginBossSegmentCut's nowMs parameter and its
+    // _lastArchiveMs/CooldownMs consultation are REMOVED (deliberate contract withdrawal, not a bug
+    // fix regression). Retired below:
+    //   • Inline_boss_cut_respects_the_shared_cooldown
+    //   • Inline_boss_cut_is_allowed_before_any_archive_has_happened
+    // Both pinned a check that had a worse failure mode than the spam it guarded against: while the
+    // cooldown held, the cut just didn't happen and the new boss's damage kept piling into the still-
+    // open PREVIOUS segment; once the cooldown lifted, the delayed cut fired with priorCombat now true
+    // and banked the fight's own opening seconds as a "boss" TRASH archive (with a 60s Min gap, the
+    // first MINUTE of the fight). Replaced by ONE test pinning the opposite, now-correct contract:
+    // Inline_boss_cut_is_never_blocked_by_a_recent_archive.
 
     [Fact]
     public void TryBeginBossSegmentCut_fires_once_then_gates_until_rearm()
     {
         var e = new AutoArchiveEngine();
-        Assert.True(e.TryBeginBossSegmentCut(200_000));    // first boss this fight → cut permitted, marks segment active
-        Assert.False(e.TryBeginBossSegmentCut(200_000));   // segment active → one fight, one cut
+        Assert.True(e.TryBeginBossSegmentCut());    // first boss this fight → cut permitted, marks segment active
+        Assert.False(e.TryBeginBossSegmentCut());   // segment active → one fight, one cut
     }
 
     [Fact]
     public void TryBeginBossSegmentCut_blocked_when_boss_disabled()
     {
         var e = new AutoArchiveEngine { BossEnabled = false };
-        Assert.False(e.TryBeginBossSegmentCut(200_000));
+        Assert.False(e.TryBeginBossSegmentCut());
     }
 
     [Fact]
@@ -60,32 +66,32 @@ public partial class AutoArchiveEngineTests
     {
         var e = new AutoArchiveEngine();
         Assert.Null(e.Evaluate(Live()));                   // adopt flow version
-        Assert.True(e.TryBeginBossSegmentCut(200_000));    // first cut this run
-        Assert.False(e.TryBeginBossSegmentCut(200_000));   // gated within the run
+        Assert.True(e.TryBeginBossSegmentCut());    // first cut this run
+        Assert.False(e.TryBeginBossSegmentCut());   // gated within the run
         // Leaving the instanced run re-arms the segment latch (UpdateLatches, every tick).
         Assert.Null(e.Evaluate(Live() with { InstancedRun = false, BossPresent = false }));
-        Assert.True(e.TryBeginBossSegmentCut(200_000));    // next run's boss cuts fresh
+        Assert.True(e.TryBeginBossSegmentCut());    // next run's boss cuts fresh
     }
 
     [Fact]
-    public void Inline_boss_cut_respects_the_shared_cooldown()
+    public void Inline_boss_cut_is_never_blocked_by_a_recent_archive()
     {
-        // The inline path never consulted _lastArchiveMs, which is why the owner's log shows boss
-        // archives ONE SECOND apart despite a 5 s Min gap.
+        // REPLACES Inline_boss_cut_respects_the_shared_cooldown / Inline_boss_cut_is_allowed_before_
+        // any_archive_has_happened (finding 1, review round 2026-07-27 — see the banner comment above
+        // for the full withdrawal rationale). Mirrors the retired _respects_the_shared_cooldown test's
+        // exact shape (same OnArchived timing this used to gate on) with the assertion flipped: the
+        // spam the old cooldown check guarded against is already structurally impossible without it —
+        // a killed boss can never be re-adopted (KilledBossTracker.MarkKilled / IsKilled) and
+        // TryBeginBossSegmentCut cannot fire again while a segment is open (_bossSegmentActive) — so
+        // cut-spam would require ARCHIVE-spam, and Min gap still blocks that everywhere it always did
+        // (Evaluate's own fire gate, exercised by Cooldown_spans_all_triggers_including_manual_archives
+        // below). A boss pull must therefore cut immediately no matter how recently the previous
+        // archive landed (there is no more _lastArchiveMs consultation here at all, so "before any
+        // archive has happened" is no longer a distinct case either — nothing is ever consulted).
         var e = new AutoArchiveEngine { CooldownMs = 10_000 };
-        Assert.Null(e.Evaluate(Live()));
-        e.OnArchived(200_000, ArchiveReason.Wipe);
-        Assert.False(e.TryBeginBossSegmentCut(205_000));   // 5 s in — inside the cooldown
-        Assert.True(e.TryBeginBossSegmentCut(210_000));    // cooldown lifted
-    }
-
-    [Fact]
-    public void Inline_boss_cut_is_allowed_before_any_archive_has_happened()
-    {
-        // _lastArchiveMs == 0 means "no archive yet this session" — the first boss of a run must cut.
-        var e = new AutoArchiveEngine { CooldownMs = 10_000 };
-        Assert.Null(e.Evaluate(Live()));
-        Assert.True(e.TryBeginBossSegmentCut(1_000));
+        Assert.Null(e.Evaluate(Live()));            // adopt flow version
+        e.OnArchived(200_000, ArchiveReason.Wipe);  // arms the shared cooldown
+        Assert.True(e.TryBeginBossSegmentCut());    // 5 s in (would've been "inside the cooldown") — cuts anyway
     }
 
     // ---- shared gates ----
