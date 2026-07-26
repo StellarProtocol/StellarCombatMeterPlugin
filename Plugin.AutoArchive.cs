@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter.AutoArchive;
 
@@ -8,6 +7,11 @@ namespace Stellar.CombatMeter;
 // fact snapshot for the pure AutoArchiveEngine (~10 Hz, from OnUpdate's throttled region) and
 // fires ManualArchive(reason) when the engine decides a segment ended. ALL policy (arm/fire/
 // re-arm, cooldown, content guard) lives in the engine — this partial only reads services.
+//
+// Boss IDENTIFICATION (which entity is the tracked boss, its lifetime across a fight, and whether a
+// given event "involves" it) moved to the sibling Plugin.BossDetection.cs (Minor E, review round
+// 2026-07-27, second pass) to keep this file under the 500-LoC size gate. This file keeps the inline
+// cut's ORCHESTRATION (when to cut) — MaybeCutForBossPhase and its decision helpers.
 public sealed partial class Plugin
 {
     private readonly AutoArchiveEngine _autoArchive = new();
@@ -42,37 +46,6 @@ public sealed partial class Plugin
     // engine can't re-fire. _pendingArchiveArmedMs is the server clock when the trigger armed (cap base).
     private AutoArchive.ArchiveReason? _pendingArchiveReason;
     private long                       _pendingArchiveArmedMs;
-
-    // Boss observation cache: entity id -> IsBoss, resolved at most once per distinct entity
-    // (mirrors _replayMonsterInfo's contains-guard, Plugin.Replay.cs:163-169). BOUNDED: hard cap
-    // + cleared by Clear() — the FPS-leak lesson (never an unbounded per-mob dict in the field).
-    private const int MaxBossCheckEntries = 512;
-    private readonly Dictionary<EntityId, bool> _bossCheck = new();
-
-    // Bosses whose fight has already been observed dead THIS RUN — a corpse must never re-open a boss
-    // segment. Extracted to AutoArchive.KilledBossTracker (review round, 2026-07-26): the mark/consult/
-    // evict wiring is load-bearing and Plugin can't be instantiated in tests, so the pure state lives in
-    // its own class (see its doc for the loop this closes + the FIFO-evicts-oldest cap rationale) and
-    // only the two call sites below (mark in BossStatus, consult in CheckBossCandidate) stay here.
-    // Cleared at the scene boundary (Plugin.History.cs OnSceneChanged) — NOT by Clear(), which runs on
-    // every archive and would make the meter forget which bosses are already dead mid-run.
-    private readonly AutoArchive.KilledBossTracker _killedBosses = new();
-
-    // The currently-identified boss for trigger purposes. NOT cleared by Clear(): the framework's
-    // vitals cache outlives a plugin archive, so BossStatus keeps tracking the same boss across
-    // the boss-phase archive; scene resets / AOI disappear / the idle sweep wipe its vitals row,
-    // which BossStatus reads as "gone" (the re-arm signal).
-    private EntityId _autoArchiveBossId;
-
-    // Finding 3 (2026-07-27): the boss id the BossKill settle clock watches damage against (see
-    // IsSettleBossDamage). SEPARATE from _autoArchiveBossId — set at the same instant
-    // (CheckBossCandidate) but cleared by NEITHER the confirmed death (BossStatus) NOR Clear() (which
-    // runs on every banked archive, including the trash→boss bank that opens this very fight — the old
-    // _bossCheck-keyed condition got wiped right there and the clock never engaged for the whole
-    // fight). Only the scene boundary resets it (Plugin.History.cs OnSceneChanged), alongside
-    // _killedBosses. A corpse DoT tick on the dead boss still targets this id, correctly holding the
-    // settle window open.
-    private EntityId _settleBossId;
 
     // ---- settings accessors (the AutoUpload pattern, Plugin.LogUpload.cs:79-91: cached in the
     // engine, persisted on set; loaded once by InitAutoArchive from the ctor) ----
@@ -340,88 +313,6 @@ public sealed partial class Plugin
         }
     }
 
-    // Boss liveness for the engine. Gone = a REAL death observation (HasHpObservation) or the
-    // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
-    // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction): a death arms
-    // the engine's BossKill want, while an eviction is ignored — only an archive ends a segment.
-    //
-    // Finding 4 (2026-07-27): _autoArchiveBossId is cleared ONLY on a confirmed death
-    // (ShouldClearTrackedBoss), never on a transient eviction alone. Before this fix a mid-fight
-    // vitals-cache blink cleared the id same as a real death, but re-adoption is gated behind
-    // !bossSegmentActive (ShouldConsiderInlineBossCut), which stays closed for the WHOLE fight — so the
-    // id was never re-set, BossDead never rose again, and no BossKill ever fired for that fight (it
-    // only banked at the eventual run-end archive). Leaving the id in place lets the NEXT tick re-poll
-    // vitals for the SAME entity, so a recovered blink resumes with no re-detect needed. Do NOT instead
-    // move detection outside the !bossSegmentActive gate — a boss-tagged ADD would then get adopted
-    // while the real boss's death is momentarily cleared, and the add's own death would fire a
-    // spurious mid-fight BossKill.
-    //
-    // ACCEPTED RESIDUAL (not fixed, 2026-07-26): the mark below running BEFORE _autoArchiveBossId is
-    // cleared — the ordering that makes the whole fix correct — cannot itself be unit-tested (Plugin
-    // needs the IL2CPP service surface: _services.CombatLookup.GetVitals). What IS unit-tested
-    // headless: the tracker (KilledBossTrackerTests), ShouldAdoptBossCandidate, and
-    // ShouldClearTrackedBoss (all in AutoArchiveContentGuardTests). A known, named gap.
-    private (bool present, bool gone, bool dead) BossStatus()
-    {
-        if (_autoArchiveBossId.Value == 0) return (false, false, false);
-        var v = _services.CombatLookup.GetVitals(_autoArchiveBossId);
-        bool dead    = v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
-        bool evicted = !v.IsKnown;
-        if (dead || evicted)
-        {
-            // Mark BEFORE clearing — this is the only place that still knows which entity died. Never
-            // marks on a transient eviction, only a confirmed death.
-            if (dead && _killedBosses.MarkKilled(_autoArchiveBossId) is { } evictedBossId)
-                LogKilledBossEviction(evictedBossId, _autoArchiveBossId);
-            if (ShouldClearTrackedBoss(dead)) _autoArchiveBossId = default;
-            return (false, true, dead);
-        }
-        return (true, false, false);
-    }
-
-    /// <summary>Pure decision (finding 4): clear the tracked boss id ONLY on a confirmed death — a
-    /// transient eviction (a blink) must not, or the boss can never resume tracking while a segment
-    /// stays open (see BossStatus's doc). Unit-tested headless.</summary>
-    internal static bool ShouldClearTrackedBoss(bool confirmedDead) => confirmedDead;
-
-    // Called from OnCombatEvent (Plugin.Capture.cs) BEFORE the player-only early-out, next to
-    // NoteReplayEntity — same "both sides of every event" coverage the boss-HP feature uses.
-    private void ObserveAutoArchiveBoss(EntityId src, EntityId tgt)
-    {
-        if (!_autoArchive.BossEnabled || _autoArchiveBossId.Value != 0) return;
-        CheckBossCandidate(src);
-        if (_autoArchiveBossId.Value == 0) CheckBossCandidate(tgt);
-    }
-
-    private void CheckBossCandidate(EntityId id)
-    {
-        if (id.IsPlayer || id.Value == 0) return;
-        if (!_bossCheck.TryGetValue(id, out var isBoss))
-        {
-            if (_bossCheck.Count >= MaxBossCheckEntries) return;   // runaway guard (field id churn)
-            var info = _services.GameData.World.GetMonsterByEntity(id);
-            isBoss = info.HasValue && info.Value.IsBoss;           // ResolveBossEntity's exact test
-            _bossCheck[id] = isBoss;
-        }
-        if (!ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) return;
-        _autoArchiveBossId = id;
-        _settleBossId = id;   // finding 3: stamp the settle-clock id at the same instant — see its field doc
-    }
-
-    /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that
-    /// has not already been observed dead this run. Barring an already-killed boss is what stops the
-    /// post-kill cut loop (2026-07-26). Unit-tested headless.</summary>
-    internal static bool ShouldAdoptBossCandidate(bool isBoss, bool alreadyKilled)
-        => isBoss && !alreadyKilled;
-
-    /// <summary>Pure decision (finding 3): does this damage event belong to the BossKill settle clock?
-    /// Damage only (heals never count — owner ruling 2026-07-26: settle cares about DPS only), targeting
-    /// the adopted settle boss (survives Clear() and its own death — see the field's doc — so a corpse
-    /// DoT tick on the dead boss still counts). Zero-guard excludes "no boss adopted this run" (default
-    /// id). Unit-tested headless.</summary>
-    internal static bool IsSettleBossDamage(bool isHeal, EntityId targetId, EntityId settleBossId)
-        => !isHeal && settleBossId.Value != 0 && targetId == settleBossId;
-
     /// <summary>Pure decision (Task 7): on the first-detected boss hit, should the accumulated pre-boss
     /// trash be archived as its own boss-phase segment? Only when there WAS prior combat (trash) to
     /// bank — a direct engage (no combat before the boss) has nothing to archive, so it must NOT emit a
@@ -468,9 +359,18 @@ public sealed partial class Plugin
     // Hot-path safe: O(1), no allocation once a segment is active or boss auto-archive is off.
     private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
     {
+        // Fast-exit: boss auto-archive off, a segment is already active, or not in an instanced run.
         if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchive.BossSegmentActive, IsInstancedRun())) return;
-        ObserveAutoArchiveBoss(src, tgt);              // sets _autoArchiveBossId iff this event involves the boss (no-op if already set)
-        if (_autoArchiveBossId.Value == 0) return;     // this event didn't involve the boss — nothing to do
+        ObserveAutoArchiveBoss(src, tgt);   // adopts _autoArchiveBossId on this run's first sighting of the boss (no-op if already tracked)
+        // Critical A / Important B (review round 2026-07-27, second pass): an EXPLICIT "does this event
+        // touch the boss" test, not the old `_autoArchiveBossId.Value == 0` proxy. The proxy was only
+        // valid the instant ObserveAutoArchiveBoss had just set the id from THIS event — once the id
+        // survives past that (a still-alive boss after a wipe archive, or — before Critical A's fix — a
+        // stale id pinned past its own fight), the proxy read "a boss is tracked at all" as "this event
+        // is about the boss", so an unrelated event (a rez heal between two players on the wipe→retry
+        // run-back) reached the cut below and opened a spurious boss segment over trash. See
+        // EventInvolvesBoss (Plugin.BossDetection.cs) for the pinned cases.
+        if (!EventInvolvesBoss(src, tgt, _autoArchiveBossId)) return;
 
         long keepBeforeMs = BossKeepBeforeMs;
         bool preempting = ShouldPreemptPendingForBoss(_pendingArchiveReason is not null);
@@ -492,8 +392,12 @@ public sealed partial class Plugin
             // combat clock; EnsureCombatStarted below re-establishes it for the boss segment.
             ManualArchive(AutoArchive.ArchiveReason.BossPhase, replayUpperCapServerMs: firstHitMs - keepBeforeMs);
         }
-        // Start (trash→boss/preempt) or backdate (direct engage) the boss segment's clock at
-        // (firstHit − keepBefore). With keepBefore == 0 and direct engage this is a no-op refinement.
+        // Start (trash→boss/preempt) or backdate (direct engage) the boss segment's combat clock at
+        // (firstHit − keepBefore). In the trash/preempt case ManualArchive already Clear()ed (or is
+        // about to have banked) the prior segment's clock, so this establishes the fresh one; in direct
+        // engage it pre-empts OnCombatEvent's own EnsureCombatStarted(firstHit) so keepBefore is
+        // honoured. With keepBefore == 0 and direct engage this is identical to the normal
+        // EnsureCombatStarted(firstHit) — a no-op refinement.
         EnsureCombatStarted(firstHitMs - keepBeforeMs);
     }
 }

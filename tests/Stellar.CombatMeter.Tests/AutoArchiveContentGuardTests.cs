@@ -140,12 +140,23 @@ public class AutoArchiveContentGuardTests
     // fight, so a blink-cleared id was never re-set: no further BossDead could ever rise for that
     // fight, and it only ever banked at the eventual run-end/scene archive. The fix: clear ONLY on a
     // confirmed death.
+    //
+    // Critical A (review round 2026-07-27, second pass): finding 4's fix was too broad — clearing ONLY
+    // on confirmed death also means an eviction with NO segment open (the fight already ended via an
+    // earlier archive: a wipe, a scene change, a stage cut) never clears either, pinning the id to a
+    // dead-and-gone entity for the rest of the session (ObserveAutoArchiveBoss's `!= 0` early-out then
+    // blocks every later boss from ever being adopted again). ShouldClearTrackedBoss now takes the
+    // segment-active state too and clears whenever there is no open segment left to protect. All three
+    // reachable shapes are pinned below: death always clears; a blink WITH an open segment keeps (the
+    // finding-4 behaviour, unchanged); an eviction with NO open segment clears (the Critical A fix).
 
     [Fact]
     public void ShouldClearTrackedBoss_only_on_confirmed_death()
     {
-        Assert.True(Plugin.ShouldClearTrackedBoss(confirmedDead: true));
-        Assert.False(Plugin.ShouldClearTrackedBoss(confirmedDead: false));   // a transient eviction (blink) must not clear it
+        Assert.True(Plugin.ShouldClearTrackedBoss(confirmedDead: true, segmentActive: true));    // death clears regardless of segment state
+        Assert.True(Plugin.ShouldClearTrackedBoss(confirmedDead: true, segmentActive: false));
+        Assert.False(Plugin.ShouldClearTrackedBoss(confirmedDead: false, segmentActive: true));  // blink WITH an open segment keeps — the fight isn't over
+        Assert.True(Plugin.ShouldClearTrackedBoss(confirmedDead: false, segmentActive: false));  // eviction with NO open segment clears (Critical A)
     }
 
     // ---- finding 3 (review round 2026-07-27): which damage events feed the BossKill settle clock ----
@@ -165,5 +176,43 @@ public class AutoArchiveContentGuardTests
         Assert.False(Plugin.IsSettleBossDamage(isHeal: true, targetId: boss, settleBossId: boss));    // heals never count
         Assert.False(Plugin.IsSettleBossDamage(isHeal: false, targetId: add, settleBossId: boss));    // add cleanup, not the boss
         Assert.False(Plugin.IsSettleBossDamage(isHeal: false, targetId: default, settleBossId: default)); // no boss ever adopted this run
+    }
+
+    // ---- Critical A / Important B (review round 2026-07-27, second pass): EventInvolvesBoss replaces
+    // the `_autoArchiveBossId.Value == 0` proxy in MaybeCutForBossPhase (Plugin.AutoArchive.cs). The
+    // proxy read "a boss is tracked at all" as "this event is about the boss" — valid only the instant
+    // the id was just set FROM this same event. Once the id survives past that moment (a still-alive
+    // boss after a wipe archive, or a stale id that used to pin forever pre-Critical-A), the proxy let
+    // ANY subsequent event reach the inline cut. EventInvolvesBoss checks the actual src/tgt instead.
+
+    [Fact]
+    public void EventInvolvesBoss_true_when_source_is_boss()
+        => Assert.True(Plugin.EventInvolvesBoss(new EntityId(555), new EntityId(1), new EntityId(555)));
+
+    [Fact]
+    public void EventInvolvesBoss_true_when_target_is_boss()
+        => Assert.True(Plugin.EventInvolvesBoss(new EntityId(1), new EntityId(555), new EntityId(555)));
+
+    [Fact]
+    public void EventInvolvesBoss_false_when_neither_side_is_the_boss()
+        => Assert.False(Plugin.EventInvolvesBoss(new EntityId(1), new EntityId(2), new EntityId(555)));
+
+    [Fact]
+    public void EventInvolvesBoss_false_when_no_boss_ever_adopted()
+        => Assert.False(Plugin.EventInvolvesBoss(new EntityId(1), new EntityId(2), default));
+
+    // Important B regression pin: after a wipe archive closes the segment and Clear()s, _autoArchiveBossId
+    // still holds the SURVIVING boss (Clear() spares it on purpose — the boss is still alive, still the
+    // same fight's boss). The old proxy treated the run-back's first event — a rez heal between two
+    // players, nothing to do with the boss — as "involves the boss" merely because a boss id was tracked,
+    // which let MaybeCutForBossPhase open a spurious boss segment over the run-back trash (banking
+    // nothing, and leaving the real first hit on the boss with a segment already open so it never cuts).
+    [Fact]
+    public void EventInvolvesBoss_wipe_then_retry_rez_heal_does_not_involve_the_surviving_boss()
+    {
+        var survivingBoss = new EntityId(555);
+        var healer        = new EntityId(1);
+        var downedAlly    = new EntityId(2);
+        Assert.False(Plugin.EventInvolvesBoss(healer, downedAlly, survivingBoss));
     }
 }

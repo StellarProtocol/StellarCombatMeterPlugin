@@ -73,6 +73,16 @@ public sealed partial class Plugin
         // way _killedBosses is — a fresh run's boss is a new identity even if it shares an entity uuid
         // range, and this must not survive into it stale. Also deliberately NOT in Clear().
         _settleBossId = default;
+        // Critical A (review round 2026-07-27, second pass): the tracked boss id gets the SAME per-run
+        // reset as its two siblings above. Before this fix, a run that ended without the tracked boss
+        // ever being observed at hp<=0 (wipe-and-leave — the owner's normal loop, an abandoned pull, a
+        // fail-out, the boss despawning on reset) left _autoArchiveBossId pinned to a dead-and-gone
+        // entity for the REST OF THE SESSION: ObserveAutoArchiveBoss's `!= 0` early-out then blocks every
+        // later boss — in this run or the next one — from ever being adopted again, so no BossKill (and
+        // no settle-boss damage, since _settleBossId above depends on the same adoption path) ever fires
+        // again. Scoping this to the scene boundary is what makes a fresh dungeon in the same session
+        // detect its own boss normally.
+        _autoArchiveBossId = default;
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;
