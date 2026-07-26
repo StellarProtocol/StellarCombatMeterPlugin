@@ -315,8 +315,11 @@ public sealed partial class Plugin
 
     // Boss liveness for the engine. Gone = a REAL death observation (HasHpObservation) or the
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
-    // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction) — the engine's
-    // BossRecutOnRedetect=false default re-arms only on dead, not on any gone (Task 1).
+    // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction) — as of Task 2
+    // (2026-07-26) a confirmed death arms the engine's deferred BossKill want (fired through the
+    // caller's settle window, see IsDeferrableArchive), while a transient eviction (gone but not dead)
+    // is ignored entirely. Neither ends the boss segment directly any more — only an actual archive
+    // (via OnArchived) does.
     private (bool present, bool gone, bool dead) BossStatus()
     {
         if (_autoArchiveBossId.Value == 0) return (false, false, false);

@@ -690,6 +690,23 @@ public class AutoArchiveEngineTests
     }
 
     [Fact]
+    public void An_intervening_archive_consumes_the_pending_bosskill()
+    {
+        // The race OnArchived already guards for _stagePending: the boss dies and arms the want, but
+        // another archive — a manual hotkey press, a wipe — closes the segment before the deferred
+        // BossKill fires. The want must not survive to bank a stale archive against a segment that is
+        // already closed, and already banked by that intervening archive.
+        var e = new AutoArchiveEngine { CooldownMs = 10_000, IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(200_000));
+        e.OnArchived(200_000, ArchiveReason.BossPhase);   // trash bank: cooldown armed, segment stays open
+        var dead = Live(nowMs: 205_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Null(e.Evaluate(in dead));                 // cooldown suppresses the fire; want is latched
+        e.OnArchived(206_000, ArchiveReason.Manual);      // owner presses Archive — the segment closes here
+        Assert.Null(e.Evaluate(Live(nowMs: 216_000) with { BossPresent = false }));   // no stale BossKill
+    }
+
+    [Fact]
     public void Transient_eviction_never_ends_the_segment()
     {
         // A mid-fight AOI/vitals blink archives nothing, so it must not re-open the cut. Replaces the

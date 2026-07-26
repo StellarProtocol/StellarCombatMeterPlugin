@@ -234,10 +234,10 @@ internal sealed class AutoArchiveEngine
     /// themselves (inline BossPhase, and now BossKill) — reports here: arms the shared cooldown and
     /// closes the running boss segment (2026-07-26, Task 2 — see the unconditional-except-BossPhase rule
     /// below), so the NEXT boss sighting cuts a fresh segment. Also consumes any pending stage transition
-    /// (see <see cref="_stagePending"/>): an overlapping transition that lost the race to another trigger
-    /// must not resurface as a stale StageChange archive later. Wipe needs no bookkeeping here —
-    /// <c>_wipeArchived</c>'s recovery clear and <c>_prevOutcomeFailed</c>'s edge stamp both live in
-    /// <see cref="Evaluate"/>.</summary>
+    /// (see <see cref="_stagePending"/>) and any pending boss-kill want (see <see cref="_bossKillWanted"/>):
+    /// an overlapping transition/want that lost the race to another trigger must not resurface as a stale
+    /// archive later. Wipe needs no bookkeeping here — <c>_wipeArchived</c>'s recovery clear and
+    /// <c>_prevOutcomeFailed</c>'s edge stamp both live in <see cref="Evaluate"/>.</summary>
     public void OnArchived(long nowMs, ArchiveReason reason)
     {
         _lastArchiveMs = nowMs;
@@ -246,6 +246,13 @@ internal sealed class AutoArchiveEngine
         // let the still-present boss immediately re-cut (controller-approved reading, 2026-07-17).
         if (reason != ArchiveReason.BossPhase) _bossSegmentActive = false;
         _stagePending = false;
+        // Same race _stagePending already guards against (2026-07-26, review round): the boss dies and
+        // arms _bossKillWanted, but before the deferred BossKill fires (a window as wide as the shared
+        // cooldown), another archive — a manual hotkey press, a wipe, a stage change — wins the race and
+        // closes the segment. That archive already banked the fight; a BossKill firing afterwards would
+        // have nothing left to bank — exactly the stale, spurious archive this task exists to eliminate.
+        // Pinned by An_intervening_archive_consumes_the_pending_bosskill.
+        _bossKillWanted = false;
     }
 
     // Re-arm / adoption bookkeeping that must run before the fire gates on EVERY tick — including
