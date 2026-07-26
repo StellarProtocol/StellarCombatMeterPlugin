@@ -221,11 +221,14 @@ internal sealed class AutoArchiveEngine
     /// active when no segment is active; false when boss auto-archive is off or a segment is already
     /// running.
     /// <para><paramref name="nowMs"/> (2026-07-26, Task 2): accepted now so the signature is in place for
-    /// the Task 3 cooldown check (a minimum gap between successive boss cuts) — not read here yet.</para>
+    /// the Task 3 cooldown check (a minimum gap between successive boss cuts).</para>
     /// </summary>
     public bool TryBeginBossSegmentCut(long nowMs)
     {
         if (!BossEnabled || _bossSegmentActive) return false;
+        // The inline cut is the one archive path that used to bypass the shared cooldown entirely
+        // (2026-07-26). Same gate Evaluate uses, same _lastArchiveMs, so Min gap now spans every path.
+        if (_lastArchiveMs != 0 && nowMs - _lastArchiveMs < CooldownMs) return false;
         _bossSegmentActive = true;
         return true;
     }

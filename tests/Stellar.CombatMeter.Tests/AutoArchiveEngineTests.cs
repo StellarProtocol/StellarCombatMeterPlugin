@@ -336,6 +336,27 @@ public class AutoArchiveEngineTests
         Assert.True(e.TryBeginBossSegmentCut(200_000));    // next run's boss cuts fresh
     }
 
+    [Fact]
+    public void Inline_boss_cut_respects_the_shared_cooldown()
+    {
+        // The inline path never consulted _lastArchiveMs, which is why the owner's log shows boss
+        // archives ONE SECOND apart despite a 5 s Min gap.
+        var e = new AutoArchiveEngine { CooldownMs = 10_000 };
+        Assert.Null(e.Evaluate(Live()));
+        e.OnArchived(200_000, ArchiveReason.Wipe);
+        Assert.False(e.TryBeginBossSegmentCut(205_000));   // 5 s in — inside the cooldown
+        Assert.True(e.TryBeginBossSegmentCut(210_000));    // cooldown lifted
+    }
+
+    [Fact]
+    public void Inline_boss_cut_is_allowed_before_any_archive_has_happened()
+    {
+        // _lastArchiveMs == 0 means "no archive yet this session" — the first boss of a run must cut.
+        var e = new AutoArchiveEngine { CooldownMs = 10_000 };
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut(1_000));
+    }
+
     // ---- overlap: a banked stage transition must not survive an overlapping archive ----
 
     [Fact]
