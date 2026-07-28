@@ -108,6 +108,14 @@ public sealed partial class Plugin
     /// — there is nothing left to protect, and pinning here is exactly what left the id stuck on a
     /// dead-and-gone entity for the rest of the session (Critical A).</item>
     /// </list>
+    /// <para><b>DO NOT "simplify" the second term away.</b> The gone-timeout P0 fix
+    /// (<see cref="AutoArchive.AutoArchiveEngine.BossGoneTimeoutMs"/>, 2026-07-28) rides on the middle
+    /// case: its streak needs <c>BossGone</c> to stay TRUE across consecutive ticks, which only happens
+    /// while <see cref="BossStatus"/> still holds the evicted id — i.e. while a segment is open. Revert
+    /// this to a bare <c>confirmedDead</c> and <c>BossStatus</c> returns all-false from the second tick,
+    /// the streak resets every tick, the timeout never fires, and the owner's raid wedges again — with
+    /// NO failing test, because the engine tests inject <c>BossGone</c> directly rather than deriving it
+    /// through this method, so the composition is untested by construction.</para>
     /// Unit-tested headless.</summary>
     internal static bool ShouldClearTrackedBoss(bool confirmedDead, bool segmentActive)
         => confirmedDead || !segmentActive;

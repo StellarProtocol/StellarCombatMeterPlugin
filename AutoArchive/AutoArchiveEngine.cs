@@ -90,6 +90,22 @@ internal sealed class AutoArchiveEngine
     // clears. Picked mid-range of the owner-specified 3-5 s window: comfortably above any observed
     // blink, comfortably below the time it takes a raid party to reach the next stage's boss, so the
     // segment is already closed well before that boss's opener would otherwise wait on it.
+    //
+    // COUPLING (do not break): the streak below needs BossGone to stay TRUE across consecutive ticks,
+    // which requires Plugin.BossDetection.cs's ShouldClearTrackedBoss to RETAIN the evicted id while a
+    // segment is open (its `|| !segmentActive` term). Simplify that predicate back to a bare
+    // confirmedDead and this timeout silently stops firing — the P0 raid wedge returns with no failing
+    // test, because these engine tests inject BossGone directly instead of deriving it. See that
+    // method's doc for the other half of this note.
+    //
+    // KNOWN RESIDUAL (review 2026-07-28, watch item): BossGone means "not in my AOI", which duration
+    // cannot tell apart from "despawned". A sustained AOI absence — the local player dead at the
+    // entrance, or displaced by a mechanic, for >= this window — can therefore end a fight that is
+    // still running, splitting it into two archives. Strictly better than the pre-branch behaviour it
+    // replaces (BossGone re-armed INSTANTLY, no debounce at all), and self-identifying in the log via
+    // cause=timeout. The candidate gate — only accumulate the streak while the damage clock is already
+    // quiet — is NOT free: it would suppress the timeout whenever the raid fights adds straight after a
+    // scripted kill, reopening the P0. Needs a field data point before it is applied.
     internal const long BossGoneTimeoutMs = 4_000;
 
     // Master enable (Fix 1, review round): the on/off gate used to live ONLY in Plugin.AutoArchive.cs
