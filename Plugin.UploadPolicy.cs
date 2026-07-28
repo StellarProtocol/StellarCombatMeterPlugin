@@ -29,10 +29,16 @@ public sealed partial class Plugin
     internal static int ParseMapId(string? sceneName)
         => int.TryParse(sceneName ?? "", NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) ? id : 0;
 
+    /// <summary>Kind of an ARCHIVED entry, from its STORED scene name — never the live scene, so a
+    /// deferred / manual / re-upload resolves the kind the run had when it was archived (spec § 2.3).
+    /// Pure static seam: Plugin cannot be instantiated headless, so this is what the tests pin.</summary>
+    internal static ContentKind ResolveKind(ContentKindMap map, EncounterHistoryEntry entry)
+        => map.KindOf(ParseMapId(entry.SceneName));
+
     /// <summary>Kind of an ARCHIVED entry, from its stored scene name — so a deferred / manual /
     /// re-upload resolves the kind the run had when it was archived, not the live scene (spec § 2.3).</summary>
     internal ContentKind ResolveKind(EncounterHistoryEntry entry)
-        => _contentKinds.KindOf(ParseMapId(entry.SceneName));
+        => ResolveKind(_contentKinds, entry);
 
     internal UploadPolicyState UploadPolicyFor(ContentKind kind, UploadArtifact artifact)
         => _uploadPolicy[kind, artifact];

@@ -173,6 +173,11 @@ public sealed partial class Plugin
         if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
         {
             LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Manual, state);
+            // Failed is reused deliberately (no new persisted phase value) for this non-transient
+            // refusal, exactly like the LevelUuid==0 case below — without this the History row shows
+            // nothing and a click against an `off` cell looks like it did nothing at all.
+            _uploadStatus.Set(entry, UploadPhase.Failed);
+            _uploadStateDirty = true;
             return;
         }
 
