@@ -38,24 +38,18 @@ public sealed partial class Plugin
     // being observed at hp<=0 (wipe-and-leave — the owner's normal loop, an abandoned pull, a fail-out,
     // the boss despawning on reset) used to leave this id pinned to a dead-and-gone entity for the REST
     // OF THE SESSION — ObserveAutoArchiveBoss's `!= 0` early-out then blocks every later boss from ever
-    // being adopted again, silently disabling BossKill (and the settle clock, which rides on the same
-    // adoption) for every later fight. Fixed two ways: (1) the scene boundary (Plugin.History.cs
-    // OnSceneChanged) now resets this alongside _settleBossId and _killedBosses — a fresh run's boss is
-    // a new identity, so this must not survive into it stale; (2) within the SAME run (no scene change —
-    // a wipe-and-retry on a boss that is still alive), ShouldClearTrackedBoss now also clears on an
-    // eviction that has no open segment to protect, instead of pinning forever whenever the boss is
-    // never confirmed dead.
+    // being adopted again, silently disabling BossKill for every later fight. Fixed two ways: (1) the
+    // scene boundary (Plugin.History.cs OnSceneChanged) now resets this alongside _killedBosses — a
+    // fresh run's boss is a new identity, so this must not survive into it stale; (2) within the SAME
+    // run (no scene change — a wipe-and-retry on a boss that is still alive), ShouldClearTrackedBoss now
+    // also clears on an eviction that has no open segment to protect, instead of pinning forever
+    // whenever the boss is never confirmed dead.
+    //
+    // RETIRED sibling (owner ruling 2026-07-28, defect 2): a separate _settleBossId used to ride on this
+    // same adoption to drive a boss-targeted settle clock (finding 3, 2026-07-27). That narrowing is
+    // withdrawn — see Plugin.AutoArchive.cs's retired-SettleClockMs note — so _settleBossId,
+    // _lastBossDamageMs, and IsSettleBossDamage are all deleted; this field alone now drives adoption.
     private EntityId _autoArchiveBossId;
-
-    // Finding 3 (2026-07-27): the boss id the BossKill settle clock watches damage against (see
-    // IsSettleBossDamage). SEPARATE from _autoArchiveBossId — set at the same instant
-    // (CheckBossCandidate) but cleared by NEITHER the confirmed death (BossStatus) NOR Clear() (which
-    // runs on every banked archive, including the trash→boss bank that opens this very fight — the old
-    // _bossCheck-keyed condition got wiped right there and the clock never engaged for the whole
-    // fight). Only the scene boundary resets it (Plugin.History.cs OnSceneChanged), alongside
-    // _killedBosses. A corpse DoT tick on the dead boss still targets this id, correctly holding the
-    // settle window open.
-    private EntityId _settleBossId;
 
     // Boss liveness for the engine. Gone = a REAL death observation (HasHpObservation) or the
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
@@ -139,7 +133,6 @@ public sealed partial class Plugin
         }
         if (!ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) return;
         _autoArchiveBossId = id;
-        _settleBossId = id;   // finding 3: stamp the settle-clock id at the same instant — see its field doc
     }
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that
@@ -147,14 +140,6 @@ public sealed partial class Plugin
     /// post-kill cut loop (2026-07-26). Unit-tested headless.</summary>
     internal static bool ShouldAdoptBossCandidate(bool isBoss, bool alreadyKilled)
         => isBoss && !alreadyKilled;
-
-    /// <summary>Pure decision (finding 3): does this damage event belong to the BossKill settle clock?
-    /// Damage only (heals never count — owner ruling 2026-07-26: settle cares about DPS only), targeting
-    /// the adopted settle boss (survives Clear() and its own death — see the field's doc — so a corpse
-    /// DoT tick on the dead boss still counts). Zero-guard excludes "no boss adopted this run" (default
-    /// id). Unit-tested headless.</summary>
-    internal static bool IsSettleBossDamage(bool isHeal, EntityId targetId, EntityId settleBossId)
-        => !isHeal && settleBossId.Value != 0 && targetId == settleBossId;
 
     /// <summary>Pure decision (Critical A, review round 2026-07-27, second pass): does this combat event
     /// actually involve the tracked boss — as opposed to a boss merely being tracked at all? Replaces the

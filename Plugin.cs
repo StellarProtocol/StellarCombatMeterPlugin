@@ -92,14 +92,18 @@ public sealed partial class Plugin : IStellarPlugin
 
     private readonly IConfigSection _prefs;
 
-    // Combat-timer state (unix ms).
+    // Combat-timer state (unix ms). _lastDamageMs also DOUBLES as the settle-window clock for EVERY
+    // deferrable auto-archive reason, BossKill included (owner ruling 2026-07-28, superseding
+    // 2026-07-26's boss-targeted narrowing — see Plugin.AutoArchive.cs's retired-SettleClockMs note and
+    // the 2026-07-26-combatmeter-bosskill-settle-design.md spec's corrected §2.6): only ever stamped by
+    // AccumulateDamage (player-source, non-heal damage — see its call site in OnCombatEvent), so heals
+    // still never count, matching the half of the 2026-07-26 ruling that stands. A dedicated
+    // boss-targeted clock (_lastBossDamageMs / _settleBossId / IsSettleBossDamage) used to narrow the
+    // window for BossKill specifically; it is RETIRED — adds/DoTs elsewhere kept that narrower clock
+    // quiet while still landing damage that should have held the window open, spilling into the head of
+    // the FOLLOWING archive (owner: "there's mini dps that left to early of 2,4,6").
     private long _combatStartMs;
     private long _lastDamageMs;
-    // Last damage event whose TARGET was a known boss. The settle window for a BossKill archive watches
-    // THIS clock, not all combat: after the kill, players cleaning up adds must not hold the boss
-    // fight's archive open, while a trailing DoT tick on the boss itself must (owner ruling 2026-07-26,
-    // "the settle time only care about DPS — if no DPS to boss left, start settle time as configured").
-    private long _lastBossDamageMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
     private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
                                             // run-id change (e.g. a fail-out to a new scene) that can precede archive.
@@ -342,7 +346,6 @@ public sealed partial class Plugin : IStellarPlugin
         _combatActive  = false;
         _combatStartMs = 0;
         _lastDamageMs  = 0;
-        _lastBossDamageMs = 0;
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
@@ -353,7 +356,7 @@ public sealed partial class Plugin : IStellarPlugin
         // walk-in-clip root cause, proven 2026-07-19). The recorder is a per-RUN capture: it resets
         // ONLY at true run end (scene-leave / run-id change) via ResetReplay, and each banked archive
         // uploads a watermark window without stopping it. See _replayWatermarkMs / ResetReplay.
-        _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId + _settleBossId survive on purpose (see their docs)
+        _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
     }
 
     private double EncounterElapsedSeconds()

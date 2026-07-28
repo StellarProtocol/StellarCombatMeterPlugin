@@ -28,19 +28,6 @@ public sealed partial class Plugin
         bool priorCombat = _combatActive;
         MaybeCutForBossPhase(d.SourceId, d.TargetId, d.TimestampMs, priorCombat);
 
-        // Boss-targeted damage clock for the BossKill settle window (see SettleClockMs). Reads
-        // _settleBossId — set once at adoption (CheckBossCandidate) and NOT cleared by the boss's own
-        // death or by Clear() (finding 3, review round 2026-07-27: the previous _bossCheck-keyed
-        // condition read a cache that Clear() wipes on every banked archive, including the trash→boss
-        // bank that OPENS the very fight this clock is supposed to watch — so the clock never engaged
-        // for the whole fight and silently fell back to the all-targets damage clock). The decision
-        // itself is pure and unit-tested headless (IsSettleBossDamage); which field feeds it here is an
-        // ACCEPTED RESIDUAL (documented, not fixed) — Plugin cannot be instantiated in tests (same
-        // limitation BossStatus's ordering hits), so nothing headless can drive a real CombatEvent
-        // through OnCombatEvent to prove this call site is reached only on boss-targeted damage.
-        if (IsSettleBossDamage(d.IsHeal, d.TargetId, _settleBossId))
-            _lastBossDamageMs = d.TimestampMs;
-
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
         // the latch lived in AccumulateDamage, so an encounter that opened with a heal or an incoming hit
         // dropped those events from the timeline (the `if (_combatActive)` guards were unsatisfied) and

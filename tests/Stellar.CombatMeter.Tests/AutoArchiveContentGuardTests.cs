@@ -159,24 +159,23 @@ public class AutoArchiveContentGuardTests
         Assert.True(Plugin.ShouldClearTrackedBoss(confirmedDead: false, segmentActive: false));  // eviction with NO open segment clears (Critical A)
     }
 
-    // ---- finding 3 (review round 2026-07-27): which damage events feed the BossKill settle clock ----
+    // ---- finding 3 (review round 2026-07-27), RETIRED (owner ruling 2026-07-28, defect 2 of the
+    // bosskill-settle branch's raid-testing fixes) ----
     // The old wiring (Plugin.Capture.cs) stamped _lastBossDamageMs off _bossCheck[TargetId] — a cache
     // Clear() wipes on every banked archive, including the trash→boss bank that OPENS the very fight
-    // the clock is meant to watch, so the clock never engaged for the whole fight. The fix reads a
-    // dedicated _settleBossId that survives both Clear() and the boss's own death.
-
-    [Fact]
-    public void IsSettleBossDamage_true_only_for_damage_targeting_the_settle_boss()
-    {
-        var boss = new EntityId(555);
-        var add  = new EntityId(1);
-        // A corpse DoT tick on the DEAD boss still counts — settleBossId is never cleared by the death,
-        // only by a scene boundary — which is exactly what holds the settle window open post-kill.
-        Assert.True(Plugin.IsSettleBossDamage(isHeal: false, targetId: boss, settleBossId: boss));
-        Assert.False(Plugin.IsSettleBossDamage(isHeal: true, targetId: boss, settleBossId: boss));    // heals never count
-        Assert.False(Plugin.IsSettleBossDamage(isHeal: false, targetId: add, settleBossId: boss));    // add cleanup, not the boss
-        Assert.False(Plugin.IsSettleBossDamage(isHeal: false, targetId: default, settleBossId: default)); // no boss ever adopted this run
-    }
+    // the clock is meant to watch, so the clock never engaged for the whole fight. Finding 3's fix
+    // (2026-07-27) introduced a dedicated _settleBossId that survived both Clear() and the boss's own
+    // death, and IsSettleBossDamage(isHeal, targetId, settleBossId) decided which events fed the
+    // boss-only settle clock. That whole narrowing is now WITHDRAWN: the owner reported residual damage
+    // spilling into the head of the FOLLOWING archive ("there's mini dps that left to early of
+    // 2,4,6") because adds/DoTs elsewhere kept the boss-only clock quiet while still landing damage
+    // that should have held the window open. The settle window now watches the SAME general damage
+    // clock for every reason (Plugin.AutoArchive.cs's retired-SettleClockMs note has the full story) —
+    // there is no more "does this event belong to the boss-specific clock" decision to make, so
+    // IsSettleBossDamage, _settleBossId, and _lastBossDamageMs are all deleted along with this test
+    // (IsSettleBossDamage_true_only_for_damage_targeting_the_settle_boss). Heals still never count —
+    // that part of the ruling stands, now expressed simply by _lastDamageMs only ever being stamped by
+    // AccumulateDamage (non-heal player damage).
 
     // ---- Critical A / Important B (review round 2026-07-27, second pass): EventInvolvesBoss replaces
     // the `_autoArchiveBossId.Value == 0` proxy in MaybeCutForBossPhase (Plugin.AutoArchive.cs). The
