@@ -50,7 +50,8 @@ public sealed partial class Plugin
     private void ToggleArchiveSettings() => _archiveSettingsWindow.SetVisible(!_archiveSettingsWindow.IsShown);
 
     private HudElement BuildAutoArchiveSettingsRoot()
-        => new ColumnElement(new HudElement[]
+    {
+        var rows = new List<HudElement>
         {
             new TextElement(() => "Auto archive", Emphasis: true),
             ToggleRow("Auto-archive (off = manual only)", () => AutoArchiveEnabled, v => AutoArchiveEnabled = v),
@@ -77,40 +78,84 @@ public sealed partial class Plugin
 
             new SeparatorElement(),
             new TextElement(() => "Uploads", Emphasis: true),
-            ToggleRow("Auto-upload runs", AllStatsAuto, SetAllStatsPolicy),
-            ToggleRow("Upload replay position track (dungeon/raid)", AllReplayAuto, SetAllReplayPolicy),
-        }, Gap: 4f);
-
-    // ---- Uploads section: interim bindings for the two retired global upload flags ----
-    // Both globals are gone (spec § 2.2: logUpload.autoUpload and logUpload.uploadReplay); each row
-    // above now drives all FOUR cells of its artifact column at once so the owner's existing switches
-    // keep working — and keep meaning exactly what they mean today — until Task 9 replaces both rows
-    // with the 4 × 2 tri-state grid. Reads the in-memory table only (no prefs I/O on the settings poll).
-    //
-    // The OFF value differs per artifact, mirroring the legacy migration exactly (UploadPolicyTable.
-    // Migrate): stats OFF writes `manual`, preserving the hand push the old flag left available; replay
-    // OFF writes `off`, because the old flag's OFF also stopped capture outright.
-    private bool AllStatsAuto() => AllAutoFor(UploadArtifact.Stats);
-
-    private void SetAllStatsPolicy(bool auto)
-        => SetAllFor(UploadArtifact.Stats, auto ? UploadPolicyState.Auto : UploadPolicyState.Manual);
-
-    private bool AllReplayAuto() => AllAutoFor(UploadArtifact.Replay);
-
-    private void SetAllReplayPolicy(bool on)
-        => SetAllFor(UploadArtifact.Replay, on ? UploadPolicyState.Auto : UploadPolicyState.Off);
-
-    private bool AllAutoFor(UploadArtifact artifact)
-    {
-        foreach (var kind in UploadPolicyTable.Kinds)
-            if (UploadPolicyFor(kind, artifact) != UploadPolicyState.Auto) return false;
-        return true;
+        };
+        rows.AddRange(UploadsSection());
+        // Scroll the whole pane. MEASURED (tools/run-ui-sandbox.sh combatmeter-settings-full-window-ugui):
+        // after the Uploads section grew from 2 toggle rows to 8 pill rows + 3 headers, the pane's content
+        // is 810px in an 833px window — against a DefaultRect height of 620f, so ~213px would have been
+        // unreachable. Raising DefaultRect alone would NOT have fixed it: every existing install already
+        // has a persisted 620f rect, and this window is not resizable, so they would still be clipped.
+        // A scroll viewport is reachable at any persisted height.
+        return new ScrollElement(new ColumnElement(rows, Gap: 4f), SettingsScrollHeight);
     }
 
-    private void SetAllFor(UploadArtifact artifact, UploadPolicyState state)
+    // Viewport height for the settings pane's scroll. Sized to sit inside the 620f DefaultRect with room
+    // for the GlassMenu title bar and the pane's own 11/12px vertical padding (measured).
+    private const float SettingsScrollHeight = 540f;
+
+    // ---- Uploads section: the per-content grid (spec § 2.5) ----
+    // Eight cells — four content kinds × {run stats, replay position track} — laid out as two labelled
+    // four-row groups rather than one 4 × 2 block of tri-states. Same eight cells either way, but this
+    // shape lets every cell reuse PillRow's exact geometry (label Width 96f, pill Width 48f, Gap 6f), so
+    // the section matches the option-row idiom the rest of this pane already uses and needs no widening
+    // of the 380f window. Geometry confirmed by tools/run-ui-sandbox.sh measurement, not by eye.
+    //
+    // Run stats are TRI-state (auto/manual/off). Replay is TWO-state (auto/off) — owner ruling
+    // 2026-07-28: a `manual` replay cell cannot upload on any path, because the retained re-upload
+    // payload takes its positions from the archive-time doc, which is null under `manual`; offering it
+    // would be a control that silently does nothing while still paying the 2 Hz position probe. Spec
+    // § 2.2 already reasoned this way when it seeded legacy uploadReplay=false to `off`, not `manual`.
+    //
+    // The "(dungeon/raid)" parenthetical the old replay toggle carried is GONE: it misdescribed
+    // behaviour. World Dominator (7150/7151/7152) is SceneType 2 / SubType 5 — the same instanced
+    // classification as dungeons and raids — so world-boss replays already capture and upload.
+    private HudElement[] UploadsSection()
     {
-        foreach (var kind in UploadPolicyTable.Kinds)
-            SetUploadPolicy(kind, artifact, state);
+        var rows = new List<HudElement>
+        {
+            new TextElement(() => "   auto = uploads itself · manual = only when you press upload · off = never.", MutedCol),
+            new TextElement(() => "Run stats", Emphasis: true),
+        };
+        foreach (var kind in UploadPolicyTable.Kinds) rows.Add(PolicyRow(kind, UploadArtifact.Stats));
+        rows.Add(new TextElement(() => "Replay position track", Emphasis: true));
+        foreach (var kind in UploadPolicyTable.Kinds) rows.Add(PolicyRow(kind, UploadArtifact.Replay));
+        return rows.ToArray();
+    }
+
+    // Tri-state states for run stats; two-state for replay (see UploadsSection). Mirrors PillRow's
+    // geometry exactly. `Active` is read LIVE on every poll — never captured at build time — so the
+    // highlighted pill tracks the value actually in effect, the same contract PillRow documents.
+    private static readonly UploadPolicyState[] StatsStates =
+        { UploadPolicyState.Auto, UploadPolicyState.Manual, UploadPolicyState.Off };
+
+    private static readonly UploadPolicyState[] ReplayStates =
+        { UploadPolicyState.Auto, UploadPolicyState.Off };
+
+    // WIDER than PillRow's 48f, which was sized for "30s"/"120s". MEASURED: at 48f the word "manual"
+    // wraps to two lines inside its pill ("manu/al") — caught by the sandbox render, invisible in the
+    // measurement JSON. 60f holds it on one line and the row still fits: 8 (spacer) + 96 (label)
+    // + 3 x 60 (pills) + 4 x 6 (gaps) = 308px against 366px of inner pane width.
+    private const float PolicyPillWidth = 60f;
+
+    private HudElement PolicyRow(ContentKind kind, UploadArtifact artifact)
+    {
+        var kids = new List<HudElement>
+        {
+            new SpacerElement(Width: 8f),
+            new TextElement(() => UploadPolicy.Label(kind), MutedCol, Width: 96f),
+        };
+        var states = artifact == UploadArtifact.Replay ? ReplayStates : StatsStates;
+        for (var i = 0; i < states.Length; i++)
+        {
+            // Replay has no `manual`, so hold that middle column open with a spacer: `off` then lands
+            // under the stats rows' `off` and the two groups read as one grid instead of two ragged
+            // lists. This is the layout the owner approved on 2026-07-28.
+            if (artifact == UploadArtifact.Replay && i == 1) kids.Add(new SpacerElement(Width: PolicyPillWidth));
+            var s = states[i];
+            kids.Add(new ButtonElement(() => UploadPolicy.Format(s), () => SetUploadPolicy(kind, artifact, s),
+                Active: () => UploadPolicyFor(kind, artifact) == s, Width: PolicyPillWidth));
+        }
+        return new RowElement(kids.ToArray(), Gap: 6f);
     }
 
     // "Last archive: {tag} · {n}s ago" readout — reads LastArchive (Plugin.AutoArchive.cs, set by

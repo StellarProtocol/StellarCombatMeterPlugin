@@ -85,6 +85,7 @@ public sealed partial class Plugin
     private void InitUploadPolicy()
     {
         LoadOrMigrateUploadPolicy();
+        NormalizeReplayManualToOff();
         _contentKinds = ContentKindMap.FromIds(
             _prefs.Get<int[]>(PrefKindMapDungeon, null),
             _prefs.Get<int[]>(PrefKindMapRaid, null),
@@ -118,6 +119,31 @@ public sealed partial class Plugin
         foreach (var artifact in UploadPolicyTable.Artifacts)
             _uploadPolicy[kind, artifact] =
                 UploadPolicy.Parse(_prefs.Get<string>(UploadPolicy.PrefKey(kind, artifact), null));
+    }
+
+    /// <summary>
+    /// Replay has no <c>manual</c> state (owner ruling 2026-07-28; see <c>Plugin.SettingsArchive.cs</c>'s
+    /// <c>UploadsSection</c>). It cannot upload on ANY path — the retained re-upload payload takes its
+    /// positions from the archive-time doc, which is null under <c>manual</c> — yet <c>manual</c> still
+    /// counts as enabled for capture, so a stored <c>manual</c> would sample all run long and ship
+    /// nothing. The grid offers only auto/off, so normalise any stray value (a hand-edited config, or a
+    /// pref left by an interim build) down to <c>off</c>. That is what makes the UI, the capture gate and
+    /// the upload gate agree. <see cref="UploadPolicyTable.Migrate"/> never produces it.
+    /// </summary>
+    private void NormalizeReplayManualToOff()
+    {
+        var changed = false;
+        foreach (var kind in UploadPolicyTable.Kinds)
+        {
+            if (_uploadPolicy[kind, UploadArtifact.Replay] != UploadPolicyState.Manual) continue;
+            _uploadPolicy[kind, UploadArtifact.Replay] = UploadPolicyState.Off;
+            _prefs.Set(UploadPolicy.PrefKey(kind, UploadArtifact.Replay), UploadPolicy.Format(UploadPolicyState.Off));
+            changed = true;
+            _services.Log.Info(
+                $"[CombatMeter.SP1] replay policy for {UploadPolicy.KindKey(kind)} was 'manual', which can never " +
+                "upload — normalised to 'off'.");
+        }
+        if (changed) _prefs.Save();
     }
 
     // Called on scene change (OnSceneChanged) and after any policy write — nowhere else. Resolves the

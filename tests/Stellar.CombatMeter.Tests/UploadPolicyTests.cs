@@ -72,6 +72,28 @@ public class UploadPolicyTests
         Assert.Equal("other",     UploadPolicy.KindKey(ContentKind.Other));
     }
 
+    // Settings-pane row labels (Plugin.SettingsArchive.cs's UploadsSection is the consumer). Pinned
+    // because a typo here is invisible to every other test yet directly visible to the user, and the
+    // names must keep matching the site's own feed tabs so the plugin configures the buckets the site
+    // shows. Distinctness guards against two rows rendering the same label.
+    [Fact]
+    public void Label_MatchesTheSiteFeedTabNames()
+    {
+        Assert.Equal("Dungeons",   UploadPolicy.Label(ContentKind.Dungeon));
+        Assert.Equal("Raids",      UploadPolicy.Label(ContentKind.Raid));
+        Assert.Equal("World Boss", UploadPolicy.Label(ContentKind.WorldBoss));
+        Assert.Equal("Other",      UploadPolicy.Label(ContentKind.Other));
+    }
+
+    [Fact]
+    public void Label_IsDistinctForEveryKind()
+    {
+        var seen = new System.Collections.Generic.HashSet<string>();
+        foreach (var kind in UploadPolicyTable.Kinds)
+            Assert.True(seen.Add(UploadPolicy.Label(kind)), $"duplicate label for {kind}");
+        Assert.Equal(4, seen.Count);
+    }
+
     [Fact]
     public void ArtifactKey_MatchesTheSpecVocabulary()
     {
