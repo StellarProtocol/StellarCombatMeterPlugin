@@ -149,7 +149,7 @@ public sealed partial class Plugin
         return false;
     }
 
-    // Called every frame from OnUpdate. Gate: replay cell not `off` + dungeon/raid run. Deliberately
+    // Called every frame from OnUpdate. Gate: ANY replay cell not `off` + dungeon/raid run. Deliberately
     // NOT gated on _combatActive — the run-id latch (IsInstancedRun) fires on dungeon ENTER, well
     // before the first pull, so the replay's walk-in from the dungeon entrance to the first pack is
     // captured too (previously the track started at the first damage event, mid-dungeon). The DPS
@@ -162,8 +162,10 @@ public sealed partial class Plugin
 
     private void TickReplayCapture(float deltaTimeSec)
     {
-        // Capture whenever this content's replay cell is not `off` (cached on scene change), so a
-        // `manual` cell still has samples to attach to a hand-push.
+        // ONE cached bool, no kind resolution and no prefs access on this per-frame path. It is true
+        // whenever ANY kind's replay cell is not `off` — kind-INDEPENDENT on purpose, because the live
+        // kind and the archived entry's kind can differ and an unsampled walk-in is unrecoverable
+        // (P0 start clip). See AnyReplayCellEnabled / RecomputeUploadPolicyCache.
         if (_replay is null || !_replayCaptureEnabled) return;
 
         // Loading-screen hardening (2026-07-19 silent-crash follow-up): the settle gate arms on
@@ -355,9 +357,16 @@ public sealed partial class Plugin
     /// <summary>Spec § 2.4: the archive-time replay upload runs only when this run's content has its
     /// replay cell on <c>auto</c>. A <c>manual</c> or <c>off</c> cell prepares no doc, so
     /// <c>FinalizeAndMaybeUploadReplay</c> hands nothing off and the watermark HOLDS — the samples
-    /// merge into the next window (D2; advancing it here would clip the run's replay, a P0 defect).</summary>
+    /// merge into the next window (D2; advancing it here would clip the run's replay, a P0 defect).
+    /// The one refusal line (spec § 2.4) is logged HERE, not in <see cref="PrepareReplayDoc"/> whose
+    /// body already sits at its 50-line ceiling. Decision logic is the pure static overload.</summary>
     internal bool ReplayAutoUploadAllowed(EncounterHistoryEntry entry)
-        => UploadAllowed(ResolveKind(entry), UploadArtifact.Replay, UploadTrigger.Auto);
+    {
+        if (ReplayAutoUploadAllowed(_contentKinds, _uploadPolicy, entry)) return true;
+        var kind = ResolveKind(entry);
+        LogUploadRefusal(kind, UploadArtifact.Replay, UploadTrigger.Auto, UploadPolicyFor(kind, UploadArtifact.Replay));
+        return false;
+    }
 
     /// <summary>
     /// Delta-window serializer (owner design 2026-07-19): assembles + signs the replay doc for the

@@ -40,6 +40,27 @@ public sealed partial class Plugin
     internal ContentKind ResolveKind(EncounterHistoryEntry entry)
         => ResolveKind(_contentKinds, entry);
 
+    /// <summary>Pure seam for the archive-time replay gate: the ARCHIVED entry's own kind decides, and
+    /// only <c>auto</c> permits the automatic upload. Static because Plugin cannot be instantiated
+    /// headless — this is what the tests pin (artifact axis, trigger axis, and entry-derived kind all
+    /// at once).</summary>
+    internal static bool ReplayAutoUploadAllowed(ContentKindMap map, UploadPolicyTable policy, EncounterHistoryEntry entry)
+        => UploadPolicy.Allows(policy[ResolveKind(map, entry), UploadArtifact.Replay], UploadTrigger.Auto);
+
+    /// <summary>True when ANY kind's replay cell is not <c>off</c> — capture is deliberately
+    /// kind-INDEPENDENT. The upload gate is entry-derived (the archived run's own kind), and the two
+    /// must not disagree: a raid lobby whose map id is unlisted resolves as <c>other</c>, so keying
+    /// capture on the LIVE kind would skip the walk-in and CLIP the start of the raid's replay (P0),
+    /// and a mid-run policy write would gap the middle. Capture broadly, gate narrowly at upload time —
+    /// that is the only arrangement that cannot lose samples. Matches pre-feature behaviour, where
+    /// capture followed the single global replay toggle regardless of content.</summary>
+    internal static bool AnyReplayCellEnabled(UploadPolicyTable policy)
+    {
+        foreach (var kind in UploadPolicyTable.Kinds)
+            if (policy[kind, UploadArtifact.Replay] != UploadPolicyState.Off) return true;
+        return false;
+    }
+
     internal UploadPolicyState UploadPolicyFor(ContentKind kind, UploadArtifact artifact)
         => _uploadPolicy[kind, artifact];
 
@@ -110,8 +131,13 @@ public sealed partial class Plugin
         _currentKind = _contentKinds.KindOf(ParseMapId(_services.ClientState.CurrentSceneName));
         // D3: raw-event buffering keeps today's semantics — only when this kind auto-uploads stats.
         _captureForLogEnabled = _uploadPolicy[_currentKind, UploadArtifact.Stats] == UploadPolicyState.Auto;
-        // Replay: capture whenever the artifact is not fully off, so a `manual` cell still has samples.
-        _replayCaptureEnabled = _uploadPolicy[_currentKind, UploadArtifact.Replay] != UploadPolicyState.Off;
+        // Replay capture is deliberately NOT _currentKind-derived: the upload gate resolves the kind
+        // from the ARCHIVED entry's stored scene, and if the two disagree the samples are already lost.
+        // A raid lobby / dungeon approach is a different (often unlisted ⇒ `other`) map id from the boss
+        // room, and the buffer is deliberately KEPT across that hop (Plugin.History.cs), so a live-kind
+        // gate would skip the walk-in and clip the start of the raid's replay — the exact P0 shape; a
+        // mid-run policy write would gap the middle the same way. Capture broadly, gate narrowly.
+        _replayCaptureEnabled = AnyReplayCellEnabled(_uploadPolicy);
     }
 
     private void MaybeRefreshContentKinds()
