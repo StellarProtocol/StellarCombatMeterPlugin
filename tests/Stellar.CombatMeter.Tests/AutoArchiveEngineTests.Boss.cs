@@ -281,4 +281,136 @@ public partial class AutoArchiveEngineTests
         e.OnArchived(210_000, ArchiveReason.BossKill);  // NOT guarded — this really does end the fight
         Assert.True(e.TryBeginBossSegmentCut());        // segment closed for real this time
     }
+
+    // ---- gone-timeout (P0 fix, owner raid 2026-07-28, runId=632530154488332288): a boss that never
+    // reports HP<=0 must still end its fight ----
+    //
+    // Owner's stage 1 has TWO bosses that must both be brought to 1% simultaneously; they then die by a
+    // SCRIPTED event, so HP never reads <=0 for either — BossDead never rises. Pre-fix there was no
+    // OTHER way to close _bossSegmentActive (Task 2, 2026-07-26, deliberately removed the raw
+    // BossGone/BossDead re-arm to stop the corpse-cut loop; Task 4 narrowed the tracked-boss clear
+    // further) — so the segment latched open for the ENTIRE REST OF THE RUN and
+    // ShouldConsiderInlineBossCut's `!bossSegmentActive` gate barred every later boss cut. The owner's
+    // log showed exactly one giant archive (walk-in through run end) instead of one per boss/stage.
+
+    [Fact]
+    public void Raid_boss_that_never_reports_death_still_ends_its_segment_and_unblocks_the_next_stage()
+    {
+        // THE regression pin for the P0. Unmistakable about what it protects: (1) a boss segment that
+        // is open, (2) a boss that goes CONTINUOUSLY unobserved (BossGone=true, BossDead=false — the
+        // scripted-kill shape, HP never <=0) for the gone-timeout window, (3) the fight ends (BossKill
+        // fires) WITHOUT a confirmed death, and (4) the very next boss (stage 2) can cut a fresh
+        // segment afterward — proving the wedge is actually cleared, not just that one archive fired.
+        // IdleEnabled=false isolates from the fixture trap (Live()'s LastDamageMs=160_000 also
+        // satisfies the 60s Idle trigger at nowMs>=220_000, which would mask this assertion).
+        var e = new AutoArchiveEngine { IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live(nowMs: 100_000)));                     // adopt flow version
+
+        // Stage 1: pull the two-boss encounter — the inline cut opens the segment (caller's job; here
+        // just open it directly, mirroring every other BossKill test in this file).
+        Assert.True(e.TryBeginBossSegmentCut());
+
+        // The boss goes gone (evicted from vitals — scripted death removes the entity) and STAYS gone,
+        // never confirmed dead. Tick every second, same cadence TickAutoArchiveTriggers uses in
+        // production, up to (but not past) the gone-timeout threshold: still no fire.
+        long t = 150_000;
+        for (; t < 150_000 + AutoArchiveEngine.BossGoneTimeoutMs; t += 1_000)
+            Assert.Null(e.Evaluate(Live(nowMs: t) with { BossGone = true, BossDead = false, BossPresent = false }));
+
+        // Threshold reached: the fight ends via the SAME ArchiveReason.BossKill a confirmed death would
+        // use — no new enum value, no new history trig string (spec §2.1).
+        var timedOut = Live(nowMs: 150_000 + AutoArchiveEngine.BossGoneTimeoutMs)
+            with { BossGone = true, BossDead = false, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in timedOut));
+        Assert.True(e.BossKillWasTimeout);   // distinguishable cause for the ungated [archive] line
+
+        // The caller's settle wait elapses and the archive commits — closing the segment.
+        e.OnArchived(t + 2_000, ArchiveReason.BossKill);
+
+        // Stage 2: the next boss must be able to cut a fresh segment — the actual owner-visible fix.
+        Assert.True(e.TryBeginBossSegmentCut());
+    }
+
+    [Fact]
+    public void Gone_timeout_fires_at_the_threshold_not_one_ms_before()
+    {
+        // Duration is the discriminator (load-bearing design constraint) — pins the boundary exactly,
+        // same shape as AutoArchiveSettleDelayTests' Not_due_one_ms_before_the_quiet_window_closes /
+        // Due_exactly_at_two_seconds_of_no_combat pair, and complements
+        // Transient_eviction_never_ends_the_segment's much-shorter (sub-second) blink case.
+        var e = new AutoArchiveEngine { IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live(nowMs: 100_000)));
+        Assert.True(e.TryBeginBossSegmentCut());
+        long goneStart = 150_000;
+        Assert.Null(e.Evaluate(Live(nowMs: goneStart) with { BossGone = true, BossDead = false, BossPresent = false }));
+        var oneMsShort = Live(nowMs: goneStart + AutoArchiveEngine.BossGoneTimeoutMs - 1)
+            with { BossGone = true, BossDead = false, BossPresent = false };
+        Assert.Null(e.Evaluate(in oneMsShort));
+        var atThreshold = Live(nowMs: goneStart + AutoArchiveEngine.BossGoneTimeoutMs)
+            with { BossGone = true, BossDead = false, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in atThreshold));
+    }
+
+    [Fact]
+    public void Gone_timeout_resets_when_the_boss_is_seen_alive_again_before_the_threshold()
+    {
+        // A boss that blinks gone and then comes back alive (still within the fight, still un-killed)
+        // must not accumulate toward the timeout across the gap — matches
+        // Transient_eviction_never_ends_the_segment's invariant, extended across a longer window.
+        var e = new AutoArchiveEngine { IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live(nowMs: 100_000)));
+        Assert.True(e.TryBeginBossSegmentCut());
+
+        var goneStart = 150_000;
+        Assert.Null(e.Evaluate(Live(nowMs: goneStart) with { BossGone = true, BossDead = false, BossPresent = false }));
+        // Seen alive again well before the threshold — the streak resets.
+        Assert.Null(e.Evaluate(Live(nowMs: goneStart + 1_000) with { BossGone = false, BossDead = false, BossPresent = true }));
+        // Gone again — even past what WOULD have been the original streak's deadline, this is a FRESH
+        // streak that has not yet run the full timeout.
+        var stillWithinFreshStreak = goneStart + AutoArchiveEngine.BossGoneTimeoutMs;
+        Assert.Null(e.Evaluate(Live(nowMs: stillWithinFreshStreak) with { BossGone = true, BossDead = false, BossPresent = false }));
+    }
+
+    [Fact]
+    public void Gone_timeout_only_counts_while_a_segment_is_open()
+    {
+        // "The timeout only counts while a boss segment is open" (load-bearing design constraint) — no
+        // segment means nothing to end; must never fire (and must never leave a stray armed want either).
+        var e = new AutoArchiveEngine { IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live(nowMs: 100_000)));   // no TryBeginBossSegmentCut — no segment open
+        for (long t = 150_000; t <= 150_000 + AutoArchiveEngine.BossGoneTimeoutMs + 5_000; t += 1_000)
+            Assert.Null(e.Evaluate(Live(nowMs: t) with { BossGone = true, BossDead = false, BossPresent = false }));
+    }
+
+    [Fact]
+    public void Gone_timeout_streak_clears_on_leaving_the_instanced_run()
+    {
+        // Leaving the run (open world between dungeons) must drop an in-progress gone streak — a fresh
+        // run's boss starts with a clean slate, same as every other latch UpdateLatches resets there.
+        var e = new AutoArchiveEngine { IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live(nowMs: 100_000)));
+        Assert.True(e.TryBeginBossSegmentCut());
+        Assert.Null(e.Evaluate(Live(nowMs: 150_000) with { BossGone = true, BossDead = false, BossPresent = false }));
+        // Leave the run before the threshold elapses — segment + streak both drop.
+        Assert.Null(e.Evaluate(Live(nowMs: 151_000) with { InstancedRun = false, BossPresent = false }));
+        // Re-enter and re-open a segment: even at what would have been the original streak's deadline,
+        // nothing fires — the streak did not survive the run boundary.
+        Assert.True(e.TryBeginBossSegmentCut());
+        var atOldDeadline = Live(nowMs: 150_000 + AutoArchiveEngine.BossGoneTimeoutMs)
+            with { BossGone = true, BossDead = false, BossPresent = false };
+        Assert.Null(e.Evaluate(in atOldDeadline));
+    }
+
+    [Fact]
+    public void BossKillWasTimeout_is_false_for_a_confirmed_death()
+    {
+        // The cause flag must correctly report "death", not "timeout", for the ordinary path — the
+        // ungated [archive] line's cause= field must never mislabel a real death as a timeout.
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));
+        Assert.True(e.TryBeginBossSegmentCut());
+        var dead = Live(nowMs: 260_000) with { BossDead = true, BossGone = true, BossPresent = false };
+        Assert.Equal(ArchiveReason.BossKill, e.Evaluate(in dead));
+        Assert.False(e.BossKillWasTimeout);
+    }
 }

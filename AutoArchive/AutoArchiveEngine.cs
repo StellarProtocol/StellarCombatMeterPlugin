@@ -43,11 +43,13 @@ internal readonly record struct AutoArchiveInputs
     /// observability breadcrumb for callers/logging that want to see boss presence without re-deriving
     /// it; do not wire new trigger logic off it without updating this doc.</summary>
     public bool BossPresent { get; init; }
-    /// <summary>DIAGNOSTIC-ONLY (Minor F, review round 2026-07-27): the previously resolved boss died,
-    /// despawned, or was evicted from the vitals cache. Like <see cref="BossPresent"/>, not read by any
-    /// engine decision — <see cref="BossDead"/> is the confirmed-death subset the engine actually acts
-    /// on. This is now the only trace, in the snapshot, that a transient blink (gone but NOT confirmed
-    /// dead) happened at all; useful for logging/telemetry, not for control flow.</summary>
+    /// <summary>The previously resolved boss died, despawned, or was evicted from the vitals cache — a
+    /// confirmed death (<see cref="BossDead"/>) OR a transient/sustained cache eviction. WAS
+    /// diagnostic-only (Minor F, review round 2026-07-27); that framing is now STALE (P0 fix,
+    /// 2026-07-28): <see cref="UpdateLatches"/> reads this to time a gone STREAK, and a boss that stays
+    /// continuously gone-but-not-confirmed-dead for <see cref="BossGoneTimeoutMs"/> ends the fight the
+    /// same way a confirmed death does (see that const's doc for the full mechanism/rationale). Do not
+    /// re-narrow this back to logging-only without also removing that consumer.</summary>
     public bool BossGone { get; init; }
     /// <summary>A CONFIRMED boss death — HP observed &lt;=0 — as opposed to a transient cache
     /// eviction, which <see cref="BossGone"/> also covers.</summary>
@@ -69,6 +71,26 @@ internal sealed class AutoArchiveEngine
 {
     internal const long DefaultCooldownMs = 10_000;   // shared cooldown default (tests reference this)
     internal const long MinContentMs = 30_000;   // idle content guard: >= 30 s of actual combat span
+
+    // Gone-timeout threshold (P0 fix, owner raid 2026-07-28, runId=632530154488332288): stage 1 of that
+    // raid has two bosses scripted to die by a triggered event once both are brought to 1% — HP never
+    // reads <=0, so BossDead never rises, and this branch's own Task 2 (2026-07-26) removed the ONLY
+    // other thing that used to close _bossSegmentActive (a raw BossGone/BossDead re-arm — removed
+    // because it looped on a still-known-dead corpse, the sliver-spam bug this whole branch exists to
+    // fix). Without a second way to end the fight, the segment latched open for the REST OF THE RUN and
+    // ShouldConsiderInlineBossCut's `!bossSegmentActive` gate barred every later boss (stage 2, stage 3)
+    // from ever cutting — the owner got one giant walk-in-to-run-end archive instead of one per stage.
+    //
+    // DURATION is what tells a genuine despawn apart from a transient blink: the framework's
+    // AOI-disappear wire event removes the vitals row near-instantly once an entity actually leaves the
+    // scene (CombatEntityTracker.OnEntityDisappeared) — contrast the framework's separate 5-MINUTE
+    // idle-sweep TTL (CombatService.IdleEntityTtlMs), which is irrelevant at this timescale. A
+    // transient blink (a spurious disappear+reappear pair on a network hiccup) clears within a tick or
+    // two — sub-second, see Transient_eviction_never_ends_the_segment — while a genuine despawn never
+    // clears. Picked mid-range of the owner-specified 3-5 s window: comfortably above any observed
+    // blink, comfortably below the time it takes a raid party to reach the next stage's boss, so the
+    // segment is already closed well before that boss's opener would otherwise wait on it.
+    internal const long BossGoneTimeoutMs = 4_000;
 
     // Master enable (Fix 1, review round): the on/off gate used to live ONLY in Plugin.AutoArchive.cs
     // (a plugin field with no unit coverage) — moved here so the policy is testable in isolation. Sits
@@ -145,7 +167,25 @@ internal sealed class AutoArchiveEngine
     // TickAutoArchiveTriggers skips Evaluate entirely while another archive is pending — an edge would
     // be lost in both cases and the fight would never bank. Same shape as _wipeArchived: a level the
     // fire gates read, set only from bookkeeping and cleared only on an actual fire / run exit.
+    //
+    // Gone-timeout (P0 fix, 2026-07-28) is the SECOND way this gets armed — see BossGoneTimeoutMs's doc
+    // for the full mechanism. A boss that is continuously unobserved (gone but never confirmed dead) for
+    // that long behaves exactly like a confirmed death from here on: same latch, same settle-and-bank
+    // path, same segment close via OnArchived. _bossKillWasTimeout (below) records WHICH of the two
+    // armed it, purely for observability (the ungated [archive] line) — the fire/consume mechanics
+    // themselves are identical for both causes.
     private bool _bossKillWanted;
+    // Cause of the most recently armed/fired _bossKillWanted: true = gone-timeout, false = confirmed
+    // death. Meaningful only alongside _bossKillWanted / immediately after Evaluate returns BossKill —
+    // stable across the caller's settle wait (nothing touches it again before the deferred archive
+    // commits, since TickAutoArchiveTriggers skips Evaluate entirely while a reason is pending). Read by
+    // Plugin.Diagnostics.cs's LogArchiveOutcome to show which cause fired on the ungated [archive] line.
+    private bool _bossKillWasTimeout;
+    // 0 = not currently in a "boss continuously gone" streak; else the ms UpdateLatches first observed
+    // s.BossGone (and NOT s.BossDead) while a segment was open. Reset the instant the boss is seen
+    // alive again, the segment closes, or the run is left — see UpdateLatches. Same LEVEL-tracked
+    // debounce shape as _allDeadSinceMs/WipeGraceMs above, just for a different signal.
+    private long _bossGoneSinceMs;
     // One-shot guard armed by TryBeginBossSegmentCutAcrossPreemption (finding 2, review round
     // 2026-07-27) and consumed by the very next OnArchived call, so that call's unconditional segment
     // close cannot undo a reopen that predates it. See both members' docs for the full defect.
@@ -239,6 +279,14 @@ internal sealed class AutoArchiveEngine
     /// BossPhase) or by leaving the instanced run (2026-07-26, Task 2) — a raw death/eviction reading no
     /// longer closes it directly.</summary>
     public bool BossSegmentActive => _bossSegmentActive;
+
+    /// <summary>True when the currently-armed (or just-fired) <see cref="ArchiveReason.BossKill"/> want
+    /// was caused by the gone-timeout (<see cref="BossGoneTimeoutMs"/>) rather than a confirmed death.
+    /// Read by the caller at (or any time after) the moment <see cref="Evaluate"/> returns
+    /// <see cref="ArchiveReason.BossKill"/> — see <see cref="_bossKillWasTimeout"/>'s doc for why it is
+    /// stable across the settle wait. Used only for observability (the ungated [archive] line's cause=
+    /// field, Plugin.Diagnostics.cs); no decision anywhere reads it.</summary>
+    public bool BossKillWasTimeout => _bossKillWasTimeout;
 
     /// <summary>Inline boss-phase cut gate (2026-07-21). The boss cut happens INLINE in
     /// <c>Plugin.Capture.cs</c> at the first boss combat event, BEFORE that hit is accumulated, so the
@@ -338,20 +386,47 @@ internal sealed class AutoArchiveEngine
     // Re-arm / adoption bookkeeping that must run before the fire gates on EVERY tick — including
     // ticks the cooldown is about to suppress, so no banked sighting / transition is lost. (The
     // wipe latch's own recovery clear + edge stamp live directly in Evaluate — see its body.)
+    /// <remarks>
+    /// Gone-timeout (P0 fix, owner raid 2026-07-28 — see <see cref="BossGoneTimeoutMs"/>'s doc for the
+    /// full mechanism/rationale): the streak is LEVEL-tracked exactly like <c>_allDeadSinceMs</c>/
+    /// <c>WipeGraceMs</c> above — <c>s.BossGone</c> (a confirmed death OR a cache eviction) read every
+    /// tick a segment is open. The <c>!s.BossDead</c> guard routes a real death straight past the streak
+    /// to the arm below instead of ALSO starting a timeout streak on the very same tick (a death implies
+    /// <c>BossGone</c>). The streak resets the instant the boss is seen alive again or the segment
+    /// closes. On timeout the method arms <see cref="_bossKillWanted"/> exactly like a confirmed death —
+    /// same latch, same settle-and-bank path — but deliberately does NOT mark the boss killed
+    /// (<see cref="_killedBosses"/> is untouched here; that mark lives in Plugin.BossDetection.cs's
+    /// <c>BossStatus</c>, gated on a CONFIRMED death only), so a boss that reappears alive after the
+    /// timeout fired stays adoptable and cuttable (<c>ShouldClearTrackedBoss</c> already clears the
+    /// tracked id once the segment closes with no confirmed death — see its own doc, Critical A).
+    /// </remarks>
     private void UpdateLatches(in AutoArchiveInputs s)
     {
         // Leaving the instanced run (open world between dungeons) ends any boss segment, so the NEXT
         // run's boss gets a fresh cut, and drops any unbanked kill want with it. _preemptGuard is
         // always consumed synchronously by the very next OnArchived (same call stack as the reopen
         // that armed it), so this reset is defensive insurance, not a reachable path in production.
-        if (!s.InstancedRun) { _bossSegmentActive = false; _bossKillWanted = false; _preemptGuard = false; }
+        if (!s.InstancedRun)
+        {
+            _bossSegmentActive = false; _bossKillWanted = false; _bossKillWasTimeout = false;
+            _preemptGuard = false; _bossGoneSinceMs = 0;
+        }
+
+        // Gone-timeout streak bookkeeping — see the <remarks> on this method's doc comment.
+        if (!_bossSegmentActive) _bossGoneSinceMs = 0;
+        else if (s.BossGone && !s.BossDead) { if (_bossGoneSinceMs == 0) _bossGoneSinceMs = s.NowMs; }
+        else _bossGoneSinceMs = 0;
+        bool bossGoneTimedOut = _bossGoneSinceMs != 0 && s.NowMs - _bossGoneSinceMs >= BossGoneTimeoutMs;
+
         // A confirmed death ENDS THE FIGHT but does not itself end the segment: the BossKill archive
         // does, via OnArchived, after the caller's settle window. A raw death/eviction reading directly
         // re-arming the segment here is what caused the post-kill cut loop — the dead boss kept getting
         // re-adopted by CheckBossCandidate, re-armed, and re-cut once per tick (0 ms archives ~1 s
         // apart). That re-arm (and the BossRecutOnRedetect toggle that used to gate it) is retired for
-        // good (2026-07-26, Task 4) — no raw gone/dead reading closes the segment any more.
-        if (s.BossDead && _bossSegmentActive) _bossKillWanted = true;
+        // good (2026-07-26, Task 4) — no raw gone/dead reading closes the segment any more. The
+        // gone-timeout below is the SECOND way a fight ends — see the <remarks> on this method's doc.
+        if (s.BossDead && _bossSegmentActive) { _bossKillWanted = true; _bossKillWasTimeout = false; }
+        else if (bossGoneTimedOut)             { _bossKillWanted = true; _bossKillWasTimeout = true;  }
 
         if (_lastFlowVersion != s.FlowStateVersion)
         {

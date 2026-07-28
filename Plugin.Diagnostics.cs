@@ -133,9 +133,10 @@ public sealed partial class Plugin
 
     // One line per deferred AUTO archive that actually commits after the idle-settle wait — pair it
     // with the preceding [auto-archive] fired line to confirm the quiet-window gap in-game. quietMs is
-    // how long the settle clock (see SettleClockMs — damage only, boss-targeted for BossKill) had been
-    // silent at commit; armedMs is the wait since the trigger. Takes the already-computed settle clock
-    // rather than re-deriving it, so this line can never drift from what PendingArchiveDue actually used.
+    // how long the general damage clock (_lastDamageMs — every deferrable reason watches the SAME clock
+    // as of the 2026-07-28 owner ruling; a prior boss-only narrowing is retired) had been silent at
+    // commit; armedMs is the wait since the trigger. Takes the already-computed settle clock rather
+    // than re-deriving it, so this line can never drift from what PendingArchiveDue actually used.
     private void LogAutoArchiveCommit(AutoArchive.ArchiveReason reason, long nowMs, long settleClockMs)
     {
         if (!StellarDiagnostics.IsEnabled) return;
@@ -153,8 +154,10 @@ public sealed partial class Plugin
     // 2026-07-26: extended with the settle facts (quietMs / armedMs / settle). The gated
     // [auto-archive] fired|commit pair was the only place these appeared, so a 1.6 MB owner log
     // carried ZERO evidence of why a boss archive cut mid-damage — the diagnosis needed a site chart.
-    // quietMs is how long the relevant DAMAGE clock had been silent at this attempt (see
-    // SettleClockMs); armedMs is the deferred wait and reads 0 for an immediate archive.
+    // quietMs is how long the general damage clock (_lastDamageMs) had been silent at this attempt —
+    // owner ruling 2026-07-28: every deferrable reason, BossKill included, watches this SAME clock now;
+    // a prior boss-only narrowing (SettleClockMs) is retired, see Plugin.AutoArchive.cs's note. armedMs
+    // is the deferred wait and reads 0 for an immediate archive.
     //
     // quietMs uses a sentinel "n/a" when the clock was never set (no damage landed in that segment);
     // a numeric reading is a real elapsed age. This avoids ambiguity: a segment with only heals and
@@ -164,17 +167,24 @@ public sealed partial class Plugin
     // armedMs is gated on IsDeferrableArchive deliberately: ManualArchive nulls _pendingArchiveReason
     // on entry but _pendingArchiveArmedMs is never cleared, so an immediate archive (manual / scene /
     // the inline BossPhase cut) would otherwise print the age of some earlier, unrelated pending.
+    //
+    // 2026-07-28 (P0 gone-timeout fix): cause= distinguishes a BossKill fired by a CONFIRMED death from
+    // one fired by AutoArchiveEngine.BossGoneTimeoutMs — the owner's stage-1 raid boss never reads
+    // HP<=0 at all, so without this the ungated line alone could not tell the two apart on the next
+    // field diagnosis. Reads "n/a" for every non-BossKill reason (the field is meaningless there — a
+    // fixed sentinel, same pattern quietMs already uses, so the line's field COUNT never varies).
     private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
     {
         var now = _services.CombatSnapshot.ServerNowMs;
-        var clock = SettleClockMs(reason, _lastDamageMs, _lastBossDamageMs);
-        var quietMsText = clock == 0 ? "n/a" : (now - clock).ToString();
+        var quietMsText = _lastDamageMs == 0 ? "n/a" : (now - _lastDamageMs).ToString();
         var armedMs = IsDeferrableArchive(reason) && _pendingArchiveArmedMs != 0
             ? now - _pendingArchiveArmedMs
             : 0;
+        var causeText = reason != AutoArchive.ArchiveReason.BossKill ? "n/a"
+            : _autoArchive.BossKillWasTimeout ? "timeout" : "death";
         _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
-            $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs}");
+            $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText}");
     }
 
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
