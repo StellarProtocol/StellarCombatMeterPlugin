@@ -61,8 +61,9 @@ public sealed partial class Plugin
     private AutoArchive.ArchiveReason? _pendingArchiveReason;
     private long                       _pendingArchiveArmedMs;
 
-    // ---- settings accessors (the AutoUpload pattern, Plugin.LogUpload.cs:79-91: cached in the
-    // engine, persisted on set; loaded once by InitAutoArchive from the ctor) ----
+    // ---- settings accessors (the cached-pref accessor pattern: cached in the engine, persisted on
+    // set; loaded once by InitAutoArchive from the ctor. The AutoUpload property this used to cite is
+    // retired — its per-content replacement lives in Plugin.UploadPolicy.cs) ----
     private const string PrefAaWipe         = "autoArchive.wipe";
     private const string PrefAaBoss         = "autoArchive.bossPhase";
     private const string PrefAaIdle         = "autoArchive.idle";

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
+using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
 
@@ -76,9 +77,30 @@ public sealed partial class Plugin
 
             new SeparatorElement(),
             new TextElement(() => "Uploads", Emphasis: true),
-            ToggleRow("Auto-upload runs", () => AutoUpload, v => AutoUpload = v),
+            ToggleRow("Auto-upload runs", AllStatsAuto, SetAllStatsPolicy),
             ToggleRow("Upload replay position track (dungeon/raid)", () => UploadReplay, v => UploadReplay = v),
         }, Gap: 4f);
+
+    // ---- Uploads section: interim binding for the retired global auto-upload flag ----
+    // The global logUpload.autoUpload flag is gone (spec § 2.2); the row above now drives all FOUR
+    // `<kind>.stats` cells at once so the owner's existing switch keeps working — and keeps meaning
+    // exactly what it means today — until Task 9 replaces the row with the 4 × 2 tri-state grid. Reads
+    // the in-memory table only (no prefs I/O on the settings poll).
+    // OFF writes `manual`, not `off`: the same value the legacy migration seeds for autoUpload=false,
+    // which preserves the ability to push a run by hand (spec § 2.2).
+    private bool AllStatsAuto()
+    {
+        foreach (var kind in UploadPolicyTable.Kinds)
+            if (UploadPolicyFor(kind, UploadArtifact.Stats) != UploadPolicyState.Auto) return false;
+        return true;
+    }
+
+    private void SetAllStatsPolicy(bool auto)
+    {
+        var state = auto ? UploadPolicyState.Auto : UploadPolicyState.Manual;
+        foreach (var kind in UploadPolicyTable.Kinds)
+            SetUploadPolicy(kind, UploadArtifact.Stats, state);
+    }
 
     // "Last archive: {tag} · {n}s ago" readout — reads LastArchive (Plugin.AutoArchive.cs, set by
     // NoteLastArchive on every BANKED archive) and formats its reason via the real ArchiveReasonTag

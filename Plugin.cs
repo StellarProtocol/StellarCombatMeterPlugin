@@ -144,7 +144,7 @@ public sealed partial class Plugin : IStellarPlugin
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
         _filter   = (FilterMode) _prefs.Get("scope",  (int)FilterMode.Party);
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
-        InitLogUpload();   // SP1: cache the auto-upload bool off the per-event hot path
+        InitUploadPolicy();  // SP1: load/migrate the 8 upload-policy cells + cache the hot-path bools
         InitReplay();      // Replay R1: load pref + create capture instance
         InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
 

@@ -80,6 +80,7 @@ public sealed partial class Plugin
         // rest of finding 3's boss-only settle clock, owner ruling 2026-07-28; see
         // Plugin.AutoArchive.cs's retired-SettleClockMs note.)
         _autoArchiveBossId = default;
+        RecomputeUploadPolicyCache();   // new scene ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;

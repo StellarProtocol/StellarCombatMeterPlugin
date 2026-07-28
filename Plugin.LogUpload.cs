@@ -3,7 +3,8 @@
 // Feature boundary:
 //   - Capture: OnCombatEvent feeds _logBuffer during an encounter.
 //   - Serialize: ManualArchive triggers SerializeAndUpload() after the encounter is archived.
-//   - Upload: auto path gated on AutoUpload (default ON); fire-and-forget; never blocks or crashes the game.
+//   - Upload: auto path gated on the CURRENT content's `<kind>.stats` policy cell (default auto —
+//     see Plugin.UploadPolicy.cs); fire-and-forget; never blocks or crashes the game.
 //
 // Wiring stubs clearly marked TODO(SP1) for items that require game-API access not yet in the framework.
 
@@ -61,7 +62,9 @@ public sealed partial class Plugin
     // Settings keys (read/written from the "combatmeter" config section)
     // -----------------------------------------------------------------------
 
-    private const string PrefAutoUpload = "logUpload.autoUpload";
+    // logUpload.autoUpload is RETIRED as a live setting — the eight per-content policy cells replaced it
+    // (spec § 2.2). The legacy key is still read exactly once, by LoadOrMigrateUploadPolicy, to seed those
+    // cells on the first load after upgrade, and is left on disk untouched afterwards.
     private const string PrefSignerKey  = "logUpload.signerKey";
 
     // P2: spread the party's simultaneous auto-uploads so arrival order is meaningful and the
@@ -93,22 +96,8 @@ public sealed partial class Plugin
     // Settings accessors (expose to Plugin.Settings.cs if a UI toggle is added)
     // -----------------------------------------------------------------------
 
-    // Cached copy of the auto-upload preference. Read on the per-combat-event hot path
-    // (MaybeCaptureForLog), so the getter MUST stay O(1) — never a lock + JSON deserialize.
-    // Loaded once at init via InitLogUpload(); the setter keeps it in sync with persisted prefs.
-    private bool _autoUpload = true;
-
-    /// <summary>Auto-upload every archived run + capture raw forensic events. Default ON; toggle in settings.
-    /// Manual per-run upload from history works regardless of this flag.</summary>
-    internal bool AutoUpload
-    {
-        get => _autoUpload;
-        set { _autoUpload = value; _prefs.Set(PrefAutoUpload, value); _prefs.Save(); }
-    }
-
-    // Load the cached auto-upload pref once at plugin init (alongside the other settings loads in Plugin.cs).
-    // Reads from _prefs exactly once so the per-event getter never touches the config store.
-    private void InitLogUpload() => _autoUpload = _prefs.Get(PrefAutoUpload, true);
+    // The upload policy's prefs lifecycle + the cached hot-path booleans live in Plugin.UploadPolicy.cs
+    // (InitUploadPolicy, called from the ctor in place of the retired InitLogUpload).
 
     /// <summary>
     /// Base64-PKCS#8 ECDSA P-256 private key used to sign uploads.
@@ -129,7 +118,9 @@ public sealed partial class Plugin
     /// </summary>
     internal void MaybeCaptureForLog(CombatEvent evt)
     {
-        if (!AutoUpload) return;   // only buffer raw events when auto-uploading; manual uses entry aggregates
+        // D3: only buffer raw events when the CURRENT content auto-uploads stats — today's semantics.
+        // Reads one cached bool (RecomputeUploadPolicyCache); never prefs, never a kind resolution.
+        if (!_captureForLogEnabled) return;
         _logBuffer.Add(evt);
     }
 
@@ -140,14 +131,22 @@ public sealed partial class Plugin
 
     /// <summary>
     /// Auto path: serializes the captured raw event stream + actor snapshots and fires off a
-    /// fire-and-forget upload. Called once per archive when <see cref="AutoUpload"/> is on; never
+    /// fire-and-forget upload. Called once per archive; uploads only when the archived run's content
+    /// kind has <c>&lt;kind&gt;.stats = auto</c> (spec § 2.4). Never
     /// throws. Returns <c>true</c> iff a summary upload was fired — from that point the upload's
     /// callback OWNS <paramref name="replayDoc"/> (uploads it per the merge verdict); <c>false</c>
     /// means no upload fired and the caller must upload <paramref name="replayDoc"/> itself.
     /// </summary>
     internal bool MaybeUploadLog(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc = null)
     {
-        if (!AutoUpload) { _logBuffer.Clear(); return false; }
+        var kind = ResolveKind(entry);
+        var state = UploadPolicyFor(kind, UploadArtifact.Stats);
+        if (!UploadPolicy.Allows(state, UploadTrigger.Auto))
+        {
+            LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Auto, state);
+            _logBuffer.Clear();
+            return false;
+        }
         if (!RegionKnownOrWarn()) { _logBuffer.Clear(); return false; }
         if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
         {                           // path; uploading would collide every field fight on run:0
@@ -165,6 +164,18 @@ public sealed partial class Plugin
     internal void UploadHistoryEntry(EncounterHistoryEntry entry)
     {
         if (UploadStateFor(entry) == UploadPhase.InFlight) return;   // debounce double-click
+
+        // Spec § 2.4: a hand push proceeds unless the archived run's kind has stats `off`. The kind comes
+        // from the ENTRY's stored scene name, so a re-upload after a relaunch resolves the kind the run
+        // had when it was archived — never whatever scene happens to be live now.
+        var kind = ResolveKind(entry);
+        var state = UploadPolicyFor(kind, UploadArtifact.Stats);
+        if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
+        {
+            LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Manual, state);
+            return;
+        }
+
         if (entry.LevelUuid == 0)   // pre-v3 archive (identity not persisted) — /run/0 would collide; refuse
         {
             _uploadStatus.Set(entry, UploadPhase.Failed);
