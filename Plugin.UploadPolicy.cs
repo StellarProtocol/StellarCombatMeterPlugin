@@ -47,13 +47,24 @@ public sealed partial class Plugin
     internal static bool ReplayAutoUploadAllowed(ContentKindMap map, UploadPolicyTable policy, EncounterHistoryEntry entry)
         => UploadPolicy.Allows(policy[ResolveKind(map, entry), UploadArtifact.Replay], UploadTrigger.Auto);
 
-    /// <summary>True when ANY kind's replay cell is not <c>off</c> — capture is deliberately
-    /// kind-INDEPENDENT. The upload gate is entry-derived (the archived run's own kind), and the two
-    /// must not disagree: a raid lobby whose map id is unlisted resolves as <c>other</c>, so keying
-    /// capture on the LIVE kind would skip the walk-in and CLIP the start of the raid's replay (P0),
-    /// and a mid-run policy write would gap the middle. Capture broadly, gate narrowly at upload time —
-    /// that is the only arrangement that cannot lose samples. Matches pre-feature behaviour, where
-    /// capture followed the single global replay toggle regardless of content.</summary>
+    /// <summary>
+    /// True when ANY kind's replay cell is not <c>off</c> — capture is deliberately kind-INDEPENDENT.
+    ///
+    /// Rationale (corrected 2026-07-28 against real data — the earlier version of this comment was
+    /// WRONG and is recorded here so it is not reintroduced): capture asks about the scene you are
+    /// standing in, while the upload gate asks about the archived run's own stored scene. Those are
+    /// different questions, so keeping capture broad guarantees the upload gate can never want samples
+    /// that were never taken. It also matches pre-feature behaviour, where capture followed the single
+    /// global replay toggle regardless of content.
+    ///
+    /// What this is NOT: an earlier comment here claimed a raid lobby → boss-room scene hop with an
+    /// unlisted map id would clip a raid's walk-in. That is false twice over. The owner confirms a raid
+    /// is a single big map with no second load, and production data shows a real raid classifies as
+    /// <c>other</c> end-to-end (mapId 12052 "Giant Golem Crusade" and 13011 "Backtrack! Dreambloom
+    /// Ruins", both 20-player, are absent from RANKED_RAID_MAP_IDS), so both gates agree and there is
+    /// no divergence to exploit. No failure case for the kind-keyed form has been demonstrated; this
+    /// form is kept because it cannot lose samples, not because a clip was proven.
+    /// </summary>
     internal static bool AnyReplayCellEnabled(UploadPolicyTable policy)
     {
         foreach (var kind in UploadPolicyTable.Kinds)
