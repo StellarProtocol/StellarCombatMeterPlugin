@@ -291,7 +291,7 @@ public sealed partial class Plugin
         if (_selectedSession is not { } h) return "";
         return $"Map: {ResolveSceneName(h.SceneName)}   ·   "
              + $"Time: {FormatSessionTimestampLong(h.ArchivedAtMs)}   ·   "
-             + $"Duration: {FormatSessionDurationShort(h.CombatDurationMs)}   ·   "
+             + $"Duration: {FormatRowDuration(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs)}   ·   "
              + $"Players: {h.MemberCount}   ·   "
              + $"Scene: {h.SceneName ?? "—"}";
     }
@@ -314,7 +314,11 @@ public sealed partial class Plugin
         // A new session => no carried-over chart lines, and the visible (zoom) window resets to the full span.
         _chartedSources.Clear();
         _chartSourcesVersion++;   // mark the cached chart series stale
-        var durationSeconds = _selectedSession is { } h ? h.CombatDurationMs / 1000f : 0f;
+        // Full span = REAL elapsed duration (see ChartExtentSeconds): the series run to the archive
+        // moment, so anchoring the window on the damage span clipped the chart short of its own data.
+        var durationSeconds = _selectedSession is { } h
+            ? ChartExtentSeconds(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs)
+            : 0f;
         _chartVisibleRange = (0f, durationSeconds);
         RebuildSessionRows();
     }
@@ -393,7 +397,10 @@ public sealed partial class Plugin
         for (int i = _history.Count - 1; i >= 0; i--)   // newest first
         {
             var h = _history[i];
-            var dur = FormatSessionDurationShort(h.CombatDurationMs);
+            // REAL elapsed span only — the combat (damage) span lives in the detail pane. The row is
+            // capped at HistListWidth (180f) and a measured render showed the combined
+            // "8.3s (0s combat)" form truncating mid-parenthetical (owner ruling 2026-07-28, option 1).
+            var dur = FormatDurationWithTenths(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs));
             var map = ResolveSceneName(h.SceneName);
             _historyView.Add(new SessionEntry(
                 i,
@@ -477,6 +484,74 @@ public sealed partial class Plugin
         long secs = durationMs / 1000; if (secs < 0) secs = 0;
         long m = secs / 60, s = secs % 60;
         return m > 0 ? $"{m}m {s}s" : $"{s}s";
+    }
+
+    /// <summary>
+    /// Real elapsed span of an archived segment: archive time minus combat start. Both fields are
+    /// already persisted on every entry, so this is derivable retroactively — no schema change.
+    ///
+    /// This exists because <c>CombatDurationMs</c> is the DAMAGE-HIT SPAN, not elapsed time:
+    /// <c>FirstHitMs</c>/<c>LastHitMs</c> are written only in the damage handler
+    /// (<c>Plugin.Capture.cs</c>), so healing and damage-taken never move them. A heal-only tail has a
+    /// legitimate span of 0 while seconds of wall-clock pass — which is why the owner saw `0s` rows on
+    /// archives that plainly covered real time (report 2026-07-28, run 890357114281656320).
+    ///
+    /// Returns 0 when no combat start was recorded (otherwise <c>arch - 0</c> would report ~56 years)
+    /// and clamps a backwards server clock.
+    /// </summary>
+    internal static long RealDurationMs(long enteredAtMs, long archivedAtMs)
+    {
+        if (enteredAtMs <= 0) return 0;
+        var span = archivedAtMs - enteredAtMs;
+        return span > 0 ? span : 0;
+    }
+
+    /// <summary>
+    /// History-row duration label: real elapsed span, with the combat span in parentheses when the two
+    /// differ — `8.3s (0s combat)`. Format chosen by the owner 2026-07-28. Under a minute it carries one
+    /// decimal (their example was `8.3s`); at a minute and above it uses the existing m/s style. The
+    /// parenthetical is omitted when both render identically, so ordinary fights stay uncluttered.
+    ///
+    /// Display only — <c>CombatDurationMs</c> is reported verbatim and never adjusted, because DPS
+    /// divides by it.
+    /// </summary>
+    internal static string FormatRowDuration(long realMs, long combatMs)
+    {
+        if (realMs < 0) realMs = 0;
+        if (combatMs < 0) combatMs = 0;
+        // Suffix suppressed when both land on the same whole second — otherwise every ordinary fight
+        // would repeat its own number. Compared on the VALUES, not the rendered strings, so the two
+        // formats (tenths vs m/s) can't disagree about equality.
+        if (realMs / 1000 == combatMs / 1000) return FormatDurationWithTenths(realMs);
+        // Combat span uses the same whole-second formatter as the rest of the UI, so a 0 span reads
+        // "0s combat" exactly as the owner specified — not "0.0s".
+        return $"{FormatDurationWithTenths(realMs)} ({FormatSessionDurationShort(combatMs)} combat)";
+    }
+
+    /// <summary>
+    /// Full x-extent for the session chart, in seconds. Uses the REAL elapsed span, not the damage
+    /// span: the timeline series are bucketed relative to <c>_combatStartMs</c> (= <c>EnteredAtMs</c>,
+    /// see <c>Plugin.Capture.cs</c>'s <c>TimelineFor(...).Add(..., _combatStartMs, ...)</c>), so the
+    /// series domain genuinely runs to the archive moment. Showing only the damage span cut the chart
+    /// short of the data it holds — owner ruling 2026-07-28: if the row reports real duration, the
+    /// graph must cover the whole duration too.
+    ///
+    /// Falls back to the combat span when no combat start was recorded, so the chart is never 0-wide.
+    /// DPS/HPS rates are NOT affected — those divide by <c>CombatDurationMs</c> and are untouched.
+    /// </summary>
+    internal static float ChartExtentSeconds(long realMs, long combatMs)
+    {
+        var ms = realMs > 0 ? realMs : combatMs;
+        return ms > 0 ? ms / 1000f : 0f;
+    }
+
+    // One decimal below a minute, whole seconds in m/s form above it.
+    private static string FormatDurationWithTenths(long ms)
+    {
+        if (ms < 0) ms = 0;
+        if (ms < 60_000) return $"{ms / 1000f:0.0}s";
+        long secs = ms / 1000, m = secs / 60, s = secs % 60;
+        return $"{m}m {s}s";
     }
 
     private static long ComputeSessionMetricTotal(EncounterHistoryEntry h, Metric m)
