@@ -36,29 +36,74 @@ internal static class ContentKindFetcher
     {
         _ = Task.Run(async () =>
         {
+            string? body = null;
+            string? resultEtag = null;
+            string? warn = null;
+
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, apiBase + "/api/site/content-kinds");
                 if (!string.IsNullOrEmpty(etag)) req.Headers.TryAddWithoutValidation("If-None-Match", etag);
 
                 using var res = await HttpClient.SendAsync(req).ConfigureAwait(false);
-                if (res.StatusCode == HttpStatusCode.NotModified) { onResult(null, null); return; }
-                if (!res.IsSuccessStatusCode)
+                if (res.StatusCode == HttpStatusCode.NotModified)
                 {
-                    onWarn($"[CombatMeter.SP1] content-kinds fetch failed (HTTP {(int)res.StatusCode}) — keeping cached map.");
-                    onResult(null, null);
-                    return;
+                    // (null, null, null): keep the cache, nothing to warn about.
                 }
-
-                var body = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
-                onResult(body, res.Headers.ETag?.Tag);
+                else if (!res.IsSuccessStatusCode)
+                {
+                    warn = $"[CombatMeter.SP1] content-kinds fetch failed (HTTP {(int)res.StatusCode}) — keeping cached map.";
+                }
+                else
+                {
+                    body = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    resultEtag = res.Headers.ETag?.Tag;
+                }
             }
             catch (Exception ex)
             {
                 // Offline / DNS / timeout: entirely expected, and harmless — the cached (or empty) map stands.
-                onWarn($"[CombatMeter.SP1] content-kinds fetch threw: {ex.Message} — keeping cached map.");
-                onResult(null, null);
+                warn = $"[CombatMeter.SP1] content-kinds fetch threw: {ex.Message} — keeping cached map.";
             }
+
+            // Deliver OUTSIDE the try/catch above: a throwing callback must not be caught by the
+            // fetch's own catch block (which would double-invoke onResult) and must not prevent the
+            // other callback from running (which would skip onResult entirely). See DeliverResult.
+            DeliverResult(body, resultEtag, warn, onResult, onWarn);
         });
+    }
+
+    /// <summary>Delivers a fetch outcome to the caller's callbacks. Invoked OUTSIDE the fetch's own
+    /// try/catch and guarding each delegate separately, so a throwing callback can neither re-enter
+    /// this method nor suppress the other callback: <paramref name="onResult"/> runs exactly once per
+    /// fetch no matter what either delegate does. (Before this, a throwing onResult caused a SECOND
+    /// (null,null) delivery from the catch block, and a throwing onWarn skipped onResult entirely.)</summary>
+    internal static void DeliverResult(string? body, string? etag, string? warn,
+                                       Action<string?, string?> onResult, Action<string> onWarn)
+    {
+        if (warn != null)
+        {
+            try
+            {
+                onWarn(warn);
+            }
+            catch
+            {
+                // Swallow: this runs on a thread-pool thread inside a fire-and-forget fetch — there is
+                // no higher handler, and a misbehaving warn callback must not stop onResult below (nor
+                // crash the game client) from delivering the real outcome.
+            }
+        }
+
+        try
+        {
+            onResult(body, etag);
+        }
+        catch
+        {
+            // Swallow: same reasoning as above. onResult has already been invoked at this point — a
+            // throw here must not be reinterpreted as "not yet delivered" by any caller/outer catch,
+            // which is exactly the double-invocation bug this method exists to prevent.
+        }
     }
 }
