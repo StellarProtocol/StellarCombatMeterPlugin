@@ -119,6 +119,15 @@ public sealed partial class Plugin
         foreach (var kind in UploadPolicyTable.Kinds) rows.Add(PolicyRow(kind, UploadArtifact.Stats));
         rows.Add(new TextElement(() => "Replay position track", Emphasis: true));
         foreach (var kind in UploadPolicyTable.Kinds) rows.Add(PolicyRow(kind, UploadArtifact.Replay));
+        // The content list (which mapIds count as dungeon/raid/world boss) is fetched ONCE and cached,
+        // then re-fetched only when the plugin updates — every request to the site's Worker is billed, so
+        // there is no polling (owner ruling 2026-07-28). This button is the escape hatch for a content
+        // patch that lands without a plugin release. User-initiated, so it cannot run away.
+        rows.Add(new RowElement(new HudElement[]
+        {
+            new SpacerElement(Width: 8f),
+            new ButtonElement(() => "Refresh content list", RefreshContentKindsNow, Width: 150f),
+        }, Gap: 6f));
         return rows.ToArray();
     }
 

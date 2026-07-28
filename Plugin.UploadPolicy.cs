@@ -1,4 +1,5 @@
 using System.Globalization;
+using Stellar.Abstractions.Services;
 using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
@@ -13,6 +14,8 @@ public sealed partial class Plugin
     private const string PrefKindMapWorldBoss = "logUpload.kindMap.worldboss";
     private const string PrefKindMapEtag      = "logUpload.kindMap.etag";
     private const string PrefKindMapFetchedAt = "logUpload.kindMap.fetchedAtMs";
+    // Plugin version that fetched the cached map — the re-fetch TRIGGER (owner ruling 2026-07-28).
+    private const string PrefKindMapVersion   = "logUpload.kindMap.pluginVersion";
 
     private readonly UploadPolicyTable _uploadPolicy = UploadPolicyTable.AllAuto();
     private ContentKindMap _contentKinds = ContentKindMap.Empty;
@@ -177,31 +180,66 @@ public sealed partial class Plugin
         _replayCaptureEnabled = AnyReplayCellEnabled(_uploadPolicy);
     }
 
+    /// <summary>Running plugin version, used as the kind-map cache key. Null when unreadable, which
+    /// <see cref="ContentKindFetcher.NeedsFetch"/> treats as "fetch" rather than pinning a stale map.</summary>
+    private static string? CurrentPluginVersion => typeof(Plugin).Assembly.GetName().Version?.ToString();
+
+    // Owner ruling 2026-07-28: fetch ONCE and cache; re-fetch only when the plugin version changes.
+    // Steady state is ZERO requests — every request to a Worker route bills an invocation on Cloudflare.
+    // See ContentKindFetcher.NeedsFetch for the full rationale and the accepted staleness trade-off.
     private void MaybeRefreshContentKinds()
     {
-        // Wall clock, NOT _services.CombatSnapshot.ServerNowMs: the server clock reads 0 until the
-        // client has received a server time, so a stamp taken at construction would persist as 0 and
-        // IsStale would read that as permanently stale — the 24h cache would never suppress a fetch.
-        // IsStale already treats a backwards clock as stale, which covers a user's system clock
-        // changing, so the wall clock costs nothing on that axis.
-        var now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (!ContentKindFetcher.IsStale(_prefs.Get<long>(PrefKindMapFetchedAt, 0L), now)) return;
+        if (!ContentKindFetcher.NeedsFetch(
+                _prefs.Get<string>(PrefKindMapVersion, null), CurrentPluginVersion, _contentKinds.IsEmpty))
+            return;
+        FetchContentKinds(userRequested: false);
+    }
 
+    /// <summary>Settings-pane "Refresh content list" — fetches unconditionally. The escape hatch for a
+    /// content patch that lands without a plugin release. User-initiated, so it cannot run away.</summary>
+    internal void RefreshContentKindsNow() => FetchContentKinds(userRequested: true);
+
+    private void FetchContentKinds(bool userRequested)
+    {
+        // Wall clock, NOT ServerNowMs: the server clock reads 0 until the client has a server time, and
+        // this can run at construction. Informational only now — the fetch TRIGGER is the version stamp.
+        var now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         ContentKindFetcher.FetchFireAndForget(
             LogUploader.ApiBase,
             _prefs.Get<string>(PrefKindMapEtag, null),
-            (body, etag) => OnContentKindsFetched(body, etag, now),
+            (body, etag) => OnContentKindsFetched(body, etag, now, userRequested),
             msg => _services.Log.Warning(msg));
+    }
+
+    // Set by the fetch callback (thread-pool thread) and drained on the Unity main thread
+    // (DrainContentKindsNotice, called from OnUpdate) — Notifications must not be poked off-thread, the
+    // same rule the upload-status drain follows.
+    private volatile string? _contentKindsNotice;
+    private volatile bool _contentKindsNoticeOk;
+
+    private void DrainContentKindsNotice()
+    {
+        var notice = _contentKindsNotice;
+        if (notice is null) return;
+        _contentKindsNotice = null;
+        _services.Notifications.Notify(notice,
+            _contentKindsNoticeOk ? NotificationKind.Success : NotificationKind.Warning);
     }
 
     // Thread-pool thread: only prefs + thread-safe log calls, never uGUI. A null body (304 / failure)
     // keeps the cached map; a parse failure keeps it too, so a bad response can never wipe a good cache.
-    private void OnContentKindsFetched(string? body, string? etag, long fetchedAtMs)
+    private void OnContentKindsFetched(string? body, string? etag, long fetchedAtMs, bool userRequested)
     {
-        if (body is null) return;
+        if (body is null)
+        {
+            // 304 / unreachable. A manual refresh still owes the user an answer; the automatic path stays quiet.
+            if (userRequested) RaiseContentKindsNotice("Content list already up to date.", ok: true);
+            return;
+        }
         if (!ContentKindMap.TryParse(body, out var map))
         {
             _services.Log.Warning("[CombatMeter.SP1] content-kinds payload unparseable — keeping cached map.");
+            if (userRequested) RaiseContentKindsNotice("Content list refresh failed — kept the cached list.", ok: false);
             return;
         }
 
@@ -211,8 +249,18 @@ public sealed partial class Plugin
         _prefs.Set(PrefKindMapWorldBoss, map.Ids(ContentKind.WorldBoss));
         if (!string.IsNullOrEmpty(etag)) _prefs.Set(PrefKindMapEtag, etag);
         _prefs.Set(PrefKindMapFetchedAt, fetchedAtMs);
+        // Stamp the version LAST-ish, before Save: this is what suppresses every future fetch until the
+        // plugin is updated. Without it the map would be re-fetched on every launch.
+        if (CurrentPluginVersion is { } v) _prefs.Set(PrefKindMapVersion, v);
         _prefs.Save();
         RecomputeUploadPolicyCache();
-        _services.Log.Info("[CombatMeter.SP1] content-kinds map updated.");
+        _services.Log.Info($"[CombatMeter.SP1] content-kinds map updated (cached for plugin {CurrentPluginVersion ?? "?"}).");
+        if (userRequested) RaiseContentKindsNotice("Content list updated ✓", ok: true);
+    }
+
+    private void RaiseContentKindsNotice(string message, bool ok)
+    {
+        _contentKindsNoticeOk = ok;
+        _contentKindsNotice = message;   // written last: the drain reads the message as the ready flag
     }
 }

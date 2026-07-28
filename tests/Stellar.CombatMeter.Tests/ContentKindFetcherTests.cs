@@ -8,30 +8,11 @@ namespace Stellar.CombatMeter.Tests;
 /// or absent map never blocks an archive or an upload, it just classifies as `other`.</summary>
 public class ContentKindFetcherTests
 {
-    [Fact]
-    public void NeverFetched_IsStale()
-        => Assert.True(ContentKindFetcher.IsStale(fetchedAtMs: 0, nowMs: 1));
-
-    [Fact]
-    public void JustFetched_IsFresh()
-        => Assert.False(ContentKindFetcher.IsStale(fetchedAtMs: 1_000_000, nowMs: 1_000_000));
-
-    [Fact]
-    public void WithinTwentyFourHours_IsFresh()
-        => Assert.False(ContentKindFetcher.IsStale(1_000_000, 1_000_000 + ContentKindFetcher.RefreshIntervalMs - 1));
-
-    [Fact]
-    public void AtOrBeyondTwentyFourHours_IsStale()
-    {
-        Assert.True(ContentKindFetcher.IsStale(1_000_000, 1_000_000 + ContentKindFetcher.RefreshIntervalMs));
-        Assert.True(ContentKindFetcher.IsStale(1_000_000, 1_000_000 + ContentKindFetcher.RefreshIntervalMs * 3));
-    }
-
-    [Fact]
-    public void ClockWentBackwards_IsStale_SoAWrongClockCannotPinAStaleMapForever()
-        => Assert.True(ContentKindFetcher.IsStale(fetchedAtMs: 5_000_000, nowMs: 1_000));
-
-    // --- DeliverResult: the "onResult exactly once, on every path" invariant (review finding) ---
+    // The 24h-interval tests (IsStale) were RETIRED 2026-07-28: the fetch trigger is now the plugin
+    // VERSION, not elapsed time — every request to a Worker route bills an invocation on Cloudflare, so
+    // polling was pure waste for a table that changes about once per content patch. Replacement coverage
+    // lives in ContentKindRefreshTriggerTests (NeedsFetch). DeliverResult's exactly-once contract below
+    // is unaffected and still load-bearing.
 
     [Fact]
     public void DeliverResult_NoWarn_CallsOnResultOnceWithGivenValues_AndNeverCallsOnWarn()

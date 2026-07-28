@@ -16,15 +16,32 @@ namespace Stellar.CombatMeter.LogUpload;
 /// </summary>
 internal static class ContentKindFetcher
 {
-    /// <summary>Refresh when the cache is older than this (spec § 2.3: 24h).</summary>
-    internal const long RefreshIntervalMs = 86_400_000;
-
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
 
-    /// <summary>Cache age check. A never-fetched cache (0) and a backwards clock both read as stale, so
-    /// a wrong system clock can never pin a stale map forever.</summary>
-    internal static bool IsStale(long fetchedAtMs, long nowMs)
-        => fetchedAtMs <= 0 || nowMs < fetchedAtMs || nowMs - fetchedAtMs >= RefreshIntervalMs;
+    /// <summary>
+    /// Fetch trigger — owner ruling 2026-07-28, SUPERSEDING spec § 2.3's 24h interval: fetch once, cache
+    /// in prefs, re-fetch only when the plugin VERSION changes (plus the settings-pane manual refresh).
+    ///
+    /// Why not a time interval: on Cloudflare every request to a Worker route invokes and bills the
+    /// Worker — a <c>Cache-Control</c> header does not avoid that, only a Cache Rule serving ahead of the
+    /// Worker would. A 24h interval spent one request per install per day on a table that changes about
+    /// once per content patch. Owner: *"it costly when we use cloudflare as infra(waste request count)"*.
+    /// This costs ZERO in steady state.
+    ///
+    /// Fetches when the map is unusable (never fetched, or the prefs cache was lost), when the cached
+    /// version stamp is absent (a cache written by the interval-era build), or when the stamp differs from
+    /// the running plugin in EITHER direction — a rollback to a <c>.bak</c> build must re-fetch too, since
+    /// the older build's map may predate a taxonomy fix. An unknown current version also fetches, rather
+    /// than silently pinning a possibly-stale map.
+    ///
+    /// Accepted trade-off: between a content patch and the next plugin release, new content classifies as
+    /// <c>other</c>. Invisible under all-auto defaults; the manual refresh is the escape hatch.
+    /// </summary>
+    internal static bool NeedsFetch(string? cachedVersion, string? currentVersion, bool mapIsEmpty)
+        => mapIsEmpty
+        || string.IsNullOrEmpty(cachedVersion)
+        || string.IsNullOrEmpty(currentVersion)
+        || cachedVersion != currentVersion;
 
     /// <summary>
     /// Conditional GET of <c>{apiBase}/api/site/content-kinds</c>. Invokes
