@@ -12,12 +12,13 @@ public sealed partial class Plugin
     private const string PrefKindMapDungeon   = "logUpload.kindMap.dungeon";
     private const string PrefKindMapRaid      = "logUpload.kindMap.raid";
     private const string PrefKindMapWorldBoss = "logUpload.kindMap.worldboss";
+    private const string PrefKindMapVault     = "logUpload.kindMap.vault";
     private const string PrefKindMapEtag      = "logUpload.kindMap.etag";
     private const string PrefKindMapFetchedAt = "logUpload.kindMap.fetchedAtMs";
     // Plugin version that fetched the cached map — the re-fetch TRIGGER (owner ruling 2026-07-28).
     private const string PrefKindMapVersion   = "logUpload.kindMap.pluginVersion";
 
-    private readonly UploadPolicyTable _uploadPolicy = UploadPolicyTable.AllAuto();
+    private readonly UploadPolicyTable _uploadPolicy = UploadPolicyTable.Defaults();
     private ContentKindMap _contentKinds = ContentKindMap.Empty;
 
     // Cached resolution for the CURRENT scene. Recomputed on scene change and on any settings write —
@@ -47,8 +48,27 @@ public sealed partial class Plugin
     /// only <c>auto</c> permits the automatic upload. Static because Plugin cannot be instantiated
     /// headless — this is what the tests pin (artifact axis, trigger axis, and entry-derived kind all
     /// at once).</summary>
+    /// <summary>
+    /// The policy that actually applies to an archived entry — FAIL-OPEN when no taxonomy is cached
+    /// (spec § 8.3, owner ruling 2026-07-29 "a").
+    ///
+    /// With `other` defaulting to <c>off</c>, resolving unclassifiable content to <see cref="ContentKind.Other"/>
+    /// would upload NOTHING on a fresh install — not even dungeons and raids — because an empty map labels
+    /// every run `other`. "No taxonomy yet" is a DISTINCT state from "known to be unlisted content" and
+    /// must not be collapsed back into one path: the former uploads, the latter obeys the `other` cell.
+    ///
+    /// Fail-open applies ONLY to the unresolved case. Once a map exists, an explicit setting is honoured
+    /// exactly — including a deliberate `off` on a classified kind.
+    /// </summary>
+    internal static UploadPolicyState EffectivePolicy(
+        ContentKindMap map, UploadPolicyTable policy, EncounterHistoryEntry entry, UploadArtifact artifact)
+        => map.IsEmpty ? UploadPolicyState.Auto : policy[ResolveKind(map, entry), artifact];
+
+    internal UploadPolicyState EffectivePolicyFor(EncounterHistoryEntry entry, UploadArtifact artifact)
+        => EffectivePolicy(_contentKinds, _uploadPolicy, entry, artifact);
+
     internal static bool ReplayAutoUploadAllowed(ContentKindMap map, UploadPolicyTable policy, EncounterHistoryEntry entry)
-        => UploadPolicy.Allows(policy[ResolveKind(map, entry), UploadArtifact.Replay], UploadTrigger.Auto);
+        => UploadPolicy.Allows(EffectivePolicy(map, policy, entry, UploadArtifact.Replay), UploadTrigger.Auto);
 
     /// <summary>
     /// True when ANY kind's replay cell is not <c>off</c> — capture is deliberately kind-INDEPENDENT.
@@ -103,7 +123,8 @@ public sealed partial class Plugin
         _contentKinds = ContentKindMap.FromIds(
             _prefs.Get<int[]>(PrefKindMapDungeon, null),
             _prefs.Get<int[]>(PrefKindMapRaid, null),
-            _prefs.Get<int[]>(PrefKindMapWorldBoss, null));
+            _prefs.Get<int[]>(PrefKindMapWorldBoss, null),
+            _prefs.Get<int[]>(PrefKindMapVault, null));
         RecomputeUploadPolicyCache();
         MaybeRefreshContentKinds();
     }
@@ -170,7 +191,10 @@ public sealed partial class Plugin
     {
         _currentKind = _contentKinds.KindOf(ParseMapId(_services.ClientState.CurrentSceneName));
         // D3: raw-event buffering keeps today's semantics — only when this kind auto-uploads stats.
-        _captureForLogEnabled = _uploadPolicy[_currentKind, UploadArtifact.Stats] == UploadPolicyState.Auto;
+        // Fail-open on an empty map, same rule as EffectivePolicy: otherwise other=off would silently
+        // stop raw-event capture on a fresh install before the taxonomy ever arrives.
+        _captureForLogEnabled = _contentKinds.IsEmpty
+            || _uploadPolicy[_currentKind, UploadArtifact.Stats] == UploadPolicyState.Auto;
         // Replay capture is deliberately NOT _currentKind-derived: the upload gate resolves the kind
         // from the ARCHIVED entry's stored scene, and if the two disagree the samples are already lost.
         // A raid lobby / dungeon approach is a different (often unlisted ⇒ `other`) map id from the boss
@@ -247,6 +271,7 @@ public sealed partial class Plugin
         _prefs.Set(PrefKindMapDungeon,   map.Ids(ContentKind.Dungeon));
         _prefs.Set(PrefKindMapRaid,      map.Ids(ContentKind.Raid));
         _prefs.Set(PrefKindMapWorldBoss, map.Ids(ContentKind.WorldBoss));
+        _prefs.Set(PrefKindMapVault,     map.Ids(ContentKind.Vault));
         if (!string.IsNullOrEmpty(etag)) _prefs.Set(PrefKindMapEtag, etag);
         _prefs.Set(PrefKindMapFetchedAt, fetchedAtMs);
         // Stamp the version LAST-ish, before Save: this is what suppresses every future fetch until the

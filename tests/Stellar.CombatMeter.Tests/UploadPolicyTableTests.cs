@@ -56,6 +56,10 @@ public class UploadPolicyTableTests
         var t = UploadPolicyTable.Migrate(legacyAutoUpload, legacyUploadReplay);
         foreach (var kind in UploadPolicyTable.Kinds)
         {
+            // SUPERSEDED 2026-07-29 (spec § 8.2): `other` no longer follows the legacy prefs — it is
+            // forced OFF on both artifacts, on upgrade as well as on a fresh install (owner: "yes").
+            // UploadPolicyRevision2Tests pins that; here it is excluded rather than asserted loosely.
+            if (kind == ContentKind.Other) continue;
             Assert.Equal(expectedStats,  t[kind, UploadArtifact.Stats]);
             Assert.Equal(expectedReplay, t[kind, UploadArtifact.Replay]);
         }
@@ -77,9 +81,11 @@ public class UploadPolicyTableTests
     }
 
     [Fact]
-    public void KindsAndArtifacts_CoverTheFullEightCellGrid()
+    public void KindsAndArtifacts_CoverTheFullTenCellGrid()
     {
-        Assert.Equal(4, UploadPolicyTable.Kinds.Length);
+        // 4 -> 5 kinds on 2026-07-29: `vault` (Stimen Vaults) joined the taxonomy (spec § 8.1).
+        Assert.Equal(5, UploadPolicyTable.Kinds.Length);
         Assert.Equal(2, UploadPolicyTable.Artifacts.Length);
+        Assert.Equal(10, UploadPolicyTable.Kinds.Length * UploadPolicyTable.Artifacts.Length);
     }
 }

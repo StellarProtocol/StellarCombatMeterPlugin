@@ -3,7 +3,7 @@ namespace Stellar.CombatMeter.LogUpload;
 /// <summary>Site content taxonomy. MUST stay identical to <c>FEED_KINDS</c> in
 /// <c>services/stellar-logs/src/worker/routes/site.ts</c> and to <c>ContentKind</c> in
 /// <c>src/rankedContent.ts</c> — the plugin configures the same buckets the site's feed tabs show.</summary>
-internal enum ContentKind { Dungeon, Raid, WorldBoss, Other }
+internal enum ContentKind { Dungeon, Raid, WorldBoss, Vault, Other }
 
 /// <summary>The two independently configurable upload artifacts.</summary>
 internal enum UploadArtifact { Stats, Replay }
@@ -59,6 +59,7 @@ internal static class UploadPolicy
         ContentKind.Dungeon   => "dungeon",
         ContentKind.Raid      => "raid",
         ContentKind.WorldBoss => "worldboss",
+        ContentKind.Vault     => "vault",
         _                     => "other",
     };
 
@@ -75,6 +76,8 @@ internal static class UploadPolicy
         ContentKind.Dungeon   => "Dungeons",
         ContentKind.Raid      => "Raids",
         ContentKind.WorldBoss => "World Boss",
+        // Master-data spelling is "Stimen" (the owner wrote "Stiment") — keep it aligned with the site.
+        ContentKind.Vault     => "Stimen Vaults",
         _                     => "Other",
     };
 }
@@ -88,7 +91,7 @@ internal static class UploadPolicy
 internal sealed class UploadPolicyTable
 {
     internal static readonly ContentKind[] Kinds =
-        { ContentKind.Dungeon, ContentKind.Raid, ContentKind.WorldBoss, ContentKind.Other };
+        { ContentKind.Dungeon, ContentKind.Raid, ContentKind.WorldBoss, ContentKind.Vault, ContentKind.Other };
 
     internal static readonly UploadArtifact[] Artifacts =
         { UploadArtifact.Stats, UploadArtifact.Replay };
@@ -108,6 +111,21 @@ internal sealed class UploadPolicyTable
     internal static UploadPolicyTable AllAuto() => new();
 
     /// <summary>
+    /// Shipping defaults (spec § 8.2, owner ruling 2026-07-29): every kind <c>auto</c> EXCEPT
+    /// <see cref="ContentKind.Other"/>, which is <c>off</c> on both artifacts. REVERSES § 2.1's all-Auto
+    /// default — the owner accepted that it changes behaviour on upgrade, to stop the activity flood
+    /// (Wondrous Tag, Guild Hall, Unstable Space) filling the site feed and evicting real runs from the
+    /// 40-row retention bucket.
+    /// </summary>
+    internal static UploadPolicyTable Defaults()
+    {
+        var t = new UploadPolicyTable();
+        t[ContentKind.Other, UploadArtifact.Stats]  = UploadPolicyState.Off;
+        t[ContentKind.Other, UploadArtifact.Replay] = UploadPolicyState.Off;
+        return t;
+    }
+
+    /// <summary>
     /// Spec § 2.2 one-shot migration, run on the first load where no new keys exist so an existing
     /// install keeps its behaviour. <c>autoUpload=false</c> seeds <c>manual</c> (not <c>off</c>) because
     /// today that user can still push a run by hand and <c>off</c> would take that away;
@@ -120,6 +138,14 @@ internal sealed class UploadPolicyTable
         var table  = new UploadPolicyTable();
         foreach (var kind in Kinds)
         {
+            // Spec § 8.2: `other` is forced OFF even on an upgrade (owner: "yes"), so the legacy prefs
+            // seed only the four real content kinds.
+            if (kind == ContentKind.Other)
+            {
+                table[kind, UploadArtifact.Stats]  = UploadPolicyState.Off;
+                table[kind, UploadArtifact.Replay] = UploadPolicyState.Off;
+                continue;
+            }
             table[kind, UploadArtifact.Stats]  = stats;
             table[kind, UploadArtifact.Replay] = replay;
         }

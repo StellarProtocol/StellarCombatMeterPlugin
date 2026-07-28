@@ -140,7 +140,7 @@ public sealed partial class Plugin
     internal bool MaybeUploadLog(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc = null)
     {
         var kind = ResolveKind(entry);
-        var state = UploadPolicyFor(kind, UploadArtifact.Stats);
+        var state = EffectivePolicyFor(entry, UploadArtifact.Stats);   // fail-open on an empty map (§ 8.3)
         if (!UploadPolicy.Allows(state, UploadTrigger.Auto))
         {
             LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Auto, state);
@@ -169,7 +169,7 @@ public sealed partial class Plugin
         // from the ENTRY's stored scene name, so a re-upload after a relaunch resolves the kind the run
         // had when it was archived — never whatever scene happens to be live now.
         var kind = ResolveKind(entry);
-        var state = UploadPolicyFor(kind, UploadArtifact.Stats);
+        var state = EffectivePolicyFor(entry, UploadArtifact.Stats);   // fail-open on an empty map (§ 8.3)
         if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
         {
             LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Manual, state);
@@ -247,7 +247,7 @@ public sealed partial class Plugin
     private void MaybeReUploadPositions(EncounterHistoryEntry entry, ReUploadPayload payload)
     {
         var kind = ResolveKind(entry);
-        var state = UploadPolicyFor(kind, UploadArtifact.Replay);
+        var state = EffectivePolicyFor(entry, UploadArtifact.Replay);  // fail-open on an empty map (§ 8.3)
         if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
         {
             LogUploadRefusal(kind, UploadArtifact.Replay, UploadTrigger.Manual, state);

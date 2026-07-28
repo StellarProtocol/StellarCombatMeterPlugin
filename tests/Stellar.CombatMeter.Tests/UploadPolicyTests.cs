@@ -69,6 +69,7 @@ public class UploadPolicyTests
         Assert.Equal("dungeon",   UploadPolicy.KindKey(ContentKind.Dungeon));
         Assert.Equal("raid",      UploadPolicy.KindKey(ContentKind.Raid));
         Assert.Equal("worldboss", UploadPolicy.KindKey(ContentKind.WorldBoss));
+        Assert.Equal("vault",     UploadPolicy.KindKey(ContentKind.Vault));
         Assert.Equal("other",     UploadPolicy.KindKey(ContentKind.Other));
     }
 
@@ -82,6 +83,8 @@ public class UploadPolicyTests
         Assert.Equal("Dungeons",   UploadPolicy.Label(ContentKind.Dungeon));
         Assert.Equal("Raids",      UploadPolicy.Label(ContentKind.Raid));
         Assert.Equal("World Boss", UploadPolicy.Label(ContentKind.WorldBoss));
+        // Master-data spelling: "Stimen", not the owner's "Stiment" — keeps name resolution working.
+        Assert.Equal("Stimen Vaults", UploadPolicy.Label(ContentKind.Vault));
         Assert.Equal("Other",      UploadPolicy.Label(ContentKind.Other));
     }
 
@@ -91,7 +94,8 @@ public class UploadPolicyTests
         var seen = new System.Collections.Generic.HashSet<string>();
         foreach (var kind in UploadPolicyTable.Kinds)
             Assert.True(seen.Add(UploadPolicy.Label(kind)), $"duplicate label for {kind}");
-        Assert.Equal(4, seen.Count);
+        // 4 -> 5 kinds on 2026-07-29 (spec § 8.1): `vault` = "Stimen Vaults".
+        Assert.Equal(5, seen.Count);
     }
 
     [Fact]

@@ -61,7 +61,8 @@ public class ContentKindMapTests
         var revived = ContentKindMap.FromIds(
             parsed.Ids(ContentKind.Dungeon),
             parsed.Ids(ContentKind.Raid),
-            parsed.Ids(ContentKind.WorldBoss));
+            parsed.Ids(ContentKind.WorldBoss),
+            parsed.Ids(ContentKind.Vault));
 
         Assert.Equal(ContentKind.Dungeon,   revived.KindOf(1150));
         Assert.Equal(ContentKind.Raid,      revived.KindOf(13021));
@@ -71,7 +72,7 @@ public class ContentKindMapTests
 
     [Fact]
     public void FromIds_NullArrays_YieldAnEmptyMap()
-        => Assert.True(ContentKindMap.FromIds(null, null, null).IsEmpty);
+        => Assert.True(ContentKindMap.FromIds(null, null, null, null).IsEmpty);
 
     // --- Regression: truncated/malformed "kinds" payloads must terminate, never hang. ----------------
     //

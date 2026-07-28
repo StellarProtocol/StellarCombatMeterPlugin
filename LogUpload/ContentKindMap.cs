@@ -20,24 +20,27 @@ internal sealed class ContentKindMap
     private readonly HashSet<int> _dungeon;
     private readonly HashSet<int> _raid;
     private readonly HashSet<int> _worldboss;
+    private readonly HashSet<int> _vault;
 
-    private ContentKindMap(HashSet<int> dungeon, HashSet<int> raid, HashSet<int> worldboss)
+    private ContentKindMap(HashSet<int> dungeon, HashSet<int> raid, HashSet<int> worldboss, HashSet<int> vault)
     {
         _dungeon = dungeon;
         _raid = raid;
         _worldboss = worldboss;
+        _vault = vault;
     }
 
     /// <summary>The never-fetched map: classifies everything as <see cref="ContentKind.Other"/>.</summary>
-    internal static ContentKindMap Empty { get; } = new(new HashSet<int>(), new HashSet<int>(), new HashSet<int>());
+    internal static ContentKindMap Empty { get; } = new(new HashSet<int>(), new HashSet<int>(), new HashSet<int>(), new HashSet<int>());
 
-    internal bool IsEmpty => _dungeon.Count == 0 && _raid.Count == 0 && _worldboss.Count == 0;
+    internal bool IsEmpty => _dungeon.Count == 0 && _raid.Count == 0 && _worldboss.Count == 0 && _vault.Count == 0;
 
     internal ContentKind KindOf(int mapId)
     {
         if (_dungeon.Contains(mapId)) return ContentKind.Dungeon;
         if (_raid.Contains(mapId)) return ContentKind.Raid;
         if (_worldboss.Contains(mapId)) return ContentKind.WorldBoss;
+        if (_vault.Contains(mapId)) return ContentKind.Vault;
         return ContentKind.Other;   // unlisted content, unparseable scene, or no map fetched yet
     }
 
@@ -57,12 +60,13 @@ internal sealed class ContentKindMap
         ContentKind.Dungeon   => _dungeon,
         ContentKind.Raid      => _raid,
         ContentKind.WorldBoss => _worldboss,
+        ContentKind.Vault     => _vault,
         _                     => null,
     };
 
     /// <summary>Rebuilds from the prefs cache. Null arrays are treated as empty.</summary>
-    internal static ContentKindMap FromIds(int[]? dungeon, int[]? raid, int[]? worldboss)
-        => new(ToSet(dungeon), ToSet(raid), ToSet(worldboss));
+    internal static ContentKindMap FromIds(int[]? dungeon, int[]? raid, int[]? worldboss, int[]? vault)
+        => new(ToSet(dungeon), ToSet(raid), ToSet(worldboss), ToSet(vault));
 
     private static HashSet<int> ToSet(int[]? ids)
     {
@@ -84,9 +88,10 @@ internal sealed class ContentKindMap
         var dungeon = new HashSet<int>();
         var raid = new HashSet<int>();
         var worldboss = new HashSet<int>();
-        if (!TryReadKinds(json!, dungeon, raid, worldboss)) return false;
+        var vault = new HashSet<int>();
+        if (!TryReadKinds(json!, dungeon, raid, worldboss, vault)) return false;
 
-        var parsed = new ContentKindMap(dungeon, raid, worldboss);
+        var parsed = new ContentKindMap(dungeon, raid, worldboss, vault);
         if (parsed.IsEmpty) return false;   // a payload with no ids is not a usable map
         map = parsed;
         return true;
@@ -96,7 +101,8 @@ internal sealed class ContentKindMap
     // (Next() → JsonTokenKind, with StringValue/NumberValue) — it has no seek/object/array helpers, so
     // this walks tokens directly, exactly as HistoryStore.Read.cs does. Deliberately permissive: an
     // unrecognised key ("other", or a future fifth kind) is read and discarded rather than being fatal.
-    private static bool TryReadKinds(string json, HashSet<int> dungeon, HashSet<int> raid, HashSet<int> worldboss)
+    private static bool TryReadKinds(string json, HashSet<int> dungeon, HashSet<int> raid, HashSet<int> worldboss,
+                                    HashSet<int> vault)
     {
         var r = new HistoryJsonReader(json);
 
@@ -124,6 +130,7 @@ internal sealed class ContentKindMap
                 "dungeon"   => dungeon,
                 "raid"      => raid,
                 "worldboss" => worldboss,
+                "vault"     => vault,
                 _           => null,       // "other" / unknown kind: consume the array, keep nothing
             };
             if (r.Next() != JsonTokenKind.Colon) return false;
