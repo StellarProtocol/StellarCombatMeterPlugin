@@ -168,7 +168,12 @@ public sealed partial class Plugin
 
     private void MaybeRefreshContentKinds()
     {
-        var now = _services.CombatSnapshot.ServerNowMs;
+        // Wall clock, NOT _services.CombatSnapshot.ServerNowMs: the server clock reads 0 until the
+        // client has received a server time, so a stamp taken at construction would persist as 0 and
+        // IsStale would read that as permanently stale — the 24h cache would never suppress a fetch.
+        // IsStale already treats a backwards clock as stale, which covers a user's system clock
+        // changing, so the wall clock costs nothing on that axis.
+        var now = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (!ContentKindFetcher.IsStale(_prefs.Get<long>(PrefKindMapFetchedAt, 0L), now)) return;
 
         ContentKindFetcher.FetchFireAndForget(
