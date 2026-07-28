@@ -172,22 +172,34 @@ public sealed partial class Plugin
     // under the 50-LoC cap. EVERY banked archive ships the window (watermark, now]: there is no
     // ShouldFinalizeReplay gate (retired — the recorder never stops, so no run-terminal concept) and
     // no sub-3s fragment gate (retired — contiguous windows stitch on the site, short tails are safe).
-    // PrepareReplayDoc returns null for an off / no-level / EMPTY window, in which case nothing uploads
-    // and the watermark holds. On a successful hand-off to the upload queue the watermark advances and
-    // the window's samples are freed; a failed hand-off keeps them so they merge into the next window
-    // (at-least-once, owner default 2). Returns whether a SUMMARY upload fired.
+    // PrepareReplayDoc returns null for an off / no-level / EMPTY window, in which case the watermark
+    // holds. On a successful hand-off to the upload queue the watermark advances and the window's
+    // samples are freed; a failed hand-off (or no doc at all) keeps them so they merge into the next
+    // window (at-least-once, owner default 2). Returns whether a SUMMARY upload fired.
     private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry,
                                               long replayUpperCapServerMs = ReplayUpperCapUnset)
     {
         var replayDoc = PrepareReplayDoc(entry, replayUpperCapServerMs);
-        if (replayDoc is null) return false;   // empty/off/no-level window — watermark unchanged
+        // D1 (2026-07-28): the summary upload is INDEPENDENT of the replay doc. 9d03cfe returned early
+        // here when replayDoc was null, which silently suppressed the run-stats upload whenever replay
+        // upload was off / the run had no level id / the window was empty. MaybeUploadLog already
+        // accepts a null doc (its replayDoc parameter defaults to null and both callback legs
+        // null-check it), so pass it straight through.
         var summaryFired = MaybeUploadLog(entry, replayDoc);
         // summaryFired → the summary callback OWNS + uploads the doc (synchronous hand-off complete);
-        // otherwise upload it directly here. A non-throwing hand-off (either path) advances the watermark.
-        var handedOff = summaryFired || UploadReplayDoc(replayDoc);
-        if (handedOff) AdvanceReplayWatermark();
+        // otherwise upload it directly here. Only a genuine hand-off advances the watermark — a null
+        // doc means nothing was serialized, so the samples must stay for the next window.
+        var directHandedOff = replayDoc is not null && !summaryFired && UploadReplayDoc(replayDoc);
+        if (ShouldAdvanceWatermark(replayDoc is not null, summaryFired, directHandedOff)) AdvanceReplayWatermark();
         return summaryFired;
     }
+
+    /// <summary>Pure decision seam for the delta-window watermark (P0: replay must cover dungeon entry →
+    /// run end). The watermark advances ONLY when a serialized window was genuinely handed off to an
+    /// uploader — never when no doc existed (nothing to hand off) and never on a failed hand-off, so
+    /// unshipped samples merge into the next window (at-least-once).</summary>
+    internal static bool ShouldAdvanceWatermark(bool replayDocPresent, bool summaryFired, bool directUploadHandedOff)
+        => replayDocPresent && (summaryFired || directUploadHandedOff);
 
     // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
     // snapshot rationale (sticky LastSettlement vs fresh-kill baseline) is documented on
