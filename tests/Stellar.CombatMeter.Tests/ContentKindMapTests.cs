@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using Stellar.CombatMeter.LogUpload;
 using Xunit;
 
@@ -70,4 +72,62 @@ public class ContentKindMapTests
     [Fact]
     public void FromIds_NullArrays_YieldAnEmptyMap()
         => Assert.True(ContentKindMap.FromIds(null, null, null).IsEmpty);
+
+    // --- Regression: truncated/malformed "kinds" payloads must terminate, never hang. ----------------
+    //
+    // TryReadKinds' id-array loop (Stellar.CombatMeter.LogUpload.ContentKindMap.TryReadKinds) has a
+    // single guard — `if (t != JsonTokenKind.Number) return false;` — that is the ONLY thing standing
+    // between a malformed/truncated payload and an infinite loop. HistoryJsonReader.Next() never throws
+    // and never advances past Eof/an unrecognised character: once the input runs out or the tokenizer
+    // sees an unparseable byte, every subsequent Next() call returns the same sentinel token (Eof or
+    // Error) forever at the same string position. Without the guard, the array loop happily calls
+    // `target?.Add((int)r.NumberValue)` on that sentinel and spins calling Next() again — forever. That
+    // would be a silent infinite loop while parsing a network response on a game client.
+    //
+    // These payloads specifically target that loop (truncated inside an id array, or a malformed token
+    // inside one) plus a few adjacent malformed shapes for coverage. Every case must both return `false`
+    // AND terminate quickly.
+
+    /// <summary>
+    /// Generous ceiling for <see cref="ContentKindMap.TryParse"/> on a small hand-crafted payload — real
+    /// runs finish in well under a millisecond. Only a genuine infinite loop would ever approach this.
+    /// </summary>
+    private static readonly TimeSpan ParseTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Runs <see cref="ContentKindMap.TryParse"/> on a background <see cref="Task"/> and asserts it
+    /// completes within <paramref name="timeout"/> before looking at the result. This indirection exists
+    /// ONLY because of the infinite-loop risk documented above: if the id-array guard is ever removed or
+    /// weakened, calling <c>ContentKindMap.TryParse</c> directly from a test body would not fail — it
+    /// would hang the test (and wedge the whole CI run) forever, since the reader spins without ever
+    /// throwing or returning. Wrapping the call in a bounded <see cref="Task.Wait(TimeSpan)"/> turns that
+    /// failure mode into an ordinary red assertion instead of a stuck build. Do NOT "simplify" this back
+    /// to a direct call — that would silently remove the regression coverage this test exists to provide.
+    /// </summary>
+    private static bool ParseWithTimeout(string? json, out ContentKindMap map, TimeSpan timeout)
+    {
+        ContentKindMap result = ContentKindMap.Empty;
+        var ok = false;
+        var task = Task.Run(() => { ok = ContentKindMap.TryParse(json, out result); });
+        Assert.True(task.Wait(timeout), "ContentKindMap.TryParse did not terminate within the timeout — possible infinite loop in TryReadKinds.");
+        map = result;
+        return ok;
+    }
+
+    [Theory]
+    [InlineData("{\"version\":1,\"kinds\":{\"dungeon\":[1150,")]                    // 1: truncated mid-id-array
+    [InlineData("{\"version\":1,\"kinds\":{")]                                      // 2: truncated right after "kinds" opens
+    [InlineData("{\"version\":1,\"kinds\":{\"dun")]                                 // 3: truncated mid-key
+    [InlineData("{\"version\":1,\"kinds\":{\"dungeon\":{\"a\":1}}}")]               // 4: nested object where an id array is expected
+    [InlineData("{\"version\":1,\"kinds\":{\"dungeon\":[1150,zzz]}}")]              // 5: malformed token inside an id array
+    [InlineData("{\"version\":1,\"kinds\":{\"dungeon\":[\"1150\"]}}")]              // 6: string instead of a number in an id array
+    public void TryParse_TruncatedOrMalformedKindsPayload_TerminatesAndReturnsFalse(string json)
+    {
+        var ok = ParseWithTimeout(json, out var map, ParseTimeout);
+
+        Assert.False(ok);
+        // Still yields a usable all-Other map, never null, so callers never null-check.
+        Assert.NotNull(map);
+        Assert.Equal(ContentKind.Other, map.KindOf(1151));
+    }
 }
