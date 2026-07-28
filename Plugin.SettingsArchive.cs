@@ -78,28 +78,39 @@ public sealed partial class Plugin
             new SeparatorElement(),
             new TextElement(() => "Uploads", Emphasis: true),
             ToggleRow("Auto-upload runs", AllStatsAuto, SetAllStatsPolicy),
-            ToggleRow("Upload replay position track (dungeon/raid)", () => UploadReplay, v => UploadReplay = v),
+            ToggleRow("Upload replay position track (dungeon/raid)", AllReplayAuto, SetAllReplayPolicy),
         }, Gap: 4f);
 
-    // ---- Uploads section: interim binding for the retired global auto-upload flag ----
-    // The global logUpload.autoUpload flag is gone (spec § 2.2); the row above now drives all FOUR
-    // `<kind>.stats` cells at once so the owner's existing switch keeps working — and keeps meaning
-    // exactly what it means today — until Task 9 replaces the row with the 4 × 2 tri-state grid. Reads
-    // the in-memory table only (no prefs I/O on the settings poll).
-    // OFF writes `manual`, not `off`: the same value the legacy migration seeds for autoUpload=false,
-    // which preserves the ability to push a run by hand (spec § 2.2).
-    private bool AllStatsAuto()
+    // ---- Uploads section: interim bindings for the two retired global upload flags ----
+    // Both globals are gone (spec § 2.2: logUpload.autoUpload and logUpload.uploadReplay); each row
+    // above now drives all FOUR cells of its artifact column at once so the owner's existing switches
+    // keep working — and keep meaning exactly what they mean today — until Task 9 replaces both rows
+    // with the 4 × 2 tri-state grid. Reads the in-memory table only (no prefs I/O on the settings poll).
+    //
+    // The OFF value differs per artifact, mirroring the legacy migration exactly (UploadPolicyTable.
+    // Migrate): stats OFF writes `manual`, preserving the hand push the old flag left available; replay
+    // OFF writes `off`, because the old flag's OFF also stopped capture outright.
+    private bool AllStatsAuto() => AllAutoFor(UploadArtifact.Stats);
+
+    private void SetAllStatsPolicy(bool auto)
+        => SetAllFor(UploadArtifact.Stats, auto ? UploadPolicyState.Auto : UploadPolicyState.Manual);
+
+    private bool AllReplayAuto() => AllAutoFor(UploadArtifact.Replay);
+
+    private void SetAllReplayPolicy(bool on)
+        => SetAllFor(UploadArtifact.Replay, on ? UploadPolicyState.Auto : UploadPolicyState.Off);
+
+    private bool AllAutoFor(UploadArtifact artifact)
     {
         foreach (var kind in UploadPolicyTable.Kinds)
-            if (UploadPolicyFor(kind, UploadArtifact.Stats) != UploadPolicyState.Auto) return false;
+            if (UploadPolicyFor(kind, artifact) != UploadPolicyState.Auto) return false;
         return true;
     }
 
-    private void SetAllStatsPolicy(bool auto)
+    private void SetAllFor(UploadArtifact artifact, UploadPolicyState state)
     {
-        var state = auto ? UploadPolicyState.Auto : UploadPolicyState.Manual;
         foreach (var kind in UploadPolicyTable.Kinds)
-            SetUploadPolicy(kind, UploadArtifact.Stats, state);
+            SetUploadPolicy(kind, artifact, state);
     }
 
     // "Last archive: {tag} · {n}s ago" readout — reads LastArchive (Plugin.AutoArchive.cs, set by

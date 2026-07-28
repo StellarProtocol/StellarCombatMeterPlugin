@@ -12,19 +12,9 @@ namespace Stellar.CombatMeter;
 public sealed partial class Plugin
 {
     // -----------------------------------------------------------------------
-    // ReplayDefaults — static seam used by unit tests (Plugin can't be headless-instantiated)
+    // Constants
     // -----------------------------------------------------------------------
 
-    internal static class ReplayDefaults
-    {
-        public const bool UploadReplayDefault = true;
-    }
-
-    // -----------------------------------------------------------------------
-    // Prefs + constants
-    // -----------------------------------------------------------------------
-
-    private const string PrefUploadReplay       = "logUpload.uploadReplay";
     private const int    ReplaySampleIntervalMs  = 500;       // 2 Hz
     private const int    ReplayMaxSamplesPerTrack = 3600;
     private const int    ReplayMaxTotalSamples    = 200_000;
@@ -39,7 +29,6 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     private ReplayCapture? _replay;
-    private bool _uploadReplay = ReplayDefaults.UploadReplayDefault;
 
     // Latches the dungeon run-id TickReplayCapture last observed, so a transition to a
     // DIFFERENT run (including via 0, e.g. a crash → re-enter) can be detected and the prior
@@ -102,23 +91,12 @@ public sealed partial class Plugin
     // time always yielded 0 (same timing bug as the boss name). Sticky: first non-zero wins.
     private readonly Dictionary<long, int> _replaySpecs = new();
 
-    /// <summary>
-    /// Capture + upload the replay position track for dungeon/raid runs.
-    /// Default ON; separate from AutoUpload.
-    /// </summary>
-    internal bool UploadReplay
-    {
-        get => _uploadReplay;
-        set { _uploadReplay = value; _prefs.Set(PrefUploadReplay, value); _prefs.Save(); }
-    }
-
     // -----------------------------------------------------------------------
     // Lifecycle
     // -----------------------------------------------------------------------
 
     private void InitReplay()
     {
-        _uploadReplay = _prefs.Get(PrefUploadReplay, ReplayDefaults.UploadReplayDefault);
         _replay = new ReplayCapture(
             tryGet: SafeTryGetTransform,
             maxSamplesPerTrack:  ReplayMaxSamplesPerTrack,
@@ -171,7 +149,7 @@ public sealed partial class Plugin
         return false;
     }
 
-    // Called every frame from OnUpdate. Gate: toggle on + dungeon/raid run in progress. Deliberately
+    // Called every frame from OnUpdate. Gate: replay cell not `off` + dungeon/raid run. Deliberately
     // NOT gated on _combatActive — the run-id latch (IsInstancedRun) fires on dungeon ENTER, well
     // before the first pull, so the replay's walk-in from the dungeon entrance to the first pack is
     // captured too (previously the track started at the first damage event, mid-dungeon). The DPS
@@ -184,7 +162,9 @@ public sealed partial class Plugin
 
     private void TickReplayCapture(float deltaTimeSec)
     {
-        if (_replay is null || !_uploadReplay) return;
+        // Capture whenever this content's replay cell is not `off` (cached on scene change), so a
+        // `manual` cell still has samples to attach to a hand-push.
+        if (_replay is null || !_replayCaptureEnabled) return;
 
         // Loading-screen hardening (2026-07-19 silent-crash follow-up): the settle gate arms on
         // the SceneChanged EVENT (load START); a load longer than ReplaySettleMs left the first
@@ -372,21 +352,29 @@ public sealed partial class Plugin
     // Archive upload
     // -----------------------------------------------------------------------
 
+    /// <summary>Spec § 2.4: the archive-time replay upload runs only when this run's content has its
+    /// replay cell on <c>auto</c>. A <c>manual</c> or <c>off</c> cell prepares no doc, so
+    /// <c>FinalizeAndMaybeUploadReplay</c> hands nothing off and the watermark HOLDS — the samples
+    /// merge into the next window (D2; advancing it here would clip the run's replay, a P0 defect).</summary>
+    internal bool ReplayAutoUploadAllowed(EncounterHistoryEntry entry)
+        => UploadAllowed(ResolveKind(entry), UploadArtifact.Replay, UploadTrigger.Auto);
+
     /// <summary>
     /// Delta-window serializer (owner design 2026-07-19): assembles + signs the replay doc for the
     /// window <c>(watermark, now]</c> — the samples captured since the last uploaded window — linked to
     /// <paramref name="entry"/>'s damage segment. Does NOT reset or advance anything: the recorder
     /// keeps accumulating, and the watermark advances only once the caller confirms the upload was
     /// handed off (see <see cref="AdvanceReplayWatermark"/> / <c>FinalizeAndMaybeUploadReplay</c>).
-    /// Returns <c>null</c> — leaving the watermark and buffers untouched — when replay upload is off,
-    /// there is no capture, the run has no level id, or the window is EMPTY (no samples since the
-    /// watermark, e.g. a suppressed-junk or between-pull archive). Never throws. Task 7: the boss cut
-    /// caps the upper to (firstBossHit − keepBefore) so the run-up moves into the next window.</summary>
+    /// Returns <c>null</c> — leaving the watermark and buffers untouched — when this run's replay cell
+    /// is not <c>auto</c>, there is no capture, the run has no level id, or the window is EMPTY (no
+    /// samples since the watermark, e.g. a suppressed-junk or between-pull archive). Never throws.
+    /// Task 7: the boss cut caps the upper to (firstBossHit − keepBefore) so the run-up moves next.</summary>
     internal PositionUploadDoc? PrepareReplayDoc(EncounterHistoryEntry entry, long replayUpperCapServerMs = ReplayUpperCapUnset)
     {
         try
         {
-            if (!_uploadReplay || _replay is null) return null;      // Clear-decouple: NEVER reset here
+            if (_replay is null) return null;                        // Clear-decouple: NEVER reset here
+            if (!ReplayAutoUploadAllowed(entry)) return null;        // manual/off ⇒ no doc, watermark holds (D2)
             if (entry.LevelUuid == 0) return null;
 
             // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs); a boss-cut cap (same truncation) moves it earlier.

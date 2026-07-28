@@ -225,8 +225,7 @@ public sealed partial class Plugin
                 if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
                 if (payload.Chunks.Count > 0)
                     ChunkUploader.PostRawEnvelopesFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.Chunks, m => _services.Log.Warning(m));
-                if (payload.Positions is not null)
-                    PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions);
+                if (payload.Positions is not null) MaybeReUploadPositions(entry, payload);
             });
         }
         catch (Exception ex)
@@ -237,6 +236,24 @@ public sealed partial class Plugin
             _uploadStateDirty = true;
             _services.Log.Warning($"[CombatMeter.SP1] Re-upload replay threw: {ex.Message}");
         }
+    }
+
+    // Spec § 2.4: a manual push attaches the replay only when that run's content has its replay cell
+    // NOT `off`. This is a POLICY gate on the user's own configuration — deliberately NOT the
+    // server-verdict gating that ReplayReUpload's comment forbids: the summary and chunks still
+    // re-send unconditionally as a repair, and an `auto` or `manual` cell still re-sends positions
+    // unconditionally. Runs on the thread-pool callback thread, so it touches only the immutable
+    // _contentKinds reference, the enum-array policy table, and thread-safe log calls — never uGUI.
+    private void MaybeReUploadPositions(EncounterHistoryEntry entry, ReUploadPayload payload)
+    {
+        var kind = ResolveKind(entry);
+        var state = UploadPolicyFor(kind, UploadArtifact.Replay);
+        if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
+        {
+            LogUploadRefusal(kind, UploadArtifact.Replay, UploadTrigger.Manual, state);
+            return;
+        }
+        PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions!);
     }
 
     // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for

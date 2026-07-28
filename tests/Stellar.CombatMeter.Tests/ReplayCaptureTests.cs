@@ -207,35 +207,12 @@ public class ReplayCaptureTests
     }
 }
 
-/// <summary>
-/// Tests for the plugin-level replay toggle seam.
-/// Plugin itself cannot be headless-instantiated (IL2CPP-bound services), so we verify:
-///   1. The static default constant is true (covers the init path).
-///   2. A fake prefs Get with the same default returns true (covers the pref round-trip pattern).
-/// Full toggle persistence is covered by in-game Task 14.
-/// </summary>
-public class ReplayToggleTests
-{
-    /// <summary>
-    /// The canonical upload-replay default is true.
-    /// Plugin.InitReplay() passes this as the fallback to _prefs.Get(PrefUploadReplay, default),
-    /// so new installs start with the toggle on.
-    /// </summary>
-    [Fact]
-    public void UploadReplay_DefaultsOn()
-        => Assert.True(Plugin.ReplayDefaults.UploadReplayDefault);
-
-    /// <summary>
-    /// Verifies that a prefs Get call with UploadReplayDefault as the fallback returns true when
-    /// no override is stored — i.e., the default propagates correctly through the prefs layer.
-    /// (Simulated via a simple boolean: the real IConfigSection.Get(key, defaultValue) returns
-    /// defaultValue when the key is absent; this test validates the default is authored correctly.)
-    /// </summary>
-    [Fact]
-    public void UploadReplay_FallbackDefault_IsTrue()
-    {
-        // Simulate: absent key → fallback returned. Real prefs would return the same value.
-        var fallback = Plugin.ReplayDefaults.UploadReplayDefault;
-        Assert.True(fallback);
-    }
-}
+// ReplayToggleTests (the global `logUpload.uploadReplay` seam: Plugin.ReplayDefaults.
+// UploadReplayDefault == true, plus its prefs-fallback round trip) lived here until the per-content
+// upload policy retired that flag (spec § 2.2 — there is no global replay toggle any more, so there is
+// no constant left to assert). It is RE-PINNED, not dropped: "a fresh install uploads replays" is now
+// UploadPolicyTableTests.DefaultTable_IsAllAuto_SoAFreshInstallBehavesExactlyAsBefore, and the legacy
+// pref's two settings are pinned by Migrate_BothLegacyPrefsOn_SeedsEveryCellAuto /
+// Migrate_ReplayOff_SeedsReplayOff_ThereIsNoManualReplayAction. The archive-time gate that consumed the
+// old flag is pinned by ReplayPolicyGateTests. Every assertion in ReplayCaptureTests above — the P0
+// capture pins — is untouched.
