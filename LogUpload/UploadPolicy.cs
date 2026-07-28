@@ -78,3 +78,51 @@ internal static class UploadPolicy
         _                     => "Other",
     };
 }
+
+/// <summary>
+/// The eight tri-state cells (4 content kinds × {stats, replay}) backing the per-content upload grid.
+/// Pure in-memory state — prefs load/save lives in <c>Plugin.UploadPolicy.cs</c>. All cells default to
+/// <see cref="UploadPolicyState.Auto"/>, which is today's behaviour exactly, so nothing shifts under
+/// the owner on upgrade (spec § 2.1).
+/// </summary>
+internal sealed class UploadPolicyTable
+{
+    internal static readonly ContentKind[] Kinds =
+        { ContentKind.Dungeon, ContentKind.Raid, ContentKind.WorldBoss, ContentKind.Other };
+
+    internal static readonly UploadArtifact[] Artifacts =
+        { UploadArtifact.Stats, UploadArtifact.Replay };
+
+    // Auto is the zero value, so a fresh array is already all-Auto.
+    private readonly UploadPolicyState[] _cells = new UploadPolicyState[Kinds.Length * Artifacts.Length];
+
+    private static int Index(ContentKind kind, UploadArtifact artifact)
+        => ((int)kind * Artifacts.Length) + (int)artifact;
+
+    internal UploadPolicyState this[ContentKind kind, UploadArtifact artifact]
+    {
+        get => _cells[Index(kind, artifact)];
+        set => _cells[Index(kind, artifact)] = value;
+    }
+
+    internal static UploadPolicyTable AllAuto() => new();
+
+    /// <summary>
+    /// Spec § 2.2 one-shot migration, run on the first load where no new keys exist so an existing
+    /// install keeps its behaviour. <c>autoUpload=false</c> seeds <c>manual</c> (not <c>off</c>) because
+    /// today that user can still push a run by hand and <c>off</c> would take that away;
+    /// <c>uploadReplay=false</c> seeds <c>off</c> because there is no separate manual replay action.
+    /// </summary>
+    internal static UploadPolicyTable Migrate(bool legacyAutoUpload, bool legacyUploadReplay)
+    {
+        var stats  = legacyAutoUpload   ? UploadPolicyState.Auto : UploadPolicyState.Manual;
+        var replay = legacyUploadReplay ? UploadPolicyState.Auto : UploadPolicyState.Off;
+        var table  = new UploadPolicyTable();
+        foreach (var kind in Kinds)
+        {
+            table[kind, UploadArtifact.Stats]  = stats;
+            table[kind, UploadArtifact.Replay] = replay;
+        }
+        return table;
+    }
+}
