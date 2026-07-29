@@ -68,18 +68,35 @@ public class UploadPolicyRevision2Tests
         Assert.False(revived.IsEmpty);
     }
 
-    // ---- § 8.2 `other` defaults to OFF ------------------------------------
+    // ---- § 8.2 `other` defaults to OFF for STATS ONLY ---------------------
 
+    // RE-PINNED 2026-07-29 (was Defaults_AreAllAutoExceptOtherWhichIsOffOnBothArtifacts, which asserted
+    // `other` off on BOTH artifacts). That contradicted the owner's older, still-standing replay ruling
+    // — 2026-07-01 replay-R1 § 1: only field / open world is off, so everything INSTANCED keeps its
+    // replay — and it cost a real run: a 20-player Giant Golem Crusade uploaded with no replay at all.
+    // Open field is excluded structurally by PrepareReplayDoc's `entry.LevelUuid == 0` guard, not by the
+    // kind policy, and the flood § 8.2 fights is a STATS problem (the 40-row feed bucket); replay docs
+    // never enter the feed. Do not re-broaden this to both artifacts.
     [Fact]
-    public void Defaults_AreAllAutoExceptOtherWhichIsOffOnBothArtifacts()
+    public void Defaults_AreAllAuto_ExceptOtherStatsWhichIsOff()
     {
         var t = UploadPolicyTable.Defaults();
         foreach (var kind in UploadPolicyTable.Kinds)
         foreach (var artifact in UploadPolicyTable.Artifacts)
         {
-            var expected = kind == ContentKind.Other ? UploadPolicyState.Off : UploadPolicyState.Auto;
+            var expected = kind == ContentKind.Other && artifact == UploadArtifact.Stats
+                ? UploadPolicyState.Off
+                : UploadPolicyState.Auto;
             Assert.Equal(expected, t[kind, artifact]);
         }
+    }
+
+    [Fact]
+    public void Defaults_KeepTheReplayForOther_SoInstancedRunsAlwaysGetOne()
+    {
+        var t = UploadPolicyTable.Defaults();
+        Assert.Equal(UploadPolicyState.Off,  t[ContentKind.Other, UploadArtifact.Stats]);
+        Assert.Equal(UploadPolicyState.Auto, t[ContentKind.Other, UploadArtifact.Replay]);
     }
 
     [Fact]
@@ -87,11 +104,19 @@ public class UploadPolicyRevision2Tests
     {
         // Owner: "yes" — the new default applies on upgrade, knowingly breaking § 2.2's "nothing shifts",
         // to stop the activity flood (Wondrous Tag, Guild Hall, Unstable Space) filling the site feed.
+        //
+        // RE-PINNED 2026-07-29: STATS only. This test also asserted replay Off, which contradicted the
+        // owner's older and still-standing ruling (2026-07-01 replay-R1 § 1: only field / open world is
+        // off, so everything instanced keeps its replay). It cost a real run — a 20-player Giant Golem
+        // Crusade came back with no replay at all. Open field is already excluded structurally by
+        // PrepareReplayDoc's `entry.LevelUuid == 0` guard, and the flood this default fights is a STATS
+        // problem: replay docs never enter the feed. Replay therefore follows the legacy pref.
         foreach (var (auto, replay) in new[] { (true, true), (false, true), (true, false), (false, false) })
         {
             var t = UploadPolicyTable.Migrate(auto, replay);
             Assert.Equal(UploadPolicyState.Off, t[ContentKind.Other, UploadArtifact.Stats]);
-            Assert.Equal(UploadPolicyState.Off, t[ContentKind.Other, UploadArtifact.Replay]);
+            Assert.Equal(replay ? UploadPolicyState.Auto : UploadPolicyState.Off,
+                         t[ContentKind.Other, UploadArtifact.Replay]);
         }
     }
 

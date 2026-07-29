@@ -120,8 +120,19 @@ internal sealed class UploadPolicyTable
     internal static UploadPolicyTable Defaults()
     {
         var t = new UploadPolicyTable();
-        t[ContentKind.Other, UploadArtifact.Stats]  = UploadPolicyState.Off;
-        t[ContentKind.Other, UploadArtifact.Replay] = UploadPolicyState.Off;
+        t[ContentKind.Other, UploadArtifact.Stats] = UploadPolicyState.Off;
+        // REPLAY stays AUTO for `other`. Corrected 2026-07-29 after the owner's Giant Golem Crusade run
+        // came back with no replay: "I thought I have already made decision that replays always keep
+        // except open field right?" They had — 2026-07-01 replay-R1 spec § 1: "In the field / open world
+        // it stays fully off", i.e. everything INSTANCED keeps its replay.
+        //
+        // Turning replay off for `other` over-reached, because "except open field" is already enforced
+        // STRUCTURALLY and independently: PrepareReplayDoc bails on `entry.LevelUuid == 0`, and a field
+        // fight has no run id. The kind policy was never what kept open-world replays out.
+        //
+        // And the flood this default exists to stop is a STATS problem — activity runs filling the site
+        // feed and evicting real runs from the 40-row retention bucket. Replay docs are per-run detail;
+        // they never enter the feed. So `other` = stats off + replay auto satisfies both rulings at once.
         return t;
     }
 
@@ -142,8 +153,10 @@ internal sealed class UploadPolicyTable
             // seed only the four real content kinds.
             if (kind == ContentKind.Other)
             {
+                // Stats forced off (spec § 8.2, owner "yes"); REPLAY follows the legacy pref like every
+                // other kind — see Defaults() for why `other` must keep its replay.
                 table[kind, UploadArtifact.Stats]  = UploadPolicyState.Off;
-                table[kind, UploadArtifact.Replay] = UploadPolicyState.Off;
+                table[kind, UploadArtifact.Replay] = replay;
                 continue;
             }
             table[kind, UploadArtifact.Stats]  = stats;
