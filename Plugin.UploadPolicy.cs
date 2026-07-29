@@ -17,9 +17,15 @@ public sealed partial class Plugin
     private const string PrefKindMapFetchedAt = "logUpload.kindMap.fetchedAtMs";
     // Plugin version that fetched the cached map — the re-fetch TRIGGER (owner ruling 2026-07-28).
     private const string PrefKindMapVersion   = "logUpload.kindMap.pluginVersion";
+    // Tier map (payload v2) rides the SAME cache lifecycle as the kind map above — same fetch, same
+    // plugin-version stamp — because it comes from the same response.
+    private const string PrefTierMapIds       = "logUpload.tierMap.ids";
+    private const string PrefTierMapTags      = "logUpload.tierMap.tags";
 
     private readonly UploadPolicyTable _uploadPolicy = UploadPolicyTable.Defaults();
     private ContentKindMap _contentKinds = ContentKindMap.Empty;
+    private ContentTierMap _contentTiers = ContentTierMap.Empty;
+    private readonly UploadTierFilter _uploadTiers = new();
 
     // Cached resolution for the CURRENT scene. Recomputed on scene change and on any settings write —
     // MaybeCaptureForLog runs per combat event and TickReplayCapture per frame, so neither may touch
@@ -125,8 +131,80 @@ public sealed partial class Plugin
             _prefs.Get<int[]>(PrefKindMapRaid, null),
             _prefs.Get<int[]>(PrefKindMapWorldBoss, null),
             _prefs.Get<int[]>(PrefKindMapVault, null));
+        _contentTiers = ContentTierMap.FromArrays(
+            _prefs.Get<int[]>(PrefTierMapIds, null), _prefs.Get<string[]>(PrefTierMapTags, null));
+        LoadTierFilter();
         RecomputeUploadPolicyCache();
         MaybeRefreshContentKinds();
+    }
+
+    // ---- Difficulty-tier filter (owner-approved axis, 2026-07-29) -----------------------------
+
+    /// <summary>Loads the per-tier enable flags + the master-level floor. Absent prefs leave the filter's
+    /// own defaults (everything enabled, floor 1), so an upgrade changes nothing.</summary>
+    private void LoadTierFilter()
+    {
+        foreach (var kind in UploadTierFilter.TiersFor.Keys)
+        foreach (var tier in UploadTierFilter.TiersFor[kind])
+            _uploadTiers.SetTierEnabled(kind, tier, _prefs.Get(UploadTierFilter.TierPrefKey(kind, tier), true));
+        _uploadTiers.MinMasterLevel = _prefs.Get(UploadTierFilter.MasterLevelPrefKey, UploadTierFilter.MinMasterLevelFloor);
+    }
+
+    internal bool TierEnabled(ContentKind kind, ContentTier tier) => _uploadTiers.IsTierEnabled(kind, tier);
+
+    internal void SetTierEnabled(ContentKind kind, ContentTier tier, bool enabled)
+    {
+        _uploadTiers.SetTierEnabled(kind, tier, enabled);
+        _prefs.Set(UploadTierFilter.TierPrefKey(kind, tier), enabled);
+        _prefs.Save();
+    }
+
+    internal int MinMasterLevel => _uploadTiers.MinMasterLevel;
+
+    internal void SetMinMasterLevel(int level)
+    {
+        _uploadTiers.MinMasterLevel = level;
+        _prefs.Set(UploadTierFilter.MasterLevelPrefKey, _uploadTiers.MinMasterLevel);
+        _prefs.Save();
+    }
+
+    /// <summary>The archived run's tier, from the site-served map. <see cref="ContentTier.Unknown"/> for
+    /// untiered content and for a plugin that has never reached the endpoint — both fail open.</summary>
+    internal ContentTier TierOf(EncounterHistoryEntry entry)
+        => _contentTiers.TierOf(ParseMapId(entry.SceneName));
+
+    /// <summary>Whether this run's DIFFICULTY permits the AUTO send. Independent of the per-kind
+    /// auto/manual/off cells: an auto send must pass BOTH. Fails open on an unknown tier or level.
+    ///
+    /// <para>Gates the automatic send ONLY. A disabled tier never blocks the archive and never blocks a
+    /// hand push — commit <c>d24aeb7</c>: "upload-only by design: a disabled tier never blocks a local
+    /// archive, so nothing is destroyed and a hand push still works". <see cref="UploadHistoryEntry"/>
+    /// therefore does not consult this.</para>
+    ///
+    /// <para>Pure + static, mirroring <see cref="EffectivePolicy"/>, so a headless test exercises the SAME
+    /// code the auto path runs; the instance overload only binds the plugin's own state. A separate
+    /// test-only re-implementation of this rule would be free to drift from the shipped one.</para>
+    /// </summary>
+    internal static bool TierAllows(
+        ContentKindMap map, ContentTierMap tiers, UploadTierFilter filter, EncounterHistoryEntry entry)
+        => filter.Allows(ResolveKind(map, entry), tiers.TierOf(ParseMapId(entry.SceneName)), entry.DifficultyLevel);
+
+    internal bool TierAllowsUpload(EncounterHistoryEntry entry)
+        => TierAllows(_contentKinds, _contentTiers, _uploadTiers, entry);
+
+    /// <summary>Logs an auto send refused by the DIFFICULTY filter rather than by the per-kind cell, naming
+    /// which of the two rules blocked it (disabled tier vs master-level floor) so the log states the reason
+    /// instead of just the outcome. The caller retains the record, so this is never data loss.</summary>
+    private void LogTierRefusal(EncounterHistoryEntry entry, ContentKind kind)
+    {
+        var tier = TierOf(entry);
+        var reason = tier == ContentTier.Master && entry.DifficultyLevel > 0
+                     && entry.DifficultyLevel < MinMasterLevel
+            ? $"master level {entry.DifficultyLevel} below floor {MinMasterLevel}"
+            : $"tier '{UploadTierFilter.TierKey(tier)}' disabled";
+        _services.Log.Info(
+            $"[CombatMeter.SP1] stats upload skipped: {UploadPolicy.KindKey(kind)} {reason} " +
+            "(trigger=auto). Record retained — push it by hand to send it.");
     }
 
     // Spec § 2.2: seed the eight cells from the two legacy prefs on the first load where no new key
@@ -282,6 +360,16 @@ public sealed partial class Plugin
         _prefs.Set(PrefKindMapRaid,      map.Ids(ContentKind.Raid));
         _prefs.Set(PrefKindMapWorldBoss, map.Ids(ContentKind.WorldBoss));
         _prefs.Set(PrefKindMapVault,     map.Ids(ContentKind.Vault));
+        // Tiers ride the same response. A version-1 payload has no `tiers` object, in which case
+        // TryParse fails and the cached tier map is KEPT — never wiped, so an older worker can't turn the
+        // filter into a silent all-block.
+        if (ContentTierMap.TryParse(body, out var tiers))
+        {
+            _contentTiers = tiers;
+            tiers.ToArrays(out var tierIds, out var tierTags);
+            _prefs.Set(PrefTierMapIds, tierIds);
+            _prefs.Set(PrefTierMapTags, tierTags);
+        }
         if (!string.IsNullOrEmpty(etag)) _prefs.Set(PrefKindMapEtag, etag);
         _prefs.Set(PrefKindMapFetchedAt, fetchedAtMs);
         // Stamp the version LAST-ish, before Save: this is what suppresses every future fetch until the

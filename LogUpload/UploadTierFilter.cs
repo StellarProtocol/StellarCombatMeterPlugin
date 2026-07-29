@@ -3,11 +3,18 @@ using System.Collections.Generic;
 namespace Stellar.CombatMeter.LogUpload;
 
 /// <summary>
-/// Difficulty tiers a run can carry. Two vocabularies, because the game uses two: dungeons run
-/// normal/hard/master, raids run clash/brutal/purge/backtrack. They are deliberately NOT collapsed onto a
-/// single ordinal scale — <see cref="Backtrack"/> is an SS3 tier that REPLACED normal/hard/nightmare on the
-/// two older raids (owner ruling 2026-07-29), so it has no position on a "minimum difficulty" ladder. That
-/// is exactly why the filter is a per-kind SET rather than a threshold.
+/// Difficulty tiers a run can carry — ONE vocabulary, the one the site actually serves.
+///
+/// <para>The game shows two NAMES for the same rungs: a dungeon's Normal/Hard is a raid's
+/// <c>Clash!</c>/<c>Brutal!</c>, which is the owner's taxonomy verbatim — <i>"clash = normal &lt; brutal =
+/// hard &lt; purge = nightmare"</i>. Those are SYNONYMS, not extra tiers. Modelling them as separate enum
+/// members (the shape before 2026-07-30) produced two chips that could never match a real run, because
+/// <c>GET /api/site/content-kinds</c> tags raid 13002 <c>"hard"</c>, never <c>"brutal"</c>. The names now
+/// live in <see cref="UploadTierFilter.TierLabel"/>; the enum holds tiers only.</para>
+///
+/// <para>Tiers are deliberately NOT an ordinal scale — <see cref="Backtrack"/> is an SS3 tier that REPLACED
+/// normal/hard/nightmare on the two older raids (owner ruling 2026-07-29), so it has no position on a
+/// "minimum difficulty" ladder. That is why the filter is a per-kind SET rather than a threshold.</para>
 /// </summary>
 internal enum ContentTier
 {
@@ -16,8 +23,7 @@ internal enum ContentTier
     Normal,
     Hard,
     Master,
-    Clash,
-    Brutal,
+    /// <summary>The third raid tier. Served as <c>"nightmare"</c>, displayed as <c>Purge!</c>.</summary>
     Purge,
     Backtrack,
 }
@@ -47,7 +53,10 @@ internal sealed class UploadTierFilter
         new Dictionary<ContentKind, ContentTier[]>
         {
             [ContentKind.Dungeon] = new[] { ContentTier.Normal, ContentTier.Hard, ContentTier.Master },
-            [ContentKind.Raid] = new[] { ContentTier.Clash, ContentTier.Brutal, ContentTier.Purge, ContentTier.Backtrack },
+            // The tiers raids are actually SERVED as. Measured 2026-07-30 against the live payload:
+            // 13021→normal, 13002→hard, 13003→nightmare(=Purge), 13001→backtrack. Listing Clash/Brutal
+            // here instead gave two chips that matched nothing and left raid normal/hard unfilterable.
+            [ContentKind.Raid] = new[] { ContentTier.Normal, ContentTier.Hard, ContentTier.Purge, ContentTier.Backtrack },
         };
 
     /// <summary>Lowest master level that may upload. 1 = every master run (today's behaviour).</summary>
@@ -56,7 +65,10 @@ internal sealed class UploadTierFilter
     /// <summary>Highest selectable master level — the game's Master 1..20 ladder.</summary>
     internal const int MaxMasterLevel = 20;
 
-    private readonly HashSet<ContentTier> _disabled = new();
+    // Keyed by (kind, tier), NOT tier alone. A flat tier-keyed set made `Hard` one shared key for a
+    // dungeon's Hard and a raid's Brutal!, so disabling the dungeon chip silently blocked Brutal! raid
+    // runs — measured 2026-07-30 (mapId 13002 autoSendAllowed=False with only the dungeon chip off).
+    private readonly HashSet<(ContentKind Kind, ContentTier Tier)> _disabled = new();
     private int _minMasterLevel = MinMasterLevelFloor;
 
     /// <summary>Master-level floor, clamped to [1,20]. Only consulted for <see cref="ContentTier.Master"/>.</summary>
@@ -68,14 +80,14 @@ internal sealed class UploadTierFilter
              : value;
     }
 
-    internal bool IsTierEnabled(ContentTier tier) => !_disabled.Contains(tier);
+    internal bool IsTierEnabled(ContentKind kind, ContentTier tier) => !_disabled.Contains((kind, tier));
 
-    internal void SetTierEnabled(ContentTier tier, bool enabled)
+    internal void SetTierEnabled(ContentKind kind, ContentTier tier, bool enabled)
     {
         // Unknown is the fail-open sentinel; it is never a user-facing chip and must stay allowed.
         if (tier == ContentTier.Unknown) return;
-        if (enabled) _disabled.Remove(tier);
-        else _disabled.Add(tier);
+        if (enabled) _disabled.Remove((kind, tier));
+        else _disabled.Add((kind, tier));
     }
 
     /// <summary>
@@ -92,7 +104,7 @@ internal sealed class UploadTierFilter
         // Fail-open: no tier map yet, or a map id the site does not classify.
         if (tier == ContentTier.Unknown) return true;
 
-        if (!IsTierEnabled(tier)) return false;
+        if (!IsTierEnabled(kind, tier)) return false;
 
         // The level floor applies ONLY to master runs, and only when the level is actually known.
         if (tier == ContentTier.Master && masterLevel > 0 && masterLevel < MinMasterLevel) return false;
@@ -106,8 +118,6 @@ internal sealed class UploadTierFilter
         ContentTier.Normal => "normal",
         ContentTier.Hard => "hard",
         ContentTier.Master => "master",
-        ContentTier.Clash => "clash",
-        ContentTier.Brutal => "brutal",
         ContentTier.Purge => "purge",
         ContentTier.Backtrack => "backtrack",
         _ => "",
@@ -116,26 +126,40 @@ internal sealed class UploadTierFilter
     /// <summary>Parses a tier tag as served by the site's <c>sceneDifficulty</c> master data. Anything
     /// unrecognised — including a future tier name — is <see cref="ContentTier.Unknown"/>, i.e. allowed,
     /// so a content patch cannot start silently withholding runs.</summary>
+    /// <remarks>Synonyms NORMALIZE onto one tier, so the two naming schemes cannot drift apart: the raid
+    /// names <c>clash</c>/<c>brutal</c> land on the same tiers as <c>normal</c>/<c>hard</c>, and the third
+    /// raid tier accepts both <c>nightmare</c> (what the site serves) and <c>purge</c> (the game's name).
+    /// Before this, <c>"brutal"</c> resolved to a tier no chip could reach.</remarks>
     internal static ContentTier ParseTier(string? raw) => raw switch
     {
-        "normal" => ContentTier.Normal,
-        "hard" => ContentTier.Hard,
+        "normal" or "clash" => ContentTier.Normal,
+        "hard" or "brutal" => ContentTier.Hard,
         "master" => ContentTier.Master,
-        "clash" => ContentTier.Clash,
-        "brutal" => ContentTier.Brutal,
-        "purge" => ContentTier.Purge,
+        "nightmare" or "purge" => ContentTier.Purge,
         "backtrack" => ContentTier.Backtrack,
-        // The site labels the third raid tier "nightmare" in prose while the map data tags it "purge";
-        // accept both so the two vocabularies cannot drift into a silent all-block.
-        "nightmare" => ContentTier.Purge,
         _ => ContentTier.Unknown,
     };
 
-    /// <summary>Settings-pane chip label.</summary>
-    internal static string TierLabel(ContentTier tier) => TierKey(tier);
+    /// <summary>Settings-pane chip label. PER KIND, because the game shows one rung under two names: a
+    /// dungeon's Normal/Hard is a raid's <c>Clash!</c>/<c>Brutal!</c>. Same stored tier either way — only
+    /// the wording changes, so the owner reads the name the game shows them.</summary>
+    internal static string TierLabel(ContentKind kind, ContentTier tier) =>
+        kind == ContentKind.Raid
+            ? tier switch
+            {
+                ContentTier.Normal => "Clash!",
+                ContentTier.Hard => "Brutal!",
+                ContentTier.Purge => "Purge!",
+                ContentTier.Backtrack => "Backtrack!",
+                _ => TierKey(tier),
+            }
+            : TierKey(tier);
 
-    /// <summary>Spec § 2.2 shape: <c>logUpload.tier.&lt;tier&gt;</c> / <c>logUpload.masterLevelMin</c>.</summary>
-    internal static string TierPrefKey(ContentTier tier) => "logUpload.tier." + TierKey(tier);
+    /// <summary>Spec § 2.2 shape, now KIND-scoped: <c>logUpload.tier.&lt;kind&gt;.&lt;tier&gt;</c>. The
+    /// kind segment is what keeps a dungeon chip from writing the raid chip's pref (and vice versa);
+    /// nothing shipped with the old un-scoped key, so there is no migration to carry.</summary>
+    internal static string TierPrefKey(ContentKind kind, ContentTier tier)
+        => "logUpload.tier." + UploadPolicy.KindKey(kind) + "." + TierKey(tier);
 
     internal const string MasterLevelPrefKey = "logUpload.masterLevelMin";
 }

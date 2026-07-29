@@ -28,11 +28,54 @@ public class UploadTierFilterTests
     public void DisablingATierBlocksOnlyThatTier()
     {
         var f = new UploadTierFilter();
-        f.SetTierEnabled(ContentTier.Normal, false);
+        f.SetTierEnabled(ContentKind.Dungeon, ContentTier.Normal, false);
 
         Assert.False(f.Allows(ContentKind.Dungeon, ContentTier.Normal, 0));
         Assert.True(f.Allows(ContentKind.Dungeon, ContentTier.Hard, 0));
         Assert.True(f.Allows(ContentKind.Dungeon, ContentTier.Master, 0));
+    }
+
+    // REGRESSION PIN (2026-07-30) — a disabled DUNGEON tier must not block the same tier on a RAID.
+    //
+    // The filter used to key its disabled set by tier ALONE. Because the site serves raid 13002
+    // ("Brutal! Floating Island") as tag "hard" — the same tag a hard dungeon carries — `Hard` was one
+    // shared key, so turning off the dungeon Hard chip silently stopped Brutal! raids auto-uploading.
+    // Measured before the fix: mapId 13002 autoSendAllowed=False with only the dungeon chip off.
+    // Never collapse this back to a tier-only key.
+    [Fact]
+    public void DisablingADungeonTierDoesNotBlockTheSameTierOnARaid()
+    {
+        var f = new UploadTierFilter();
+        f.SetTierEnabled(ContentKind.Dungeon, ContentTier.Hard, false);
+
+        Assert.False(f.Allows(ContentKind.Dungeon, ContentTier.Hard, 0));
+        Assert.True(f.Allows(ContentKind.Raid, ContentTier.Hard, 0));    // Brutal! — a different chip
+
+        // and symmetrically
+        var g = new UploadTierFilter();
+        g.SetTierEnabled(ContentKind.Raid, ContentTier.Normal, false);   // Clash!
+        Assert.False(g.Allows(ContentKind.Raid, ContentTier.Normal, 0));
+        Assert.True(g.Allows(ContentKind.Dungeon, ContentTier.Normal, 0));
+    }
+
+    // REGRESSION PIN (2026-07-30) — every raid chip must be reachable from a tag the site actually serves.
+    // TiersFor[Raid] previously listed Clash/Brutal, which the wire never sends (it sends normal/hard),
+    // so two chips matched nothing and raid normal/hard runs could not be filtered at all.
+    [Fact]
+    public void EveryRaidChipIsReachableFromAServedTierTag()
+    {
+        // The tags GET /api/site/content-kinds returns for the nine live raid ids.
+        foreach (var served in new[] { "backtrack", "hard", "nightmare", "normal" })
+            Assert.Contains(UploadTierFilter.ParseTier(served), UploadTierFilter.TiersFor[ContentKind.Raid]);
+
+        // ...and no chip is unreachable: each one is some served tag's parse result.
+        foreach (var chip in UploadTierFilter.TiersFor[ContentKind.Raid])
+        {
+            var reachable = false;
+            foreach (var served in new[] { "backtrack", "hard", "nightmare", "normal" })
+                if (UploadTierFilter.ParseTier(served) == chip) reachable = true;
+            Assert.True(reachable, $"raid chip {chip} matches no served tier tag");
+        }
     }
 
     [Fact]
@@ -40,9 +83,9 @@ public class UploadTierFilterTests
     {
         // No tier map fetched yet, or a map id the site does not classify. Fail OPEN.
         var f = new UploadTierFilter();
-        f.SetTierEnabled(ContentTier.Normal, false);
-        f.SetTierEnabled(ContentTier.Hard, false);
-        f.SetTierEnabled(ContentTier.Master, false);
+        f.SetTierEnabled(ContentKind.Dungeon, ContentTier.Normal, false);
+        f.SetTierEnabled(ContentKind.Dungeon, ContentTier.Hard, false);
+        f.SetTierEnabled(ContentKind.Dungeon, ContentTier.Master, false);
 
         Assert.True(f.Allows(ContentKind.Dungeon, ContentTier.Unknown, 0));
     }
@@ -53,7 +96,7 @@ public class UploadTierFilterTests
         // A disabled dungeon tier must never leak into world boss / vaults / other.
         var f = new UploadTierFilter();
         foreach (var tier in UploadTierFilter.TiersFor[ContentKind.Dungeon])
-            f.SetTierEnabled(tier, false);
+            f.SetTierEnabled(ContentKind.Dungeon, tier, false);
 
         Assert.True(f.Allows(ContentKind.WorldBoss, ContentTier.Unknown, 0));
         Assert.True(f.Allows(ContentKind.Vault, ContentTier.Normal, 0));
@@ -99,8 +142,8 @@ public class UploadTierFilterTests
     {
         // Unknown is the fail-open sentinel, not a chip; disabling it would defeat the whole guard.
         var f = new UploadTierFilter();
-        f.SetTierEnabled(ContentTier.Unknown, false);
-        Assert.True(f.IsTierEnabled(ContentTier.Unknown));
+        f.SetTierEnabled(ContentKind.Dungeon, ContentTier.Unknown, false);
+        Assert.True(f.IsTierEnabled(ContentKind.Dungeon, ContentTier.Unknown));
         Assert.True(f.Allows(ContentKind.Dungeon, ContentTier.Unknown, 0));
     }
 
@@ -112,11 +155,14 @@ public class UploadTierFilterTests
     [InlineData("normal", "normal")]
     [InlineData("hard", "hard")]
     [InlineData("master", "master")]
-    [InlineData("clash", "clash")]
-    [InlineData("brutal", "brutal")]
+    // SYNONYMS NORMALIZE (2026-07-30). The raid names are the same rungs under different words — owner:
+    // "clash = normal < brutal = hard < purge = nightmare". Resolving them to tiers of their own is what
+    // produced chips no served tag could reach, so clash→normal and brutal→hard collapse here.
+    [InlineData("clash", "normal")]
+    [InlineData("brutal", "hard")]
     [InlineData("purge", "purge")]
     [InlineData("backtrack", "backtrack")]
-    // "nightmare" is the prose name for the tier the map data tags "purge" — both must resolve, or the
+    // "nightmare" is what the site serves for the tier the game calls "purge" — both must resolve, or the
     // two vocabularies drifting would turn into a silent all-block.
     [InlineData("nightmare", "purge")]
     [InlineData("Hard", "")]                 // case-sensitive by design: the wire is lowercase
@@ -135,7 +181,32 @@ public class UploadTierFilterTests
             var key = UploadTierFilter.TierKey(tier);
             Assert.False(string.IsNullOrEmpty(key));
             Assert.Equal(tier, UploadTierFilter.ParseTier(key));
-            Assert.Equal("logUpload.tier." + key, UploadTierFilter.TierPrefKey(tier));
+            Assert.Equal($"logUpload.tier.{UploadPolicy.KindKey(kind)}.{key}",
+                         UploadTierFilter.TierPrefKey(kind, tier));
         }
+    }
+
+    // The kind segment is the whole point of the scoped key: two kinds sharing a tier must not share a
+    // pref, or the settings pane writes one chip and moves the other.
+    [Fact]
+    public void TheSameTierOnTwoKindsGetsTwoDistinctPrefKeys()
+    {
+        Assert.NotEqual(UploadTierFilter.TierPrefKey(ContentKind.Dungeon, ContentTier.Hard),
+                        UploadTierFilter.TierPrefKey(ContentKind.Raid, ContentTier.Hard));
+    }
+
+    // Labels are per kind because the game shows one rung under two names; the STORED tier is identical.
+    [Fact]
+    public void RaidChipsCarryTheGamesNamesWhileStoringTheServedTier()
+    {
+        Assert.Equal("Clash!", UploadTierFilter.TierLabel(ContentKind.Raid, ContentTier.Normal));
+        Assert.Equal("Brutal!", UploadTierFilter.TierLabel(ContentKind.Raid, ContentTier.Hard));
+        Assert.Equal("Purge!", UploadTierFilter.TierLabel(ContentKind.Raid, ContentTier.Purge));
+        Assert.Equal("Backtrack!", UploadTierFilter.TierLabel(ContentKind.Raid, ContentTier.Backtrack));
+
+        // Dungeons keep the plain served vocabulary.
+        Assert.Equal("normal", UploadTierFilter.TierLabel(ContentKind.Dungeon, ContentTier.Normal));
+        Assert.Equal("hard", UploadTierFilter.TierLabel(ContentKind.Dungeon, ContentTier.Hard));
+        Assert.Equal("master", UploadTierFilter.TierLabel(ContentKind.Dungeon, ContentTier.Master));
     }
 }

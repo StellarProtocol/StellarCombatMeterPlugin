@@ -155,6 +155,17 @@ public sealed partial class Plugin
             RetainWithoutUpload(entry, replayDoc);
             return false;
         }
+        // Difficulty axis (owner-approved 2026-07-29, spec § 8.5). A SECOND, independent gate: the per-kind
+        // cell above says whether this KIND may send, this says whether this DIFFICULTY may — a run must
+        // pass both. Retains exactly like the `off` path above, for the same reason, and deliberately sets
+        // NO UploadPhase: `Skipped` renders "Uploads off for this content", which would be a lie here (the
+        // cell is on), and the row's default "⤓ Upload this run" is what keeps the hand push discoverable.
+        if (!TierAllowsUpload(entry))
+        {
+            LogTierRefusal(entry, kind);
+            RetainWithoutUpload(entry, replayDoc);
+            return false;
+        }
         if (!RegionKnownOrWarn()) { _logBuffer.Clear(); return false; }
         if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
         {                           // path; uploading would collide every field fight on run:0
