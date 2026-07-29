@@ -161,6 +161,8 @@ public sealed partial class Plugin
             UploadPhase.InFlight => "Uploading…",
             UploadPhase.Done     => "✓ Uploaded",
             UploadPhase.Failed   => "✗ Failed — Retry",
+            // Not a failure and not retryable: the send was withheld by this content's upload cell.
+            UploadPhase.Skipped  => "⃠ Uploads off for this content",
             _                    => "⤓ Upload this run",
         };
     }
@@ -169,6 +171,8 @@ public sealed partial class Plugin
     {
         if (_selectedSession is not { } s) return "";
         if (s.LevelUuid == 0) return "Archived before run-id was saved — re-run the fight to upload it.";
+        if (UploadStateFor(s) == UploadPhase.Skipped)
+            return "This content's upload is set to off — the run is still recorded locally. Turn its cell on in Settings to send it.";
         return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? u : "";
     }
 

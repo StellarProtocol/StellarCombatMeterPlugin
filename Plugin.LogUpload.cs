@@ -183,10 +183,12 @@ public sealed partial class Plugin
         if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
         {
             LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Manual, state);
-            // Failed is reused deliberately (no new persisted phase value) for this non-transient
-            // refusal, exactly like the LevelUuid==0 case below — without this the History row shows
-            // nothing and a click against an `off` cell looks like it did nothing at all.
-            _uploadStatus.Set(entry, UploadPhase.Failed);
+            // Skipped, NOT Failed. This is a policy refusal: nothing was sent and retrying cannot change
+            // it until the cell is turned on. It used to reuse Failed to avoid adding a persisted phase
+            // value, which rendered "✗ Failed — Retry" and cost the owner twelve pointless Retry presses
+            // on a Giant Golem Crusade run (2026-07-29). The row still shows state, so the original
+            // reason for reusing Failed — a click that looks like it did nothing — is still served.
+            _uploadStatus.Set(entry, UploadPhase.Skipped);
             _uploadStateDirty = true;
             return;
         }

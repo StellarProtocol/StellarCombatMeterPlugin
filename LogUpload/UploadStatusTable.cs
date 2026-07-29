@@ -5,7 +5,22 @@ namespace Stellar.CombatMeter.LogUpload;
 /// <summary>
 /// Phase of a per-run upload, surfaced to the history UI to drive the Upload button's label/state.
 /// </summary>
-internal enum UploadPhase { Idle, InFlight, Done, Failed }
+/// <summary>Per-entry upload state. Persisted as its INT value (HistoryStore.UploadState "up"), so
+/// values are APPEND-ONLY — never reorder or reuse. An older build reading a newer value falls through
+/// its label switch's default, which reads "⤓ Upload this run" — degraded but harmless (rollback-safe).</summary>
+internal enum UploadPhase
+{
+    Idle,
+    InFlight,
+    Done,
+    /// <summary>A real, retryable failure: the request went out and did not succeed.</summary>
+    Failed,
+    /// <summary>Policy withheld the upload — nothing was sent, and retrying cannot change that until the
+    /// content's cell is turned on. Kept distinct from <see cref="Failed"/> because presenting a refusal
+    /// as "✗ Failed — Retry" cost the owner twelve pointless Retry presses on a Giant Golem Crusade run
+    /// (2026-07-29) while every attempt was refused by `other=off`.</summary>
+    Skipped,
+}
 
 /// <summary>
 /// Tracks per-entry upload status, keyed by the archived <see cref="Plugin.EncounterHistoryEntry"/>.
