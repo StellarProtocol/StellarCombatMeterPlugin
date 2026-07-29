@@ -163,7 +163,12 @@ public sealed partial class Plugin
 
     internal void SetMinMasterLevel(int level)
     {
+        // The settings pane drives this from a SliderElement, whose Set fires EVERY frame of a drag. Writing
+        // prefs unconditionally would mean a file save per frame for a control with 20 distinct values, so
+        // compare the CLAMPED result and return when nothing actually changed.
+        var before = _uploadTiers.MinMasterLevel;
         _uploadTiers.MinMasterLevel = level;
+        if (_uploadTiers.MinMasterLevel == before) return;
         _prefs.Set(UploadTierFilter.MasterLevelPrefKey, _uploadTiers.MinMasterLevel);
         _prefs.Save();
     }

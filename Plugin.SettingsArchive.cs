@@ -81,9 +81,9 @@ public sealed partial class Plugin
         };
         rows.AddRange(UploadsSection());
         // Scroll the whole pane. MEASURED (tools/run-ui-sandbox.sh combatmeter-settings-full-window-ugui):
-        // after the Uploads section grew from 2 toggle rows to 8 pill rows + 3 headers, the pane's content
-        // is 810px in an 833px window — against a DefaultRect height of 620f, so ~213px would have been
-        // unreachable. Raising DefaultRect alone would NOT have fixed it: every existing install already
+        // the pane's content still overflows a 620f window even after the dense Uploads rewrite cut ~160px
+        // off it, so the viewport stays required. Raising DefaultRect alone would NOT have fixed it either:
+        // every existing install already
         // has a persisted 620f rect, and this window is not resizable, so they would still be clipped.
         // A scroll viewport is reachable at any persisted height.
         return new ScrollElement(new ColumnElement(rows, Gap: 4f), SettingsScrollHeight);
@@ -93,12 +93,12 @@ public sealed partial class Plugin
     // for the GlassMenu title bar and the pane's own 11/12px vertical padding (measured).
     private const float SettingsScrollHeight = 540f;
 
-    // ---- Uploads section: the per-content grid (spec § 2.5) ----
-    // Eight cells — four content kinds × {run stats, replay position track} — laid out as two labelled
-    // four-row groups rather than one 4 × 2 block of tri-states. Same eight cells either way, but this
-    // shape lets every cell reuse PillRow's exact geometry (label Width 96f, pill Width 48f, Gap 6f), so
-    // the section matches the option-row idiom the rest of this pane already uses and needs no widening
-    // of the 380f window. Geometry confirmed by tools/run-ui-sandbox.sh measurement, not by eye.
+    // ---- Uploads section: the per-content grid (spec § 2.5) + the difficulty axis (§ 8.5) ----
+    // ONE row per content kind carrying BOTH artifacts under a shared two-column header, plus an indented
+    // chip row for the kinds that have a difficulty axis. This replaced two labelled five-row pill groups
+    // (design 3d73f7a): controls 35 -> 18, rows 13 + 2 headers -> 10. Geometry confirmed by
+    // tools/run-ui-sandbox.sh measurement, not by eye — the raid chip row is the widest at 15px of slack
+    // inside the 366px content box.
     //
     // Run stats are TRI-state (auto/manual/off). Replay is TWO-state (auto/off) — owner ruling
     // 2026-07-28: a `manual` replay cell cannot upload on any path, because the retained re-upload
@@ -114,11 +114,24 @@ public sealed partial class Plugin
         var rows = new List<HudElement>
         {
             new TextElement(() => "   auto = uploads itself · manual = only when you press upload · off = never.", MutedCol),
-            new TextElement(() => "Run stats", Emphasis: true),
+            // Column header names both axes ONCE, which is what let the duplicated "Replay position track"
+            // section (5 rows + its own header) be deleted outright — design 3d73f7a.
+            new RowElement(new HudElement[]
+            {
+                new SpacerElement(Width: 106f),
+                new TextElement(() => "run stats", MutedCol, Width: PolicyDropdownWidth),
+                new TextElement(() => "replay", MutedCol, Width: PolicyDropdownWidth),
+            }, Gap: 6f),
         };
-        foreach (var kind in UploadPolicyTable.Kinds) rows.Add(PolicyRow(kind, UploadArtifact.Stats));
-        rows.Add(new TextElement(() => "Replay position track", Emphasis: true));
-        foreach (var kind in UploadPolicyTable.Kinds) rows.Add(PolicyRow(kind, UploadArtifact.Replay));
+        foreach (var kind in UploadPolicyTable.Kinds)
+        {
+            rows.Add(KindRow(kind));
+            // The difficulty axis exists only for the kinds that HAVE one; TiersFor is that authority, so
+            // world boss / vaults / other get no chip row rather than an empty one.
+            if (UploadTierFilter.TiersFor.TryGetValue(kind, out var tiers)) rows.Add(TierRow(kind, tiers));
+            // Master is a dungeon-only tier, so its level floor belongs under the dungeon chips.
+            if (kind == ContentKind.Dungeon) rows.Add(MasterLevelRow());
+        }
         // The content list (which mapIds count as dungeon/raid/world boss) is fetched ONCE and cached,
         // then re-fetched only when the plugin updates — every request to the site's Worker is billed, so
         // there is no polling (owner ruling 2026-07-28). This button is the escape hatch for a content
@@ -140,32 +153,115 @@ public sealed partial class Plugin
     private static readonly UploadPolicyState[] ReplayStates =
         { UploadPolicyState.Auto, UploadPolicyState.Off };
 
-    // WIDER than PillRow's 48f, which was sized for "30s"/"120s". MEASURED: at 48f the word "manual"
-    // wraps to two lines inside its pill ("manu/al") — caught by the sandbox render, invisible in the
-    // measurement JSON. 60f holds it on one line and the row still fits: 8 (spacer) + 96 (label)
-    // + 3 x 60 (pills) + 4 x 6 (gaps) = 308px against 366px of inner pane width.
-    private const float PolicyPillWidth = 60f;
+    // Owner rejected the pill grid outright — "I really don't like the ui that have tons of button like
+    // this" — because it put ~35 buttons in one pane. The replacement (design 3d73f7a) picks the control
+    // that MATCHES each axis's semantics instead of using pills for all three:
+    //   * auto/manual/off is MUTUALLY EXCLUSIVE -> DropdownElement, whose own doc calls it "a reusable
+    //     replacement for a click-to-cycle button". 25 pills collapse to 10 triggers.
+    //   * the tier axis is genuinely MULTI-SELECT -> chips stay. A dropdown cannot express
+    //     "hard + master, not normal" without inventing a bogus "custom" entry.
+    //   * the master level is ORDINAL over 1..20 -> SliderElement with a ">= N" readout, replacing five
+    //     coarse ">=N" pills.
+    // No new UI component was needed; DropdownElement and SliderElement already existed.
+    private const float PolicyDropdownWidth = 78f;
 
-    private HudElement PolicyRow(ContentKind kind, UploadArtifact artifact)
+    // Option labels come from UploadPolicy.Format over the SAME state arrays the dropdown indexes into,
+    // so a label can never drift from the state it selects.
+    private static readonly IReadOnlyList<string> StatsOptions = OptionsFor(StatsStates);
+    private static readonly IReadOnlyList<string> ReplayOptions = OptionsFor(ReplayStates);
+
+    private static string[] OptionsFor(UploadPolicyState[] states)
+    {
+        var labels = new string[states.Length];
+        for (var i = 0; i < states.Length; i++) labels[i] = UploadPolicy.Format(states[i]);
+        return labels;
+    }
+
+    /// <summary>One row per content kind: name + both artifact selectors, under the shared column header.</summary>
+    private HudElement KindRow(ContentKind kind)
+        => new RowElement(new HudElement[]
+        {
+            new SpacerElement(Width: 8f),
+            new TextElement(() => UploadPolicy.Label(kind), MutedCol, Width: 92f),
+            PolicyDropdown(kind, UploadArtifact.Stats),
+            PolicyDropdown(kind, UploadArtifact.Replay),
+        }, Gap: 6f);
+
+    // `Selected` is read LIVE on every poll — never captured at build time — so the closed dropdown shows
+    // the value actually in effect, the same contract the pills documented.
+    private HudElement PolicyDropdown(ContentKind kind, UploadArtifact artifact)
+    {
+        var states = artifact == UploadArtifact.Replay ? ReplayStates : StatsStates;
+        var options = artifact == UploadArtifact.Replay ? ReplayOptions : StatsOptions;
+        return new DropdownElement(
+            () => IndexOfState(states, UploadPolicyFor(kind, artifact)),
+            () => options,
+            i => { if (i >= 0 && i < states.Length) SetUploadPolicy(kind, artifact, states[i]); },
+            Width: PolicyDropdownWidth);
+    }
+
+    // Replay has no `manual`, so a persisted Manual would not appear in ReplayStates. InitUploadPolicy's
+    // NormalizeReplayManualToOff rewrites it at load, which is what makes the fallback unreachable rather
+    // than a silent misreport.
+    private static int IndexOfState(UploadPolicyState[] states, UploadPolicyState state)
+    {
+        for (var i = 0; i < states.Length; i++) if (states[i] == state) return i;
+        return 0;
+    }
+
+    /// <summary>Multi-select difficulty chips for the one kind being rendered. Labels come from
+    /// <see cref="UploadTierFilter.TierLabel"/>, so a raid shows the game's own names (Clash!/Brutal!/…)
+    /// over the tier the site actually served.</summary>
+    private HudElement TierRow(ContentKind kind, ContentTier[] tiers)
     {
         var kids = new List<HudElement>
         {
-            new SpacerElement(Width: 8f),
-            new TextElement(() => UploadPolicy.Label(kind), MutedCol, Width: 96f),
+            new SpacerElement(Width: 16f),
+            new TextElement(() => "tiers", MutedCol, Width: 44f),
         };
-        var states = artifact == UploadArtifact.Replay ? ReplayStates : StatsStates;
-        for (var i = 0; i < states.Length; i++)
+        foreach (var t in tiers)
         {
-            // Replay has no `manual`, so hold that middle column open with a spacer: `off` then lands
-            // under the stats rows' `off` and the two groups read as one grid instead of two ragged
-            // lists. This is the layout the owner approved on 2026-07-28.
-            if (artifact == UploadArtifact.Replay && i == 1) kids.Add(new SpacerElement(Width: PolicyPillWidth));
-            var s = states[i];
-            kids.Add(new ButtonElement(() => UploadPolicy.Format(s), () => SetUploadPolicy(kind, artifact, s),
-                Active: () => UploadPolicyFor(kind, artifact) == s, Width: PolicyPillWidth));
+            var tier = t;   // capture per iteration — the closures are read live, long after this loop
+            kids.Add(new ButtonElement(
+                () => UploadTierFilter.TierLabel(kind, tier),
+                () => SetTierEnabled(kind, tier, !TierEnabled(kind, tier)),
+                Active: () => TierEnabled(kind, tier),
+                Width: TierChipWidth(kind, tier)));
         }
         return new RowElement(kids.ToArray(), Gap: 6f);
     }
+
+    // Per-LABEL widths, not one uniform value: "Backtrack!" is nearly twice "hard", and the raid row is
+    // already the widest in the pane. MEASURED with tools/run-ui-sandbox.sh, not eyeballed.
+    private static float TierChipWidth(ContentKind kind, ContentTier tier) => (kind, tier) switch
+    {
+        (ContentKind.Dungeon, ContentTier.Normal) => 62f,
+        (ContentKind.Dungeon, ContentTier.Hard) => 52f,
+        (ContentKind.Dungeon, ContentTier.Master) => 62f,
+        (ContentKind.Raid, ContentTier.Normal) => 58f,      // "Clash!"
+        (ContentKind.Raid, ContentTier.Hard) => 62f,        // "Brutal!"
+        (ContentKind.Raid, ContentTier.Purge) => 58f,       // "Purge!"
+        (ContentKind.Raid, ContentTier.Backtrack) => 84f,   // "Backtrack!"
+        _ => 62f,
+    };
+
+    /// <summary>Master-level floor. Dungeon-only, because Master is a dungeon-only tier.</summary>
+    private HudElement MasterLevelRow()
+        => new RowElement(new HudElement[]
+        {
+            new SpacerElement(Width: 16f),
+            new TextElement(() => "level", MutedCol, Width: 44f),
+            new SliderElement(() => MinMasterLevel, v => SetMinMasterLevel((int)v),
+                              UploadTierFilter.MinMasterLevelFloor, UploadTierFilter.MaxMasterLevel)
+                // SquareHandle: Unity's Slider drives the handle's cross-axis anchors to full stretch, so
+                // HandleSize ADDS to the row height instead of setting the knob's height — without this the
+                // knob renders as a 13x29 capsule in this 16px row (measured 2026-07-30), which reads as
+                // oversized. Opt-in per slider, so no other plugin's sliders change (verified: 0 differing
+                // pixels on a non-opted slider). Needs Abstractions >= 1.18.0, which the csproj's local
+                // framework-source reference provides.
+                { Width = 150f, SquareHandle = true },
+            new TextElement(() => $"≥ {MinMasterLevel}", MutedCol, Width: 40f),
+        }, Gap: 6f);
 
     // "Last archive: {tag} · {n}s ago" readout — reads LastArchive (Plugin.AutoArchive.cs, set by
     // NoteLastArchive on every BANKED archive) and formats its reason via the real ArchiveReasonTag
