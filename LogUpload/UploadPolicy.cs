@@ -111,11 +111,14 @@ internal sealed class UploadPolicyTable
     internal static UploadPolicyTable AllAuto() => new();
 
     /// <summary>
-    /// Shipping defaults (spec § 8.2, owner ruling 2026-07-29): every kind <c>auto</c> EXCEPT
-    /// <see cref="ContentKind.Other"/>, which is <c>off</c> on both artifacts. REVERSES § 2.1's all-Auto
-    /// default — the owner accepted that it changes behaviour on upgrade, to stop the activity flood
-    /// (Wondrous Tag, Guild Hall, Unstable Space) filling the site feed and evicting real runs from the
-    /// 40-row retention bucket.
+    /// Shipping defaults: every cell <c>auto</c> EXCEPT <see cref="ContentKind.Other"/>'s STATS cell,
+    /// which is <c>off</c>. Stats-off reverses § 2.1's all-Auto default — the owner accepted that it
+    /// changes behaviour on upgrade, to stop the activity flood (Wondrous Tag, Guild Hall, Unstable
+    /// Space) filling the site feed and evicting real runs from the 40-row retention bucket.
+    ///
+    /// <c>Other</c>'s REPLAY cell stays <c>auto</c> — see the inline note below for why turning it off
+    /// contradicted a standing ruling and cost a real run. (This sentence used to read "off on both
+    /// artifacts"; it was stale from 2026-07-29 until corrected.)
     /// </summary>
     internal static UploadPolicyTable Defaults()
     {
