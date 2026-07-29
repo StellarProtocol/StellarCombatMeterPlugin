@@ -33,7 +33,8 @@ public sealed partial class Plugin
                 DefaultRect: new WindowRect(100f, 100f, RowMenuW, 120f),
                 Category:    WindowCategory.HUD,
                 Style:       WindowPanelStyle.Borderless)
-            { StartVisible = false, HideUntilInWorld = true, DismissOnOutsideClick = true },
+            { StartVisible = false, DismissOnOutsideClick = true,
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World },
             BuildRowMenuRoot(),
             OnClose: CloseRowMenu));   // framework invokes this on Escape / click-outside (per-frame ticker)
 
