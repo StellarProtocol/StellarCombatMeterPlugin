@@ -22,7 +22,8 @@ public sealed partial class Plugin
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
             { StartVisible = false, Closable = true, Draggable = true,
-              ShouldRender = () => _services.ClientState.Phase == GamePhase.World },
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
             BuildSettingsRoot(),
             OnClose: () => _settingsWindow.SetVisible(false)));
 

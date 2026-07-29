@@ -34,7 +34,8 @@ public sealed partial class Plugin
                 Category:    WindowCategory.HUD,
                 Style:       WindowPanelStyle.Borderless)
             { StartVisible = false, DismissOnOutsideClick = true,
-              ShouldRender = () => _services.ClientState.Phase == GamePhase.World },
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
             BuildRowMenuRoot(),
             OnClose: CloseRowMenu));   // framework invokes this on Escape / click-outside (per-frame ticker)
 

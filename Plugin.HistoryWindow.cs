@@ -336,7 +336,8 @@ public sealed partial class Plugin
         // floor (WindowBuilder.LineChart) — this just stops a degenerate drag-to-nothing.
         { StartVisible = false, Closable = true, Draggable = true,
           Resizable = true, MinWidth = 600f, MinHeight = 480f, MaxWidth = 1200f, MaxHeight = 1000f,
-          ShouldRender = () => _services.ClientState.Phase == GamePhase.World },
+          ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                            && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
         BuildHistoryRoot(),
         OnClose: CloseHistory));
 

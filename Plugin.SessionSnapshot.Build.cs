@@ -166,7 +166,8 @@ public sealed partial class Plugin
             Style:       WindowPanelStyle.GlassMenu)
         { StartVisible = false, Closable = true, Draggable = true,
           Resizable = true, MinWidth = 360f, MinHeight = 300f, MaxWidth = 900f, MaxHeight = 1000f,
-          ShouldRender = () => _services.ClientState.Phase == GamePhase.World },
+          ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                            && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
         BuildSnapshotRoot(),
         OnClose: CloseSnapshot));
 
