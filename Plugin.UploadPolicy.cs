@@ -195,13 +195,23 @@ public sealed partial class Plugin
         // stop raw-event capture on a fresh install before the taxonomy ever arrives.
         _captureForLogEnabled = _contentKinds.IsEmpty
             || _uploadPolicy[_currentKind, UploadArtifact.Stats] == UploadPolicyState.Auto;
-        // Replay capture is deliberately NOT _currentKind-derived: the upload gate resolves the kind
-        // from the ARCHIVED entry's stored scene, and if the two disagree the samples are already lost.
-        // A raid lobby / dungeon approach is a different (often unlisted ⇒ `other`) map id from the boss
-        // room, and the buffer is deliberately KEPT across that hop (Plugin.History.cs), so a live-kind
-        // gate would skip the walk-in and clip the start of the raid's replay — the exact P0 shape; a
-        // mid-run policy write would gap the middle the same way. Capture broadly, gate narrowly.
-        _replayCaptureEnabled = AnyReplayCellEnabled(_uploadPolicy);
+        // REPLAY CAPTURE IS UNCONDITIONAL. Owner ruling, restated repeatedly and finally 2026-07-29:
+        // "it suppose to store all replay even flag mark off" — the upload flag decides whether a replay
+        // is SENT, never whether it is RECORDED. The ONLY thing that stops recording is open field, and
+        // that is enforced elsewhere (PrepareReplayDoc's `entry.LevelUuid == 0`; a field fight has no run
+        // id), plus the instanced-scene arm in the capture gate itself.
+        //
+        // It used to be `AnyReplayCellEnabled(_uploadPolicy)`, i.e. all replay cells off ⇒ capture off,
+        // which silently destroyed the record instead of merely withholding it. That is how the owner's
+        // 20-player Giant Golem Crusade ended up with 0 events: the run classified `other`, `other` was
+        // off, and the samples were never kept — so a later manual push had nothing to send.
+        //
+        // Keeping it unconditional also preserves the reason the old comment existed: the upload gate
+        // resolves the kind from the ARCHIVED entry's stored scene, and a raid lobby / dungeon approach
+        // is a different (often unlisted ⇒ `other`) map id from the boss room. The buffer is KEPT across
+        // that hop, so any kind-derived capture gate would clip the walk-in — the exact P0 shape.
+        // Capture always; gate only the send.
+        _replayCaptureEnabled = true;
     }
 
     /// <summary>Running plugin version, used as the kind-map cache key. Null when unreadable, which

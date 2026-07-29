@@ -144,7 +144,15 @@ public sealed partial class Plugin
         if (!UploadPolicy.Allows(state, UploadTrigger.Auto))
         {
             LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Auto, state);
-            _logBuffer.Clear();
+            // Owner ruling 2026-07-29: "off = just don't upload it but game still keep record into chunk
+            // always" / "it suppose to store all replay even flag mark off". `off` withholds the SEND; it
+            // must never destroy the record. This used to `_logBuffer.Clear()` and drop everything, which
+            // is why the owner's Giant Golem Crusade could never be recovered: raw events are NOT stored
+            // with an archive (history keeps aggregates only), and the retained first-send copy — the one
+            // thing a later manual push can replay verbatim — was written ONLY when a send fired. No send
+            // ever fired for `other`, so no copy existed, and the manual push sent "0 events in 0
+            // chunk(s)" however many hours or relaunches later.
+            RetainWithoutUpload(entry, replayDoc);
             return false;
         }
         if (!RegionKnownOrWarn()) { _logBuffer.Clear(); return false; }
@@ -412,6 +420,34 @@ public sealed partial class Plugin
     /// chunk's <see cref="ChunkUploader.BuildEnvelope"/>) is safe to defer entirely onto the background
     /// thread alongside the gzip+write — nothing here may run on the archive frame, a chunk-heavy run
     /// must never hitch it. Keyed by the entry's stable (LevelUuid, ArchivedAtMs) composite.</summary>
+    /// <summary>Assembles the run exactly as an upload would and RETAINS it locally without sending —
+    /// the `off` path. Owner ruling 2026-07-29: a withheld upload keeps its record, so a later manual push
+    /// replays the true originals instead of the summary-only fallback. Deliberately mirrors the auto
+    /// path's capture (same flush, same chunker, same assembler, same container key) so a retained-then-
+    /// pushed run is byte-identical to one that uploaded immediately. Retention is bounded and
+    /// self-cleaning: Plugin.HistoryStore deletes a container with its entry and sweeps orphans against
+    /// the live history, which is itself capped. Never throws.</summary>
+    private void RetainWithoutUpload(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc)
+    {
+        try
+        {
+            if (entry.LevelUuid == 0) { _logBuffer.Clear(); return; }   // field fight: nothing addressable to retain
+            var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
+            var events = _logBuffer.Flush();
+            var chunks = EventChunker.Chunk(events);
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, _bossMonsterInfo?.Id ?? 0, chunks.Count);
+            PersistReUpload(entry, log, chunks, replayDoc);
+            _services.Log.Info(
+                $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
+                $"({events.Count} events in {chunks.Count} chunk(s), replay={(replayDoc is not null)}).");
+        }
+        catch (Exception ex)
+        {
+            _logBuffer.Clear();
+            _services.Log.Warning($"[CombatMeter.SP1] retain-without-upload failed: {ex.Message}");
+        }
+    }
+
     private void PersistReUpload(EncounterHistoryEntry entry, CombatLog log, IReadOnlyList<EventChunk> chunks, PositionUploadDoc? replayDoc)
     {
         var name = ReUploadContainer.ContainerName(entry.LevelUuid, entry.ArchivedAtMs);
