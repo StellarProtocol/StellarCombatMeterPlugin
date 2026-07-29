@@ -163,7 +163,9 @@ public sealed partial class Plugin
             return false;
         }
 
-        return AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true, replayDoc);
+        // Pure overload: the logging one would double-log the refusal (PrepareReplayDoc already logged it).
+        var replaySendAllowed = ReplayAutoUploadAllowed(_contentKinds, _uploadPolicy, entry);
+        return AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true, replayDoc, replaySendAllowed);
     }
 
     /// <summary>Manual per-run upload from history. Uses the entry's stored aggregates; no raw events
@@ -274,7 +276,8 @@ public sealed partial class Plugin
     // — from that point the callback OWNS replayDoc (P2 single-shot positions handoff). Returns false
     // on the zero-events early-return, or when the catch below runs BEFORE the upload was fired —
     // in either false case the CALLER is responsible for uploading replayDoc itself.
-    private bool AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents, bool flushBuffer, PositionUploadDoc? replayDoc)
+    private bool AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents,
+                                   bool flushBuffer, PositionUploadDoc? replayDoc, bool replaySendAllowed = true)
     {
         if (!flushBuffer && !RegionKnownOrWarn()) return false;
 
@@ -325,7 +328,7 @@ public sealed partial class Plugin
                 _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
                     UploadVerdict.PreferredUrl(verdict, url));
                 _uploadStateDirty = true;
-                if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict);
+                if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict, replaySendAllowed);
                 else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
             }, delayMs, skipPrecheck: !flushBuffer);   // manual re-upload (flushBuffer=false) forces full ingest so the server can REPAIR a bad run
 
@@ -349,7 +352,7 @@ public sealed partial class Plugin
 
     // Success leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
     // never touch uGUI). Gates chunk + positions uploads on the server's merge verdict.
-    private void OnSummaryUploadOk(CombatLog log, List<EventChunk> chunks, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict)
+    private void OnSummaryUploadOk(CombatLog log, List<EventChunk> chunks, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict, bool replaySendAllowed)
     {
         var v = verdict ?? new UploadVerdict(true, false);
         _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
@@ -366,7 +369,11 @@ public sealed partial class Plugin
             _services.Log.Info($"[CombatMeter.SP1] Run already fully uploaded by a party member — skipping {chunks.Count} chunk upload(s).");
         if (replayDoc is not null)
         {
-            if (!v.HavePositions) UploadReplayDoc(replayDoc);
+            // The doc is now built even when the replay cell is off (it must be RETAINED regardless), so
+            // the send is gated here too — otherwise `off` would still ship positions.
+            if (!replaySendAllowed)
+                _services.Log.Info("[CombatMeter.SP1] Positions retained, not uploaded (replay cell off).");
+            else if (!v.HavePositions) UploadReplayDoc(replayDoc);
             else _services.Log.Info("[CombatMeter.SP1] Positions already attached server-side — skipping positions upload.");
         }
     }

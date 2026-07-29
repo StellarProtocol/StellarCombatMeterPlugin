@@ -383,7 +383,11 @@ public sealed partial class Plugin
         try
         {
             if (_replay is null) return null;                        // Clear-decouple: NEVER reset here
-            if (!ReplayAutoUploadAllowed(entry)) return null;        // manual/off ⇒ no doc, watermark holds (D2)
+            // The replay POLICY is deliberately NOT consulted here any more. Owner ruling 2026-07-29:
+            // "it suppose to store all replay even flag mark off" — `off` withholds the SEND, never the
+            // record. The doc is always serialized so it reaches the retained container (PersistReUpload /
+            // RetainWithoutUpload both carry it), and FinalizeAndMaybeUploadReplay decides send vs store.
+            // Open field is still excluded, structurally: a field fight has no run id.
             if (entry.LevelUuid == 0) return null;
 
             // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs); a boss-cut cap (same truncation) moves it earlier.

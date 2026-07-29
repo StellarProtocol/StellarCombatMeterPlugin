@@ -190,7 +190,13 @@ public sealed partial class Plugin
         // summaryFired → the summary callback OWNS + uploads the doc (synchronous hand-off complete);
         // otherwise upload it directly here. Only a genuine hand-off advances the watermark — a null
         // doc means nothing was serialized, so the samples must stay for the next window.
-        var directHandedOff = replayDoc is not null && !summaryFired && UploadReplayDoc(replayDoc);
+        // Send vs store. `off` withholds the SEND only (owner ruling 2026-07-29) — the doc is already
+        // retained by the stats path (PersistReUpload / RetainWithoutUpload both carry it), so custody
+        // IS transferred and the watermark may advance exactly as on a successful upload. Advancing is
+        // what keeps windows non-overlapping; the samples are durable on disk either way.
+        var replaySendAllowed = ReplayAutoUploadAllowed(_contentKinds, _uploadPolicy, entry);
+        var directHandedOff = replayDoc is not null && !summaryFired
+            && (replaySendAllowed ? UploadReplayDoc(replayDoc) : true);
         if (ShouldAdvanceWatermark(replayDoc is not null, summaryFired, directHandedOff)) AdvanceReplayWatermark();
         return summaryFired;
     }
