@@ -68,35 +68,25 @@ public class UploadPolicyRevision2Tests
         Assert.False(revived.IsEmpty);
     }
 
-    // ---- § 8.2 `other` defaults to OFF for STATS ONLY ---------------------
+    // ---- § 8.2 `other` defaults to OFF on both artifacts -------------------
 
-    // RE-PINNED 2026-07-29 (was Defaults_AreAllAutoExceptOtherWhichIsOffOnBothArtifacts, which asserted
-    // `other` off on BOTH artifacts). That contradicted the owner's older, still-standing replay ruling
-    // — 2026-07-01 replay-R1 § 1: only field / open world is off, so everything INSTANCED keeps its
-    // replay — and it cost a real run: a 20-player Giant Golem Crusade uploaded with no replay at all.
-    // Open field is excluded structurally by PrepareReplayDoc's `entry.LevelUuid == 0` guard, not by the
-    // kind policy, and the flood § 8.2 fights is a STATS problem (the 40-row feed bucket); replay docs
-    // never enter the feed. Do not re-broaden this to both artifacts.
+    // A first-run install must not push unclassified content anywhere.
+    //
+    // HISTORY, so this is not "corrected" a third time: on 2026-07-29 this pin was briefly changed to
+    // expect replay=auto, to honour the owner's "replays always keep except open field" ruling. That
+    // misread the ruling — it is about STORING the replay, not uploading it. Storage is now
+    // unconditional (capture never consults the policy; a withheld upload retains its record), so `off`
+    // withholds only the SEND and loses nothing. Both cells belong off here.
     [Fact]
-    public void Defaults_AreAllAuto_ExceptOtherStatsWhichIsOff()
+    public void Defaults_AreAllAuto_ExceptOtherWhichIsOffOnBothArtifacts()
     {
         var t = UploadPolicyTable.Defaults();
         foreach (var kind in UploadPolicyTable.Kinds)
         foreach (var artifact in UploadPolicyTable.Artifacts)
         {
-            var expected = kind == ContentKind.Other && artifact == UploadArtifact.Stats
-                ? UploadPolicyState.Off
-                : UploadPolicyState.Auto;
+            var expected = kind == ContentKind.Other ? UploadPolicyState.Off : UploadPolicyState.Auto;
             Assert.Equal(expected, t[kind, artifact]);
         }
-    }
-
-    [Fact]
-    public void Defaults_KeepTheReplayForOther_SoInstancedRunsAlwaysGetOne()
-    {
-        var t = UploadPolicyTable.Defaults();
-        Assert.Equal(UploadPolicyState.Off,  t[ContentKind.Other, UploadArtifact.Stats]);
-        Assert.Equal(UploadPolicyState.Auto, t[ContentKind.Other, UploadArtifact.Replay]);
     }
 
     [Fact]
@@ -115,8 +105,7 @@ public class UploadPolicyRevision2Tests
         {
             var t = UploadPolicyTable.Migrate(auto, replay);
             Assert.Equal(UploadPolicyState.Off, t[ContentKind.Other, UploadArtifact.Stats]);
-            Assert.Equal(replay ? UploadPolicyState.Auto : UploadPolicyState.Off,
-                         t[ContentKind.Other, UploadArtifact.Replay]);
+            Assert.Equal(UploadPolicyState.Off, t[ContentKind.Other, UploadArtifact.Replay]);
         }
     }
 
