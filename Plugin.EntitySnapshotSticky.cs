@@ -93,7 +93,29 @@ public sealed partial class Plugin
         if (charId == 0) return;   // not in world yet — try again next tick
         _selfNameRestored = true;
         _lastKnownSelfName = RestoreSelfName(
-            _prefs.Get<long>(PrefSelfNameCharId, 0L), _prefs.Get<string>(PrefSelfNameValue, null), charId);
+                                 _prefs.Get<long>(PrefSelfNameCharId, 0L),
+                                 _prefs.Get<string>(PrefSelfNameValue, null), charId)
+                          ?? SelfNameFromHistory(charId);
+        // Seed the pref from history so the next launch does not have to scan again.
+        if (_lastKnownSelfName is { } found) PersistSelfName(found);
+    }
+
+    /// <summary>
+    /// The local player's name recovered from ARCHIVED history — newest entry first. Every banked archive
+    /// freezes a per-player <see cref="EntitySnapshot"/> carrying the display name, so the name is already
+    /// on disk even on a launch that has never seen a live one. This is what makes the mounted-relaunch
+    /// case work: <c>IPlayerState.Name</c> is blank throughout, so a live-only cache never fills.
+    ///
+    /// Matched on the FULL-width char id (<c>Value &gt;&gt; 16</c>), not <c>EntityId.Uid</c>, so it cannot
+    /// be defeated by that property's int cast, and so a character switch cannot pick up the wrong name.
+    /// </summary>
+    private string? SelfNameFromHistory(long charId)
+    {
+        for (var i = _history.Count - 1; i >= 0; i--)
+            foreach (var (id, snap) in _history[i].Entities)
+                if (SelfCharIdOf(id.Value) == charId && !string.IsNullOrWhiteSpace(snap.Name))
+                    return snap.Name;
+        return null;
     }
 
     // Sticky sub-profession (spec) cache, keyed by the stable char id. The framework's ICombatSpec cache resets
