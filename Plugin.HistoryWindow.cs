@@ -40,11 +40,21 @@ public sealed partial class Plugin
 
     private readonly struct SessionEntry
     {
-        public SessionEntry(int idx, string clock, string meta)
-        { Index = idx; Clock = clock; Meta = meta; }
+        public SessionEntry(int idx, string clock, string meta, int[] segments)
+        { Index = idx; Clock = clock; Meta = meta; Segments = segments; }
         // Clock = compact "⏱ 2:14p" emphasis line; Meta = pre-joined "{dur} · {n}p · {scene}" muted line.
-        public readonly int Index; public readonly string Clock, Meta;
+        // Segments = every archive of the SAME run (levelUuid), OLDEST FIRST so chip 1 is the run's first
+        // archive; Index is the one this row opens (the run's main fight).
+        public readonly int Index; public readonly string Clock, Meta; public readonly int[] Segments;
     }
+
+    // Segments of the currently selected run, oldest first. Drives the detail pane's segment chips.
+    private int[] _selectedSegments = System.Array.Empty<int>();
+
+    // Chip slots for the segment picker. The element tree is built ONCE and polled, so the count is fixed
+    // and surplus slots hide via ConditionalElement. 8 covers a fight + a tail per run-end stage + the
+    // scene tail several times over; a run with more than 8 archives shows the first 8 and is logged below.
+    private const int MaxSegmentChips = 8;
 
     // Field struct (no constructor) — keeps clear of the analyzer's ctor-dependency cap.
     private struct SourceRow
@@ -118,6 +128,7 @@ public sealed partial class Plugin
         var table = new ColumnElement(new HudElement[]
         {
             BuildUploadRow(),
+            BuildSegmentPicker(),
             BuildHistoryMetricRow(),
             BuildSessionSummaryRow(),
             BuildHistoryChart(),
@@ -393,29 +404,6 @@ public sealed partial class Plugin
         OnInspectRequested?.Invoke(_sessionRows[idx].Id, h);
     }
 
-    // ----- snapshots -----
-
-    private void RebuildHistorySnapshots()
-    {
-        _historyView.Clear();
-        for (int i = _history.Count - 1; i >= 0; i--)   // newest first
-        {
-            var h = _history[i];
-            // REAL elapsed span only — the combat (damage) span lives in the detail pane. The row is
-            // capped at HistListWidth (180f) and a measured render showed the combined
-            // "8.3s (0s combat)" form truncating mid-parenthetical (owner ruling 2026-07-28, option 1).
-            var dur = FormatDurationWithTenths(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs));
-            var map = ResolveSceneName(h.SceneName);
-            _historyView.Add(new SessionEntry(
-                i,
-                FormatSessionClock(h.ArchivedAtMs),
-                $"{map} · {dur} · {h.MemberCount}p{TriggerSuffix(h.Trigger)}"));
-        }
-        // Keep the selected session in sync (it may have been evicted).
-        if (_historyIndex >= 0 && _historyIndex < _history.Count) _selectedSession = _history[_historyIndex];
-        else { _selectedSession = null; _historyIndex = -1; _chartedSources.Clear(); _chartSourcesVersion++; }
-        RebuildSessionRows();
-    }
 
     // Auto-archive segments show WHY they ended; manual/scene stay untagged (pre-v10 default).
     // Finding 5 (review round 2026-07-27): this is a SEPARATE allow-list from ArchiveReasonTag's
