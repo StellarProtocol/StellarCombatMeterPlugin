@@ -3,7 +3,8 @@
 // Feature boundary:
 //   - Capture: OnCombatEvent feeds _logBuffer during an encounter.
 //   - Serialize: ManualArchive triggers SerializeAndUpload() after the encounter is archived.
-//   - Upload: auto path gated on AutoUpload (default ON); fire-and-forget; never blocks or crashes the game.
+//   - Upload: auto path gated on the CURRENT content's `<kind>.stats` policy cell (default auto —
+//     see Plugin.UploadPolicy.cs); fire-and-forget; never blocks or crashes the game.
 //
 // Wiring stubs clearly marked TODO(SP1) for items that require game-API access not yet in the framework.
 
@@ -61,7 +62,9 @@ public sealed partial class Plugin
     // Settings keys (read/written from the "combatmeter" config section)
     // -----------------------------------------------------------------------
 
-    private const string PrefAutoUpload = "logUpload.autoUpload";
+    // logUpload.autoUpload is RETIRED as a live setting — the eight per-content policy cells replaced it
+    // (spec § 2.2). The legacy key is still read exactly once, by LoadOrMigrateUploadPolicy, to seed those
+    // cells on the first load after upgrade, and is left on disk untouched afterwards.
     private const string PrefSignerKey  = "logUpload.signerKey";
 
     // P2: spread the party's simultaneous auto-uploads so arrival order is meaningful and the
@@ -93,22 +96,8 @@ public sealed partial class Plugin
     // Settings accessors (expose to Plugin.Settings.cs if a UI toggle is added)
     // -----------------------------------------------------------------------
 
-    // Cached copy of the auto-upload preference. Read on the per-combat-event hot path
-    // (MaybeCaptureForLog), so the getter MUST stay O(1) — never a lock + JSON deserialize.
-    // Loaded once at init via InitLogUpload(); the setter keeps it in sync with persisted prefs.
-    private bool _autoUpload = true;
-
-    /// <summary>Auto-upload every archived run + capture raw forensic events. Default ON; toggle in settings.
-    /// Manual per-run upload from history works regardless of this flag.</summary>
-    internal bool AutoUpload
-    {
-        get => _autoUpload;
-        set { _autoUpload = value; _prefs.Set(PrefAutoUpload, value); _prefs.Save(); }
-    }
-
-    // Load the cached auto-upload pref once at plugin init (alongside the other settings loads in Plugin.cs).
-    // Reads from _prefs exactly once so the per-event getter never touches the config store.
-    private void InitLogUpload() => _autoUpload = _prefs.Get(PrefAutoUpload, true);
+    // The upload policy's prefs lifecycle + the cached hot-path booleans live in Plugin.UploadPolicy.cs
+    // (InitUploadPolicy, called from the ctor in place of the retired InitLogUpload).
 
     /// <summary>
     /// Base64-PKCS#8 ECDSA P-256 private key used to sign uploads.
@@ -129,7 +118,9 @@ public sealed partial class Plugin
     /// </summary>
     internal void MaybeCaptureForLog(CombatEvent evt)
     {
-        if (!AutoUpload) return;   // only buffer raw events when auto-uploading; manual uses entry aggregates
+        // D3: only buffer raw events when the CURRENT content auto-uploads stats — today's semantics.
+        // Reads one cached bool (RecomputeUploadPolicyCache); never prefs, never a kind resolution.
+        if (!_captureForLogEnabled) return;
         _logBuffer.Add(evt);
     }
 
@@ -140,14 +131,41 @@ public sealed partial class Plugin
 
     /// <summary>
     /// Auto path: serializes the captured raw event stream + actor snapshots and fires off a
-    /// fire-and-forget upload. Called once per archive when <see cref="AutoUpload"/> is on; never
+    /// fire-and-forget upload. Called once per archive; uploads only when the archived run's content
+    /// kind has <c>&lt;kind&gt;.stats = auto</c> (spec § 2.4). Never
     /// throws. Returns <c>true</c> iff a summary upload was fired — from that point the upload's
     /// callback OWNS <paramref name="replayDoc"/> (uploads it per the merge verdict); <c>false</c>
     /// means no upload fired and the caller must upload <paramref name="replayDoc"/> itself.
     /// </summary>
     internal bool MaybeUploadLog(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc = null)
     {
-        if (!AutoUpload) { _logBuffer.Clear(); return false; }
+        var kind = ResolveKind(entry);
+        var state = EffectivePolicyFor(entry, UploadArtifact.Stats);   // fail-open on an empty map (§ 8.3)
+        if (!UploadPolicy.Allows(state, UploadTrigger.Auto))
+        {
+            LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Auto, state);
+            // Owner ruling 2026-07-29: "off = just don't upload it but game still keep record into chunk
+            // always" / "it suppose to store all replay even flag mark off". `off` withholds the SEND; it
+            // must never destroy the record. This used to `_logBuffer.Clear()` and drop everything, which
+            // is why the owner's Giant Golem Crusade could never be recovered: raw events are NOT stored
+            // with an archive (history keeps aggregates only), and the retained first-send copy — the one
+            // thing a later manual push can replay verbatim — was written ONLY when a send fired. No send
+            // ever fired for `other`, so no copy existed, and the manual push sent "0 events in 0
+            // chunk(s)" however many hours or relaunches later.
+            RetainWithoutUpload(entry, replayDoc);
+            return false;
+        }
+        // Difficulty axis (owner-approved 2026-07-29, spec § 8.5). A SECOND, independent gate: the per-kind
+        // cell above says whether this KIND may send, this says whether this DIFFICULTY may — a run must
+        // pass both. Retains exactly like the `off` path above, for the same reason, and deliberately sets
+        // NO UploadPhase: `Skipped` renders "Uploads off for this content", which would be a lie here (the
+        // cell is on), and the row's default "⤓ Upload this run" is what keeps the hand push discoverable.
+        if (!TierAllowsUpload(entry))
+        {
+            LogTierRefusal(entry, kind);
+            RetainWithoutUpload(entry, replayDoc);
+            return false;
+        }
         if (!RegionKnownOrWarn()) { _logBuffer.Clear(); return false; }
         if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
         {                           // path; uploading would collide every field fight on run:0
@@ -156,7 +174,9 @@ public sealed partial class Plugin
             return false;
         }
 
-        return AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true, replayDoc);
+        // Pure overload: the logging one would double-log the refusal (PrepareReplayDoc already logged it).
+        var replaySendAllowed = ReplayAutoUploadAllowed(_contentKinds, _uploadPolicy, entry);
+        return AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true, replayDoc, replaySendAllowed);
     }
 
     /// <summary>Manual per-run upload from history. Uses the entry's stored aggregates; no raw events
@@ -165,6 +185,25 @@ public sealed partial class Plugin
     internal void UploadHistoryEntry(EncounterHistoryEntry entry)
     {
         if (UploadStateFor(entry) == UploadPhase.InFlight) return;   // debounce double-click
+
+        // Spec § 2.4: a hand push proceeds unless the archived run's kind has stats `off`. The kind comes
+        // from the ENTRY's stored scene name, so a re-upload after a relaunch resolves the kind the run
+        // had when it was archived — never whatever scene happens to be live now.
+        var kind = ResolveKind(entry);
+        var state = EffectivePolicyFor(entry, UploadArtifact.Stats);   // fail-open on an empty map (§ 8.3)
+        if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
+        {
+            LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Manual, state);
+            // Skipped, NOT Failed. This is a policy refusal: nothing was sent and retrying cannot change
+            // it until the cell is turned on. It used to reuse Failed to avoid adding a persisted phase
+            // value, which rendered "✗ Failed — Retry" and cost the owner twelve pointless Retry presses
+            // on a Giant Golem Crusade run (2026-07-29). The row still shows state, so the original
+            // reason for reusing Failed — a click that looks like it did nothing — is still served.
+            _uploadStatus.Set(entry, UploadPhase.Skipped);
+            _uploadStateDirty = true;
+            return;
+        }
+
         if (entry.LevelUuid == 0)   // pre-v3 archive (identity not persisted) — /run/0 would collide; refuse
         {
             _uploadStatus.Set(entry, UploadPhase.Failed);
@@ -202,15 +241,19 @@ public sealed partial class Plugin
             var url = UploadVerdict.SiteBase + "/run/" + payload.Region + "/" + payload.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count} chunk(s), positions={(payload.Positions is not null)}).");
-            LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err) =>
+            LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err, verdict) =>
             {
-                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+                // Prefer the server's SHORT run URL, same as the first-send path. Storing the constructed
+                // numeric `url` here made every re-upload downgrade the entry's link (owner report
+                // 2026-07-30: "click upload segment and upload all both return number"), even though the
+                // worker returned shortId on all three segments — confirmed by tailing stellar-logs.
+                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
+                    UploadVerdict.PreferredUrl(verdict, url));
                 _uploadStateDirty = true;
                 if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
                 if (payload.Chunks.Count > 0)
                     ChunkUploader.PostRawEnvelopesFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.Chunks, m => _services.Log.Warning(m));
-                if (payload.Positions is not null)
-                    PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions);
+                if (payload.Positions is not null) MaybeReUploadPositions(entry, payload);
             });
         }
         catch (Exception ex)
@@ -223,6 +266,24 @@ public sealed partial class Plugin
         }
     }
 
+    // Spec § 2.4: a manual push attaches the replay only when that run's content has its replay cell
+    // NOT `off`. This is a POLICY gate on the user's own configuration — deliberately NOT the
+    // server-verdict gating that ReplayReUpload's comment forbids: the summary and chunks still
+    // re-send unconditionally as a repair, and an `auto` or `manual` cell still re-sends positions
+    // unconditionally. Runs on the thread-pool callback thread, so it touches only the immutable
+    // _contentKinds reference, the enum-array policy table, and thread-safe log calls — never uGUI.
+    private void MaybeReUploadPositions(EncounterHistoryEntry entry, ReUploadPayload payload)
+    {
+        var kind = ResolveKind(entry);
+        var state = EffectivePolicyFor(entry, UploadArtifact.Replay);  // fail-open on an empty map (§ 8.3)
+        if (!UploadPolicy.Allows(state, UploadTrigger.Manual))
+        {
+            LogUploadRefusal(kind, UploadArtifact.Replay, UploadTrigger.Manual, state);
+            return;
+        }
+        PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions!);
+    }
+
     // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
     // auto, empty for manual) and the truncation flag. Never throws into the (main-thread) caller.
     // flushBuffer=true (auto path) flushes _logBuffer INSIDE this try so a throw from the conversion
@@ -233,7 +294,8 @@ public sealed partial class Plugin
     // — from that point the callback OWNS replayDoc (P2 single-shot positions handoff). Returns false
     // on the zero-events early-return, or when the catch below runs BEFORE the upload was fired —
     // in either false case the CALLER is responsible for uploading replayDoc itself.
-    private bool AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents, bool flushBuffer, PositionUploadDoc? replayDoc)
+    private bool AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents,
+                                   bool flushBuffer, PositionUploadDoc? replayDoc, bool replaySendAllowed = true)
     {
         if (!flushBuffer && !RegionKnownOrWarn()) return false;
 
@@ -284,7 +346,7 @@ public sealed partial class Plugin
                 _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
                     UploadVerdict.PreferredUrl(verdict, url));
                 _uploadStateDirty = true;
-                if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict);
+                if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict, replaySendAllowed);
                 else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
             }, delayMs, skipPrecheck: !flushBuffer);   // manual re-upload (flushBuffer=false) forces full ingest so the server can REPAIR a bad run
 
@@ -308,7 +370,7 @@ public sealed partial class Plugin
 
     // Success leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
     // never touch uGUI). Gates chunk + positions uploads on the server's merge verdict.
-    private void OnSummaryUploadOk(CombatLog log, List<EventChunk> chunks, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict)
+    private void OnSummaryUploadOk(CombatLog log, List<EventChunk> chunks, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict, bool replaySendAllowed)
     {
         var v = verdict ?? new UploadVerdict(true, false);
         _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
@@ -325,7 +387,11 @@ public sealed partial class Plugin
             _services.Log.Info($"[CombatMeter.SP1] Run already fully uploaded by a party member — skipping {chunks.Count} chunk upload(s).");
         if (replayDoc is not null)
         {
-            if (!v.HavePositions) UploadReplayDoc(replayDoc);
+            // The doc is now built even when the replay cell is off (it must be RETAINED regardless), so
+            // the send is gated here too — otherwise `off` would still ship positions.
+            if (!replaySendAllowed)
+                _services.Log.Info("[CombatMeter.SP1] Positions retained, not uploaded (replay cell off).");
+            else if (!v.HavePositions) UploadReplayDoc(replayDoc);
             else _services.Log.Info("[CombatMeter.SP1] Positions already attached server-side — skipping positions upload.");
         }
     }
@@ -379,6 +445,34 @@ public sealed partial class Plugin
     /// chunk's <see cref="ChunkUploader.BuildEnvelope"/>) is safe to defer entirely onto the background
     /// thread alongside the gzip+write — nothing here may run on the archive frame, a chunk-heavy run
     /// must never hitch it. Keyed by the entry's stable (LevelUuid, ArchivedAtMs) composite.</summary>
+    /// <summary>Assembles the run exactly as an upload would and RETAINS it locally without sending —
+    /// the `off` path. Owner ruling 2026-07-29: a withheld upload keeps its record, so a later manual push
+    /// replays the true originals instead of the summary-only fallback. Deliberately mirrors the auto
+    /// path's capture (same flush, same chunker, same assembler, same container key) so a retained-then-
+    /// pushed run is byte-identical to one that uploaded immediately. Retention is bounded and
+    /// self-cleaning: Plugin.HistoryStore deletes a container with its entry and sweeps orphans against
+    /// the live history, which is itself capped. Never throws.</summary>
+    private void RetainWithoutUpload(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc)
+    {
+        try
+        {
+            if (entry.LevelUuid == 0) { _logBuffer.Clear(); return; }   // field fight: nothing addressable to retain
+            var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
+            var events = _logBuffer.Flush();
+            var chunks = EventChunker.Chunk(events);
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, _bossMonsterInfo?.Id ?? 0, chunks.Count);
+            PersistReUpload(entry, log, chunks, replayDoc);
+            _services.Log.Info(
+                $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
+                $"({events.Count} events in {chunks.Count} chunk(s), replay={(replayDoc is not null)}).");
+        }
+        catch (Exception ex)
+        {
+            _logBuffer.Clear();
+            _services.Log.Warning($"[CombatMeter.SP1] retain-without-upload failed: {ex.Message}");
+        }
+    }
+
     private void PersistReUpload(EncounterHistoryEntry entry, CombatLog log, IReadOnlyList<EventChunk> chunks, PositionUploadDoc? replayDoc)
     {
         var name = ReUploadContainer.ContainerName(entry.LevelUuid, entry.ArchivedAtMs);

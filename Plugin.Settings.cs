@@ -100,8 +100,8 @@ public sealed partial class Plugin
         => new TextElement(() => text, MutedCol);
 
     // indent=true prepends a small spacer so the toggle (checkbox + label) nests visually under a
-    // parent trigger row — the same left inset PillRow uses — for sub-options like "Re-cut if boss
-    // re-detected" (under Boss phase) and "Ignore when solo" (under Team wipe).
+    // parent trigger row — the same left inset PillRow uses — for a sub-option like "Ignore when
+    // solo" (under Team wipe).
     private HudElement ToggleRow(string label, Func<bool> get, Action<bool> set, Func<bool>? enabled = null, bool indent = false)
     {
         var toggle = new ToggleElement(() => "", get, v => { set(v); PersistToggles(); }, enabled);

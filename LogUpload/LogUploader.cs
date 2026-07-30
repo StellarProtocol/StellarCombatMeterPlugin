@@ -168,11 +168,21 @@ internal static class LogUploader
 
     /// <summary>Re-POST a pre-serialized summary body verbatim (byte-for-byte re-upload). Always full-ingest
     /// (precheck skipped — this is a repair). Never throws; onComplete fires on a thread-pool thread.</summary>
-    internal static void PostRawFireAndForget(string json, Action<bool, int, string?> onComplete)
+    /// <summary>Verbatim-replay POST. The callback receives the parsed <see cref="UploadVerdict"/> so a
+    /// re-upload can store the server's SHORT run URL.
+    ///
+    /// <para>It previously took <c>Action&lt;bool,int,string?&gt;</c> and this method threw the success body
+    /// away (<c>onComplete(true, status, null)</c>), so the verbatim re-upload path could not see
+    /// <c>shortUrl</c> even though the worker sends it on every landed upload — verified by tailing
+    /// stellar-logs 2026-07-30: <c>upload verdict … session=y shortId=HpPqOu76Bh</c> for all three of the
+    /// owner's segments while the client displayed <c>sea/721167069613129728</c>. Every "Upload segment" /
+    /// "Upload all" therefore DOWNGRADED the stored link to the numeric fallback. Same failure this file
+    /// already fixed once for the 409 path (owner report 2026-07-20); this was the remaining hole.</para></summary>
+    internal static void PostRawFireAndForget(string json, Action<bool, int, string?, UploadVerdict?> onComplete)
         => _ = Task.Run(() => PostGzipJsonAsync(UploadUrl, json, onComplete));
 
     // Shared raw gzip+POST used by the verbatim-replay entry points.
-    private static async Task PostGzipJsonAsync(string url, string json, Action<bool, int, string?> onComplete)
+    private static async Task PostGzipJsonAsync(string url, string json, Action<bool, int, string?, UploadVerdict?> onComplete)
     {
         try
         {
@@ -182,10 +192,14 @@ internal static class LogUploader
             content.Headers.ContentEncoding.Add("gzip");
             using var response = await HttpClient.PostAsync(url, content, CancellationToken.None).ConfigureAwait(false);
             var status = (int)response.StatusCode;
-            if (response.IsSuccessStatusCode) onComplete(true, status, null);
-            else onComplete(false, status, await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            // Read the body on SUCCESS too — that is where shortUrl lives. Parse is regex-based and
+            // non-throwing, and a body without the field yields a verdict with a null ShortUrl, so
+            // PreferredUrl still degrades to the constructed URL exactly as before.
+            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (response.IsSuccessStatusCode) onComplete(true, status, null, UploadVerdict.Parse(body));
+            else onComplete(false, status, body, null);
         }
-        catch (Exception ex) { onComplete(false, 0, ex.Message); }
+        catch (Exception ex) { onComplete(false, 0, ex.Message, null); }
     }
 
     private static byte[] Gzip(string input)

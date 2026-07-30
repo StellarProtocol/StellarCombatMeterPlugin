@@ -28,13 +28,6 @@ public sealed partial class Plugin
         bool priorCombat = _combatActive;
         MaybeCutForBossPhase(d.SourceId, d.TargetId, d.TimestampMs, priorCombat);
 
-        // All-channel combat-activity clock (dealt / heal / taken are all DamageDealt) — feeds the
-        // auto-archive idle-settle delay so a deferred AUTO archive waits out trailing DoTs / the
-        // killing-blow tick before snapshotting. Distinct from _lastDamageMs (dealt-only, set in
-        // AccumulateDamage) which the Idle trigger depends on — do not conflate the two. Set AFTER the
-        // boss cut above (whose Clear() zeroes it) so it still reflects THIS event.
-        _lastCombatEventMs = d.TimestampMs;
-
         // Establish combat start from the FIRST event of ANY channel (dealt / heal / taken). Previously
         // the latch lived in AccumulateDamage, so an encounter that opened with a heal or an incoming hit
         // dropped those events from the timeline (the `if (_combatActive)` guards were unsatisfied) and

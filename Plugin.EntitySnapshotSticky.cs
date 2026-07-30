@@ -33,6 +33,15 @@ public sealed partial class Plugin
     // cleared by Clear() — it must outlive encounter resets / scene changes.
     private string? _lastKnownSelfName;
 
+    // Persisted across sessions (owner repro 2026-07-29): relaunching WHILE MOUNTED left the meter row as
+    // the literal "Self", because PlayerState.Name is blank while mounted and the session-only cache had
+    // nothing yet — EntityLabel then falls through roster (empty when solo) and combat lookup to "Self".
+    // A character's name is stable, so it is remembered per character and restored at boot. Keyed by char
+    // id so switching characters never shows the previous one's name.
+    private const string PrefSelfNameCharId = "selfName.charId";
+    private const string PrefSelfNameValue  = "selfName.value";
+    private bool _selfNameRestored;
+
     private void TickEntitySnapshots(float deltaTime)
     {
         _entitySnapAccum += deltaTime;
@@ -40,13 +49,74 @@ public sealed partial class Plugin
         _entitySnapAccum = 0f;
         // Cache the local name at 1 Hz (it changes rarely) — no need to poll PlayerState.Name every frame.
         var live = _services.PlayerState.Name;
-        if (!string.IsNullOrEmpty(live)) _lastKnownSelfName = live;
+        if (!string.IsNullOrEmpty(live))
+        {
+            if (_lastKnownSelfName != live) PersistSelfName(live);
+            _lastKnownSelfName = live;
+        }
+        else if (_lastKnownSelfName is null) RestoreSelfNameOnce();
         RefreshEntitySnapshots();
     }
 
     // The cached local-player name to use when EntityLabel can only produce the "Self" fallback (PlayerState.Name
     // blank in a social area). Null until we've seen a real name at least once this session.
     private string? SelfNameFallback() => _lastKnownSelfName;
+
+    /// <summary>Local character id, FULL width. Deliberately not <c>EntityId.Uid</c>, which is
+    /// <c>(int)(Value &gt;&gt; 16)</c> and truncates — a real char id such as 1959717569152 becomes
+    /// 1212482176. Mirrors the derivation <c>Plugin.PartyFocus.cs</c> already uses.</summary>
+    internal static long SelfCharIdOf(long localEntityIdValue) => localEntityIdValue >> 16;
+
+    /// <summary>Pure restore rule: the stored name applies only when it is non-blank AND belongs to the
+    /// character currently logged in. A zero <paramref name="currentCharId"/> means "not in world yet",
+    /// which matches nothing.</summary>
+    internal static string? RestoreSelfName(long storedCharId, string? storedName, long currentCharId)
+        => currentCharId != 0 && storedCharId == currentCharId && !string.IsNullOrWhiteSpace(storedName)
+            ? storedName
+            : null;
+
+    private void PersistSelfName(string name)
+    {
+        var charId = SelfCharIdOf(_services.CombatSnapshot.LocalEntityId.Value);
+        if (charId == 0) return;
+        _prefs.Set(PrefSelfNameCharId, charId);
+        _prefs.Set(PrefSelfNameValue, name);
+        _prefs.Save();
+    }
+
+    // One attempt per session once the local character is known — the 1 Hz tick would otherwise re-read
+    // prefs forever on a character whose name genuinely has not been seen.
+    private void RestoreSelfNameOnce()
+    {
+        if (_selfNameRestored) return;
+        var charId = SelfCharIdOf(_services.CombatSnapshot.LocalEntityId.Value);
+        if (charId == 0) return;   // not in world yet — try again next tick
+        _selfNameRestored = true;
+        _lastKnownSelfName = RestoreSelfName(
+                                 _prefs.Get<long>(PrefSelfNameCharId, 0L),
+                                 _prefs.Get<string>(PrefSelfNameValue, null), charId)
+                          ?? SelfNameFromHistory(charId);
+        // Seed the pref from history so the next launch does not have to scan again.
+        if (_lastKnownSelfName is { } found) PersistSelfName(found);
+    }
+
+    /// <summary>
+    /// The local player's name recovered from ARCHIVED history — newest entry first. Every banked archive
+    /// freezes a per-player <see cref="EntitySnapshot"/> carrying the display name, so the name is already
+    /// on disk even on a launch that has never seen a live one. This is what makes the mounted-relaunch
+    /// case work: <c>IPlayerState.Name</c> is blank throughout, so a live-only cache never fills.
+    ///
+    /// Matched on the FULL-width char id (<c>Value &gt;&gt; 16</c>), not <c>EntityId.Uid</c>, so it cannot
+    /// be defeated by that property's int cast, and so a character switch cannot pick up the wrong name.
+    /// </summary>
+    private string? SelfNameFromHistory(long charId)
+    {
+        for (var i = _history.Count - 1; i >= 0; i--)
+            foreach (var (id, snap) in _history[i].Entities)
+                if (SelfCharIdOf(id.Value) == charId && !string.IsNullOrWhiteSpace(snap.Name))
+                    return snap.Name;
+        return null;
+    }
 
     // Sticky sub-profession (spec) cache, keyed by the stable char id. The framework's ICombatSpec cache resets
     // on every scene change, so a party member's spec (e.g. "Frost Mage") reverts to the base class name once you

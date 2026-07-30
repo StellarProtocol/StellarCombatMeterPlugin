@@ -25,6 +25,10 @@ public sealed class LogUploadTests
         public void SaveQuiet() { }
     }
 
+    // Still load-bearing after the per-content upload policy replaced the global flag: this key is now
+    // the one-shot MIGRATION INPUT read by Plugin.LoadOrMigrateUploadPolicy, and its unset-default of
+    // `true` is what seeds all four `<kind>.stats` cells to `auto` on a fresh install (spec § 2.2) —
+    // i.e. this default is what keeps an upgrade behaviour-identical to today.
     [Fact]
     public void AutoUpload_defaults_on()
     {
