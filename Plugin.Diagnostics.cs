@@ -196,6 +196,28 @@ public sealed partial class Plugin
             $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}");
     }
 
+    // Remembers the last flow version SEEN here, so only real transitions log (this runs per tick).
+    private int _loggedFlowVersion = -1;
+
+    /// <summary>One line per dungeon flow-state TRANSITION. The archive outcome line only reveals the state
+    /// at the moment an archive cuts, which leaves the states that armed the stage trigger and then lost to
+    /// the Min-gap cooldown completely invisible — a cooldown-suppressed tick returns null and logs nothing.
+    /// The owner's 2026-07-30 run showed <c>Playing#3 -> Settlement#5 -> None#7</c>: transitions 4 and 6
+    /// happened unobserved, and whether they are End/Vote was inference, not measurement. The per-stage
+    /// auto-archive settings need the real sequence to decide which stages to OFFER and which to default to;
+    /// guessing risks shipping a control that matches nothing.
+    ///
+    /// <para>UNGATED, like the sibling [archive] line: bounded at a handful per run (a dungeon has ~7
+    /// transitions), and it is the only record of WHY an archive did or did not cut.</para></summary>
+    private void LogFlowTransition(DungeonFlowState state, int version)
+    {
+        if (version == _loggedFlowVersion) return;
+        var previous = _loggedFlowVersion;
+        _loggedFlowVersion = version;
+        if (previous < 0) return;   // first observation adopts silently, matching the engine's own rule
+        _services.Log.Info($"[CombatMeter][flow] {state}#{version} (was #{previous})");
+    }
+
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
     // (review round, 2026-07-26) — deliberately UNGATED Warning, same reasoning as LogArchiveOutcome
     // above: the standing rule is diagnostics stay gated behind StellarDiagnostics.IsEnabled, but a

@@ -264,7 +264,7 @@ public sealed partial class Plugin
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
         var (bossPresent, bossGone, bossDead) = BossStatus();
-        return new AutoArchiveInputs
+        var inputs = new AutoArchiveInputs
         {
             NowMs            = _services.CombatSnapshot.ServerNowMs,
             CombatActive     = _combatActive,
@@ -282,6 +282,8 @@ public sealed partial class Plugin
             FlowStateVersion = _services.Dungeon.FlowStateVersion,
             CurrentFlowState = _services.Dungeon.CurrentFlowState,
         };
+        LogFlowTransition(inputs.CurrentFlowState, inputs.FlowStateVersion);
+        return inputs;
     }
 
     // Wipe scan: self via IPlayerState (authoritative — the vitals cache doesn't track self
