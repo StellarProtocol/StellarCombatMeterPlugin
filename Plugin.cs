@@ -300,6 +300,7 @@ public sealed partial class Plugin : IStellarPlugin
         DrainContentKindsNotice();     // surface a manual content-list refresh result (Notifications is main-thread only)
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
+        TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
         RebuildSnapshots();
     }
 

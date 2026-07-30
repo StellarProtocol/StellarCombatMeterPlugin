@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Services;
+using Stellar.CombatMeter.LogUpload;   // UploadPhase
 
 namespace Stellar.CombatMeter;
 
@@ -116,13 +117,93 @@ public sealed partial class Plugin
             var slot = i;
             kids[slot + 1] = new ConditionalElement(
                 () => slot < _selectedSegments.Length,
+                // No fixed Width: the chip auto-sizes to its label. Widths cannot be per-frame (Width is a
+                // ctor value, not a Func) and the labels vary in length, so pinning one width would either
+                // clip "bosskill" or pad "idle" — owner: "each segment should tell user how it created".
                 new ButtonElement(
-                    () => (slot + 1).ToString(),
+                    () => SegmentChipLabel(slot),
                     () => { if (slot < _selectedSegments.Length) SelectSession(_selectedSegments[slot]); },
-                    Active: () => slot < _selectedSegments.Length && _selectedSegments[slot] == _historyIndex,
-                    Width: 28f));
+                    Active: () => slot < _selectedSegments.Length && _selectedSegments[slot] == _historyIndex));
         }
         // Only meaningful when the run actually HAS multiple archives.
         return new ConditionalElement(() => _selectedSegments.Length > 1, new RowElement(kids, Gap: 4f));
+    }
+
+    /// <summary>How this segment came to exist — the archive's own trigger (bosskill / stage / scene / wipe /
+    /// boss / idle / manual). Duplicates are expected and honest: selecting two run-end stages really does
+    /// produce two `stage` segments, and the chips are chronological so position tells them apart.</summary>
+    private string SegmentChipLabel(int slot)
+    {
+        if (slot >= _selectedSegments.Length) return "";
+        var idx = _selectedSegments[slot];
+        if (idx < 0 || idx >= _history.Count) return "";
+        var trigger = _history[idx].Trigger;
+        return string.IsNullOrEmpty(trigger) ? "manual" : trigger;
+    }
+
+    // ----- run-level upload -----
+
+    // Segments still to upload for the selected run, held as ENTRY REFERENCES rather than indices: history is
+    // capacity-trimmed, so an index could point at a different (or evicted) run by the time its turn comes.
+    private readonly List<EncounterHistoryEntry> _runUploadQueue = new();
+
+    /// <summary>Label for the per-SEGMENT button. Reads "segment" only when there is more than one, so a
+    /// single-archive run keeps the plain wording.</summary>
+    private string SegmentUploadVerb() => _selectedSegments.Length > 1 ? "⤓ Upload segment" : "⤓ Upload this run";
+
+    /// <summary>"Upload all (N)" — visible only for a grouped run. Owner: "sometimes I just don't wanna click
+    /// upload manually 6 seqments."</summary>
+    private HudElement BuildUploadRunButton() => new ConditionalElement(
+        () => _selectedSegments.Length > 1,
+        new ButtonElement(
+            () => _runUploadQueue.Count > 0 ? $"Uploading {_runUploadQueue.Count} left…" : $"⤓ Upload all ({_selectedSegments.Length})",
+            QueueRunUpload,
+            Enabled: () => _runUploadQueue.Count == 0));
+
+    /// <summary>Whether a segment in that upload phase still needs sending.
+    ///
+    /// <para><see cref="UploadPhase.Skipped"/> IS queued, deliberately. It means a policy cell refused the
+    /// send, and the owner's own workflow is to flip that cell on and then push by hand — verified in-game
+    /// 2026-07-30: an `other=off` run showed "Uploads off for this content", and after switching to `manual`
+    /// the very same archive uploaded with its events intact. Treating Skipped as terminal would break that.
+    /// <see cref="UploadPhase.Failed"/> is queued too, so "Upload all" doubles as a retry-the-rest.</para>
+    ///
+    /// <para>Pure + static so the rule pins headless.</para></summary>
+    internal static bool NeedsRunUpload(UploadPhase phase)
+        => phase is not (UploadPhase.Done or UploadPhase.InFlight);
+
+    /// <summary>Queues every not-yet-sent segment of the selected run. Already-uploaded and in-flight segments
+    /// are skipped, so pressing this after a partial upload only sends the remainder.</summary>
+    private void QueueRunUpload()
+    {
+        _runUploadQueue.Clear();
+        foreach (var idx in _selectedSegments)
+        {
+            if (idx < 0 || idx >= _history.Count) continue;
+            var entry = _history[idx];
+            if (!NeedsRunUpload(UploadStateFor(entry))) continue;
+            _runUploadQueue.Add(entry);
+        }
+    }
+
+    /// <summary>Drains the run-upload queue ONE segment at a time, from the ~10 Hz plugin tick.
+    ///
+    /// <para>SEQUENTIAL on purpose. There is no global upload concurrency guard — <c>UploadHistoryEntry</c>
+    /// debounces per entry only — so firing six at once would put six concurrent chunk uploads on the worker.
+    /// This session already saw <c>Re-upload chunk 0 FAILED after retries</c>, and multi-uploader capacity has
+    /// its own design note (docs/superpowers/specs/2026-07-11-multi-uploader-capacity-design.md). Slower, but
+    /// it cannot self-inflict a rate limit.</para>
+    ///
+    /// <para>Ticked outside the history window's own rebuild so closing the window mid-queue does not stall
+    /// the remaining uploads.</para></summary>
+    private void TickRunUploadQueue()
+    {
+        if (_runUploadQueue.Count == 0) return;
+        // Hold until nothing is in flight — including an upload started elsewhere (auto-archive, single
+        // segment button), so this can never be the second concurrent sender.
+        foreach (var h in _history) if (UploadStateFor(h) == UploadPhase.InFlight) return;
+        var next = _runUploadQueue[0];
+        _runUploadQueue.RemoveAt(0);
+        if (_history.Contains(next)) UploadHistoryEntry(next);   // dropped from history while queued: skip
     }
 }

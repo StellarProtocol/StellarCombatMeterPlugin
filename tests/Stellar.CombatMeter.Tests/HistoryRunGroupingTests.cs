@@ -125,3 +125,35 @@ public class HistoryRunGroupingTests
         Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, seen);
     }
 }
+
+/// <summary>
+/// Run-level "Upload all" queueing. Owner 2026-07-30: "sometimes I just don't wanna click upload manually
+/// 6 seqments." The send itself is SEQUENTIAL — there is no global upload concurrency guard, so firing every
+/// segment at once would put N concurrent chunk uploads on the worker.
+/// </summary>
+public class RunUploadQueueTests
+{
+    [Fact]
+    public void Already_uploaded_and_in_flight_segments_are_not_re_sent()
+    {
+        Assert.False(Plugin.NeedsRunUpload(LogUpload.UploadPhase.Done));
+        Assert.False(Plugin.NeedsRunUpload(LogUpload.UploadPhase.InFlight));
+    }
+
+    // PINNED: a policy-refused segment MUST stay queueable. The owner's verified workflow is to flip the
+    // content's upload cell on and then push the SAME archive by hand — an `other=off` run rendered
+    // "Uploads off for this content", and after switching to `manual` it uploaded with its events intact.
+    // Treating Skipped as terminal would silently exclude exactly those runs from "Upload all".
+    [Fact]
+    public void A_policy_skipped_segment_is_still_queueable()
+        => Assert.True(Plugin.NeedsRunUpload(LogUpload.UploadPhase.Skipped));
+
+    // "Upload all" doubles as retry-the-rest after a partial failure.
+    [Fact]
+    public void A_failed_segment_is_queued_for_retry()
+        => Assert.True(Plugin.NeedsRunUpload(LogUpload.UploadPhase.Failed));
+
+    [Fact]
+    public void A_never_attempted_segment_is_queued()
+        => Assert.True(Plugin.NeedsRunUpload(default));
+}

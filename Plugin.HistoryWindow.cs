@@ -157,6 +157,7 @@ public sealed partial class Plugin
     {
         new ButtonElement(UploadButtonLabel, UploadSelectedClicked,
             Active: () => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.InFlight),
+        BuildUploadRunButton(),
         new TextElement(UploadStatusText, MutedCol, NoWrap: true),
         new SpacerElement(),
         new ConditionalElement(() => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done,
@@ -165,7 +166,7 @@ public sealed partial class Plugin
 
     private string UploadButtonLabel()
     {
-        if (_selectedSession is not { } s) return "⤓ Upload this run";
+        if (_selectedSession is not { } s) return SegmentUploadVerb();
         if (s.LevelUuid == 0) return "⚠ No run id";   // pre-update archive: identity wasn't persisted
         return UploadStateFor(s) switch
         {
@@ -174,7 +175,7 @@ public sealed partial class Plugin
             UploadPhase.Failed   => "✗ Failed — Retry",
             // Not a failure and not retryable: the send was withheld by this content's upload cell.
             UploadPhase.Skipped  => "⃠ Uploads off for this content",
-            _                    => "⤓ Upload this run",
+            _                    => SegmentUploadVerb(),
         };
     }
 
