@@ -111,7 +111,9 @@ public sealed partial class Plugin
     private HudElement BuildSegmentPicker()
     {
         var kids = new HudElement[MaxSegmentChips + 1];
-        kids[0] = new TextElement(() => "segments", MutedCol, Width: 60f);
+        // NoWrap + enough width: at 60f the word wrapped and dropped its final "s" onto a second line
+        // (owner screenshot 2026-07-30). MEASURED via the history sandbox story, not guessed.
+        kids[0] = new TextElement(() => "segments", MutedCol, Width: 76f, NoWrap: true);
         for (var i = 0; i < MaxSegmentChips; i++)
         {
             var slot = i;
@@ -141,6 +143,24 @@ public sealed partial class Plugin
         return string.IsNullOrEmpty(trigger) ? "manual" : trigger;
     }
 
+    /// <summary>The uploaded run's identity for the status line — <c>sea/HpPqOu76Bh</c> rather than the whole
+    /// URL.
+    ///
+    /// <para>The full URL is ~55 characters of NoWrap text. Adding the "Upload all" button pushed the row 39px
+    /// past the pane at the default 780f width and Copy link overdrew the URL (MEASURED in the history sandbox
+    /// story). Wrapping the text in a weighted CellElement did NOT help: NoWrap reports a large preferred
+    /// width, so the cell grows rather than clipping. Shortening the text is what actually fits, and it costs
+    /// nothing — Copy link right beside it still yields the full link.</para>
+    ///
+    /// <para>Pure + static so it pins headless. Anything not shaped like a run URL is returned unchanged
+    /// rather than mangled.</para></summary>
+    internal static string ShortRunLabel(string url)
+    {
+        const string marker = "/run/";
+        var at = url.IndexOf(marker, StringComparison.Ordinal);
+        return at < 0 ? url : url.Substring(at + marker.Length);
+    }
+
     // ----- run-level upload -----
 
     // Segments still to upload for the selected run, held as ENTRY REFERENCES rather than indices: history is
@@ -160,17 +180,22 @@ public sealed partial class Plugin
             QueueRunUpload,
             Enabled: () => _runUploadQueue.Count == 0));
 
-    /// <summary>Whether a segment in that upload phase still needs sending.
+    /// <summary>Whether a segment in that upload phase is eligible for "Upload all". Everything EXCEPT an
+    /// in-flight send is — including <see cref="UploadPhase.Done"/>.
     ///
-    /// <para><see cref="UploadPhase.Skipped"/> IS queued, deliberately. It means a policy cell refused the
-    /// send, and the owner's own workflow is to flip that cell on and then push by hand — verified in-game
-    /// 2026-07-30: an `other=off` run showed "Uploads off for this content", and after switching to `manual`
-    /// the very same archive uploaded with its events intact. Treating Skipped as terminal would break that.
-    /// <see cref="UploadPhase.Failed"/> is queued too, so "Upload all" doubles as a retry-the-rest.</para>
+    /// <para>Done was excluded at first, which made the button do NOTHING on the owner's runs: those archives
+    /// auto-uploaded at archive time (<c>banked+upload</c>), so all three segments were already Done and the
+    /// queue came out empty (measured 2026-07-30 — the log showed no send at all after the click). It also
+    /// contradicted the per-SEGMENT button beside it, which happily re-uploads a Done archive verbatim. "Upload
+    /// all" now means what it says, and matches its single-segment neighbour.</para>
     ///
-    /// <para>Pure + static so the rule pins headless.</para></summary>
-    internal static bool NeedsRunUpload(UploadPhase phase)
-        => phase is not (UploadPhase.Done or UploadPhase.InFlight);
+    /// <para><see cref="UploadPhase.Skipped"/> stays eligible: it is a policy refusal, and the owner's verified
+    /// workflow is to flip the cell on and push the same archive — an `other=off` run uploaded with its events
+    /// intact once set to `manual`. <see cref="UploadPhase.Failed"/> makes this a retry-the-rest.</para>
+    ///
+    /// <para>Only InFlight is excluded, because a second concurrent send of the same archive is the one thing
+    /// that is never wanted. Pure + static so the rule pins headless.</para></summary>
+    internal static bool NeedsRunUpload(UploadPhase phase) => phase != UploadPhase.InFlight;
 
     /// <summary>Queues every not-yet-sent segment of the selected run. Already-uploaded and in-flight segments
     /// are skipped, so pressing this after a partial upload only sends the remainder.</summary>

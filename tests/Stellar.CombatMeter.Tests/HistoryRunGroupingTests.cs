@@ -133,12 +133,18 @@ public class HistoryRunGroupingTests
 /// </summary>
 public class RunUploadQueueTests
 {
+    // REGRESSION PIN (2026-07-30): "Upload all" did NOTHING on the owner's runs. Their archives auto-upload
+    // at archive time, so every segment was already Done, and excluding Done left the queue empty — the log
+    // showed no send at all after the click. It also contradicted the per-segment button beside it, which
+    // re-uploads a Done archive verbatim. Do not re-exclude Done: that is the exact bug.
     [Fact]
-    public void Already_uploaded_and_in_flight_segments_are_not_re_sent()
-    {
-        Assert.False(Plugin.NeedsRunUpload(LogUpload.UploadPhase.Done));
-        Assert.False(Plugin.NeedsRunUpload(LogUpload.UploadPhase.InFlight));
-    }
+    public void An_already_uploaded_segment_is_still_queued_so_upload_all_is_never_a_no_op()
+        => Assert.True(Plugin.NeedsRunUpload(LogUpload.UploadPhase.Done));
+
+    // The one exclusion: never start a second concurrent send of the same archive.
+    [Fact]
+    public void An_in_flight_segment_is_not_re_sent()
+        => Assert.False(Plugin.NeedsRunUpload(LogUpload.UploadPhase.InFlight));
 
     // PINNED: a policy-refused segment MUST stay queueable. The owner's verified workflow is to flip the
     // content's upload cell on and then push the SAME archive by hand — an `other=off` run rendered
@@ -156,4 +162,27 @@ public class RunUploadQueueTests
     [Fact]
     public void A_never_attempted_segment_is_queued()
         => Assert.True(Plugin.NeedsRunUpload(default));
+}
+
+/// <summary>The upload status line's compact run label. The full URL is ~55 chars of NoWrap text and pushed
+/// the row 39px past the pane once "Upload all" joined it; Copy link still yields the full link.</summary>
+public class ShortRunLabelTests
+{
+    [Fact]
+    public void A_run_url_reduces_to_region_and_id()
+        => Assert.Equal("sea/HpPqOu76Bh",
+            Plugin.ShortRunLabel("https://logs.stellarresonance.app/run/sea/HpPqOu76Bh"));
+
+    [Fact]
+    public void A_numeric_run_id_works_the_same()
+        => Assert.Equal("sea/721167069613129728",
+            Plugin.ShortRunLabel("https://logs.stellarresonance.app/run/sea/721167069613129728"));
+
+    // Never mangle something that is not a run URL — return it untouched rather than guessing.
+    [Fact]
+    public void Anything_not_shaped_like_a_run_url_is_returned_unchanged()
+    {
+        Assert.Equal("", Plugin.ShortRunLabel(""));
+        Assert.Equal("https://example.com/x", Plugin.ShortRunLabel("https://example.com/x"));
+    }
 }

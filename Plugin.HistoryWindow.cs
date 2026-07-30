@@ -158,8 +158,11 @@ public sealed partial class Plugin
         new ButtonElement(UploadButtonLabel, UploadSelectedClicked,
             Active: () => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.InFlight),
         BuildUploadRunButton(),
-        new TextElement(UploadStatusText, MutedCol, NoWrap: true),
-        new SpacerElement(),
+        // Weighted cell, not a bare NoWrap text + Spacer: the status is often a full run URL, and NoWrap text
+        // in an unweighted cell forces the ROW wider instead of clipping. Adding "Upload all" pushed the row
+        // 39px past the pane at the default 780f width, clipping Copy link (MEASURED, history sandbox story).
+        // A weighted cell absorbs the leftover and lets the URL truncate, so Copy link keeps its place.
+        new CellElement(new TextElement(UploadStatusText, MutedCol, NoWrap: true), Weight: 1f),
         new ConditionalElement(() => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done,
             new ButtonElement(() => "Copy link", CopyUploadLink)),
     }, Gap: 8f);
@@ -185,7 +188,7 @@ public sealed partial class Plugin
         if (s.LevelUuid == 0) return "Archived before run-id was saved — re-run the fight to upload it.";
         if (UploadStateFor(s) == UploadPhase.Skipped)
             return "This content's upload is set to off — the run is still recorded locally. Turn its cell on in Settings to send it.";
-        return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? u : "";
+        return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? ShortRunLabel(u) : "";
     }
 
     private void UploadSelectedClicked()
