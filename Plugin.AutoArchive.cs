@@ -70,6 +70,13 @@ public sealed partial class Plugin
     private const string PrefAaIdleTimeoutS = "autoArchive.idleTimeoutS";
     private const string PrefAaStage        = "autoArchive.stageChange";
 
+    // Per-stage selection (2026-07-30). The legacy master bool above is UNCHANGED and still the quick
+    // on/off; these say WHICH run-end stages cut an archive. No migration needed: an existing install keeps
+    // its master value and picks up the End-only default below, which turns the old "1-3 archives depending
+    // on the Min-gap cooldown" into exactly one.
+    private static string PrefAaStageState(DungeonFlowState state)
+        => "autoArchive.stage." + state.ToString().ToLowerInvariant();
+
     // Task 4 additions (2026-07-21): master enable + the Task 1-3 engine knobs (wipe grace/ignore-solo,
     // shared cooldown, min-boss-segment floor) + the settle delay.
     private const string PrefAaEnabled        = "autoArchive.enabled";
@@ -126,6 +133,17 @@ public sealed partial class Plugin
         set { _autoArchive.StageEnabled = value; _prefs.Set(PrefAaStage, value); _prefs.Save(); }
     }
 
+    /// <summary>Whether a transition into this run-end stage cuts an archive. Independent of the master
+    /// <see cref="AutoArchiveStage"/> toggle: a run must pass both.</summary>
+    internal bool AutoArchiveStageState(DungeonFlowState state) => _autoArchive.IsStageSelected(state);
+
+    internal void SetAutoArchiveStageState(DungeonFlowState state, bool selected)
+    {
+        _autoArchive.SetStageSelected(state, selected);
+        _prefs.Set(PrefAaStageState(state), selected);
+        _prefs.Save();
+    }
+
     internal int AutoArchiveIdleTimeoutS
     {
         get => (int)(_autoArchive.IdleTimeoutMs / 1000);
@@ -179,6 +197,10 @@ public sealed partial class Plugin
         _autoArchive.BossEnabled   = _prefs.Get(PrefAaBoss, true);
         _autoArchive.IdleEnabled   = _prefs.Get(PrefAaIdle, true);
         _autoArchive.StageEnabled  = _prefs.Get(PrefAaStage, true);
+        // End-only by default: it is the FIRST run-end state and the only one that fired in both measured
+        // runs (2026-07-30). Selecting one stage is what makes the archive count deterministic.
+        foreach (var stage in AutoArchive.AutoArchiveEngine.SelectableStages)
+            _autoArchive.SetStageSelected(stage, _prefs.Get(PrefAaStageState(stage), stage == DungeonFlowState.End));
         _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 300) * 1000L;   // ship default 300s (owner Image #25, 2026-07-21)
 
         _autoArchive.Enabled             = _prefs.Get(PrefAaEnabled, true);

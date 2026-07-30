@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 
 namespace Stellar.CombatMeter.AutoArchive;
@@ -67,7 +68,7 @@ internal readonly record struct AutoArchiveInputs
 /// archive paths — manual and scene-change archives report in via <see cref="OnArchived"/> — so
 /// overlapping triggers (e.g. wipe + stage change) cannot double-archive.
 /// </summary>
-internal sealed class AutoArchiveEngine
+internal sealed partial class AutoArchiveEngine
 {
     internal const long DefaultCooldownMs = 10_000;   // shared cooldown default (tests reference this)
     internal const long MinContentMs = 30_000;   // idle content guard: >= 30 s of actual combat span
@@ -454,17 +455,13 @@ internal sealed class AutoArchiveEngine
             // wrong. Combined with the carry rules, a pre-pull opener simply stays accumulated and
             // lands inside the next real segment.
             bool realTransition = _lastFlowVersion >= 0 && s.FlowStateVersion > _lastFlowVersion;
-            _stagePending = realTransition && IsRunEndState(s.CurrentFlowState);
+            // Only the SELECTED run-end stages arm. All three still occur every run; arming on all of them
+            // is what produced the duplicate archives.
+            _stagePending = realTransition && IsStageSelected(s.CurrentFlowState);
             _lastFlowVersion = s.FlowStateVersion;
         }
         if (!s.InstancedRun || !StageEnabled) _stagePending = false;
     }
-
-    // Run-END flow states: only a transition INTO one of these arms the stage trigger (owner ruling
-    // 2026-07-20). Values mirror zproto EDungeonState; the enum tolerates unknown future wire values
-    // (cast) so this is an explicit allow-list, not a "not-an-entry-state" negation.
-    private static bool IsRunEndState(DungeonFlowState state) =>
-        state is DungeonFlowState.End or DungeonFlowState.Settlement or DungeonFlowState.Vote;
 
     // Idle: no player damage for IdleTimeoutMs, guarded by minimum content (>= MinContentMs of
     // combat span AND >= 1 player damage event — LastDamageMs is only ever set by a player-source

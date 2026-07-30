@@ -109,12 +109,89 @@ public partial class AutoArchiveEngineTests
     }
 
     [Fact]
-    public void Stage_transition_into_settlement_arms()
+    public void Stage_transition_into_settlement_arms_when_that_stage_is_selected()
     {
-        // (c) Settlement is also a run-END state — arms.
+        // (c) Settlement is also a run-END state — arms, ONCE SELECTED. Since 2026-07-30 the stages are a
+        // user choice defaulting to End alone, so this now also proves the selector actually works.
         var e = Armed(Live());
+        e.SetStageSelected(DungeonFlowState.Settlement, true);
         var s = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.Settlement };
         Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in s));
+    }
+
+    // REGRESSION PIN (2026-07-30) — the duplicate-archive bug. A run steps End -> Settlement -> Vote and
+    // ALL THREE used to arm, so one run end cut 1-3 archives depending purely on whether the shared Min-gap
+    // cooldown had expired between them: the owner measured bosskill + 2x stage at cooldownS=5 and only 1 at
+    // cooldownS=10 on the same build and content. With the default single stage the count is deterministic.
+    // Do NOT relax this by widening the default selection.
+    [Fact]
+    public void Stage_fires_once_across_the_whole_run_end_sequence_by_default()
+    {
+        var e = Armed(Live());
+        // Isolate the stage trigger: the later ticks deliberately sit far past the cooldown, which would
+        // otherwise let Idle fire and mask what is being asserted here.
+        e.WipeEnabled = false; e.BossEnabled = false; e.IdleEnabled = false;
+        // End is the default selection -> fires.
+        var end = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End };
+        Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in end));
+        e.OnArchived(end.NowMs, ArchiveReason.StageChange);
+
+        // Settlement and Vote follow in the same run. Both are UNSELECTED, so neither may arm — and this
+        // must hold even once the cooldown has long expired, which is what makes it cooldown-independent.
+        var settle = Live() with
+        {
+            FlowStateVersion = 3, CurrentFlowState = DungeonFlowState.Settlement,
+            NowMs = end.NowMs + AutoArchiveEngine.DefaultCooldownMs * 10,
+        };
+        Assert.Null(e.Evaluate(in settle));
+        var vote = settle with
+        {
+            FlowStateVersion = 4, CurrentFlowState = DungeonFlowState.Vote,
+            NowMs = settle.NowMs + AutoArchiveEngine.DefaultCooldownMs * 10,
+        };
+        Assert.Null(e.Evaluate(in vote));
+    }
+
+    // Selecting two stages is allowed and yields two archives — the user asked for them. This is the
+    // counterpart to the pin above: the fix must constrain the DEFAULT, not remove the capability.
+    [Fact]
+    public void Stage_fires_for_each_selected_stage()
+    {
+        var e = Armed(Live());
+        e.SetStageSelected(DungeonFlowState.Settlement, true);
+
+        var end = Live() with { FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End };
+        Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in end));
+        e.OnArchived(end.NowMs, ArchiveReason.StageChange);
+
+        var settle = Live() with
+        {
+            FlowStateVersion = 3, CurrentFlowState = DungeonFlowState.Settlement,
+            NowMs = end.NowMs + AutoArchiveEngine.DefaultCooldownMs + 1,
+        };
+        Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in settle));
+    }
+
+    [Fact]
+    public void Stage_deselecting_every_stage_never_fires()
+    {
+        var e = Armed(Live());
+        foreach (var stage in AutoArchiveEngine.SelectableStages) e.SetStageSelected(stage, false);
+        foreach (var stage in AutoArchiveEngine.SelectableStages)
+            Assert.Null(e.Evaluate(Live() with { FlowStateVersion = 2, CurrentFlowState = stage }));
+    }
+
+    // Entry-side states are not selectable at all: arming on Playing would cut an archive of just the
+    // opener (a player poking a boss bumps the flow to Playing).
+    [Fact]
+    public void Stage_entry_side_states_cannot_be_selected()
+    {
+        var e = Armed(Live());
+        foreach (var s in new[] { DungeonFlowState.None, DungeonFlowState.Active, DungeonFlowState.Ready, DungeonFlowState.Playing })
+        {
+            e.SetStageSelected(s, true);
+            Assert.False(e.IsStageSelected(s));
+        }
     }
 
     [Fact]

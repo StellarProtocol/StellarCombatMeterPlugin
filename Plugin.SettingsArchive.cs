@@ -74,7 +74,10 @@ public sealed partial class Plugin
             PillRow("Idle timeout", () => AutoArchiveIdleTimeoutS, v => AutoArchiveIdleTimeoutS = v, new[] { 30, 60, 120, 300 }, () => AutoArchiveIdle),
 
             ToggleRow("Dungeon stage change", () => AutoArchiveStage, v => AutoArchiveStage = v),
-            new TextElement(() => "   Archives when the dungeon advances (floor clear / settlement).", MutedCol),
+            // Caption corrected: the old "Archives when the dungeon advances (floor clear / settlement)"
+            // misdescribed it — only run-END states ever arm this, never a mid-run advance.
+            new TextElement(() => "   Cuts an archive when the run ends. Pick which stages.", MutedCol),
+            StageChipRow(),
 
             new SeparatorElement(),
             new TextElement(() => "Uploads", Emphasis: true),
@@ -276,6 +279,44 @@ public sealed partial class Plugin
     // so the highlighted pill tracks whichever value is currently in effect, matching the
     // Active: () => AutoArchiveIdleTimeoutS == seconds pattern the old IdleTimeoutBtn used.
     // `enabled` (optional) gates the whole row (e.g. only editable while its parent trigger is on).
+    /// <summary>Multi-select chips for WHICH run-end stages cut an archive. A game run steps
+    /// <c>End -> Settlement -> Vote</c> and every one of them used to arm the trigger, so a single run end
+    /// cut 1-3 archives depending on whether the Min-gap cooldown happened to have expired between them
+    /// (owner report 2026-07-30). Selecting stages explicitly makes that count deterministic.
+    ///
+    /// <para>Chips rather than a dropdown for the same reason the upload tier axis uses them: the choice is
+    /// genuinely MULTI-select. Gated on the parent toggle, matching how PillRow's option rows gate.</para>
+    /// </summary>
+    private HudElement StageChipRow()
+    {
+        var kids = new List<HudElement>
+        {
+            new SpacerElement(Width: 16f),
+            new TextElement(() => "stages", MutedCol, Width: 44f),
+        };
+        foreach (var s in AutoArchive.AutoArchiveEngine.SelectableStages)
+        {
+            var stage = s;   // capture per iteration — these closures are read live, long after this loop
+            kids.Add(new ButtonElement(
+                () => stage.ToString(),
+                () => SetAutoArchiveStageState(stage, !AutoArchiveStageState(stage)),
+                Active: () => AutoArchiveStageState(stage),
+                Enabled: () => AutoArchiveStage,
+                Width: StageChipWidth(stage)));
+        }
+        return new RowElement(kids.ToArray(), Gap: 6f);
+    }
+
+    // Per-LABEL widths, mirroring the upload tier chips. MEASURED via tools/run-ui-sandbox.sh: the row
+    // spans x 65..299 with 104px of slack inside the 366px content box.
+    private static float StageChipWidth(DungeonFlowState stage) => stage switch
+    {
+        DungeonFlowState.End        => 46f,
+        DungeonFlowState.Settlement => 78f,
+        DungeonFlowState.Vote       => 50f,
+        _                           => 56f,
+    };
+
     private HudElement PillRow(string label, Func<int> get, Action<int> set, params int[] seconds)
         => PillRow(label, get, set, seconds, null);
 
