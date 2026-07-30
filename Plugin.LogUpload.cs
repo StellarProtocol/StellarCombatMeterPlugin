@@ -241,9 +241,14 @@ public sealed partial class Plugin
             var url = UploadVerdict.SiteBase + "/run/" + payload.Region + "/" + payload.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count} chunk(s), positions={(payload.Positions is not null)}).");
-            LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err) =>
+            LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err, verdict) =>
             {
-                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed, url);
+                // Prefer the server's SHORT run URL, same as the first-send path. Storing the constructed
+                // numeric `url` here made every re-upload downgrade the entry's link (owner report
+                // 2026-07-30: "click upload segment and upload all both return number"), even though the
+                // worker returned shortId on all three segments — confirmed by tailing stellar-logs.
+                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
+                    UploadVerdict.PreferredUrl(verdict, url));
                 _uploadStateDirty = true;
                 if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
                 if (payload.Chunks.Count > 0)
