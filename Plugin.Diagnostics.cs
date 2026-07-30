@@ -182,9 +182,18 @@ public sealed partial class Plugin
             : 0;
         var causeText = reason != AutoArchive.ArchiveReason.BossKill ? "n/a"
             : _autoArchive.BossKillWasTimeout ? "timeout" : "death";
+        // flow=<state>#<version>: WHICH run-end state cut this archive, and how many transitions have been
+        // seen. The stage trigger arms on a transition into ANY of End/Settlement/Vote and the game steps
+        // through them in sequence, so one run end produced up to three archives (owner report 2026-07-30:
+        // bosskill + 2x stage, ~5s apart, merged only by the Min-gap cooldown). The reason tag alone says
+        // "stage" for all of them, so the log could not distinguish them and there was no evidence for
+        // WHICH states actually fire in real content — which is what the per-stage settings need in order
+        // to pick a default rather than guess. Read at archive time: the stage archive commits within
+        // ~15-20ms of arming (see armedMs), so this is the arming state in practice.
         _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
-            $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText}");
+            $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText} " +
+            $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}");
     }
 
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
