@@ -30,6 +30,12 @@ internal sealed class EntitySnapshot
     public int[]  AttrIds    = System.Array.Empty<int>();
     public long[] AttrValues = System.Array.Empty<long>();
 
+    // Base+peak snapshot stats (2026-08-02): SELF-ONLY sparse combat PEAKs (attr max where max>min),
+    // baked in at archive from AttrRangeTracker. Empty for non-self and for old deserialized entries
+    // (peaks are NOT persisted — same-session only, matching the per-class loadout constraint).
+    public int[]  AttrPeakIds    = System.Array.Empty<int>();
+    public long[] AttrPeakValues = System.Array.Empty<long>();
+
     public int[] GearSlots   = System.Array.Empty<int>();
     public int[] GearItemIds = System.Array.Empty<int>();
 

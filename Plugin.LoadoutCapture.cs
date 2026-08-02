@@ -90,6 +90,7 @@ public sealed partial class Plugin
     {
         TickLoadoutRunBoundary();
         PollLocalProfession();
+        TickAttrRangeSample();
     }
 
     /// <summary>True when <paramref name="newRunId"/> marks the START of a run the accumulator hasn't
@@ -107,6 +108,7 @@ public sealed partial class Plugin
         if (IsNewLoadoutRun(_loadoutRunId, runId))
         {
             _loadoutCapture.ResetForRun();
+            _attrRange.ResetForRun();
             _lastPolledProfession = 0;
         }
         _loadoutRunId = runId;

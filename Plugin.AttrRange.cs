@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Stellar.Abstractions.Domain;
 
 namespace Stellar.CombatMeter;
 
@@ -59,4 +60,27 @@ internal sealed class AttrRangeTracker
 
     /// <summary>Clears every profession. Called at RUN START only.</summary>
     public void ResetForRun() => _byProfession.Clear();
+}
+
+public sealed partial class Plugin
+{
+    private readonly AttrRangeTracker _attrRange = new();
+
+    // ~5 Hz throttle over the existing 10 Hz snapshot tick: flip each tick, sample on the "1" phase.
+    private int _attrRangeSampleToggle;
+
+    /// <summary>Samples the local player's live attribute sheet into the tracker for the currently
+    /// active profession. Called from <see cref="TickLoadoutCapture"/> (10 Hz), throttled to ~5 Hz.
+    /// Runs pre-combat + in-combat so idle reads establish the unbuffed floor. No-op out of world /
+    /// profession unknown. Self-only.</summary>
+    private void TickAttrRangeSample()
+    {
+        _attrRangeSampleToggle ^= 1;
+        if (_attrRangeSampleToggle == 0) return;   // every other tick → ~5 Hz
+        var prof = _services.PlayerState.Profession;
+        if (prof == 0) return;
+        var self = _services.CombatSnapshot.LocalEntityId;
+        if (!self.IsPlayer) return;
+        _attrRange.Observe(prof, _services.EntityDetail.GetAttributes(self));
+    }
 }
