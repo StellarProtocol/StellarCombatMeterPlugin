@@ -301,6 +301,7 @@ public sealed partial class Plugin : IStellarPlugin
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
+        TickLoadoutCapture();        // ~10 Hz: per-class loadout accumulator (poll profession + run-boundary reset)
         RebuildSnapshots();
     }
 
