@@ -93,6 +93,7 @@ public sealed partial class Plugin
         PollLocalProfession();
         TickGearRecapture();
         TickAttrRangeSample();
+        TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
     }
 
     // Set on IInventory.SelfGearChanged, which fires on the network/sync thread (see that event's
@@ -132,6 +133,7 @@ public sealed partial class Plugin
         {
             _loadoutCapture.ResetForRun();
             _attrRange.ResetForRun();
+            _classSpans.ResetForRun();
             _lastPolledProfession = 0;
         }
         _loadoutRunId = runId;

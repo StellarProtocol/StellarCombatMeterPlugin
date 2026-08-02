@@ -36,6 +36,17 @@ internal sealed class EntitySnapshot
     public int[]  AttrPeakIds    = System.Array.Empty<int>();
     public long[] AttrPeakValues = System.Array.Empty<long>();
 
+    // Per-entity professionId timeline (per-entity class detection, 2026-08-03): every class this
+    // entity was observed playing THIS run, baked in at archive from ClassSpanTracker (mirrors the
+    // AttrPeak* baking pattern above). Populated for EVERY player — self AND party, NOT self-only —
+    // because the broadcast attr-220 stream (IEntityDetail.GetAttributes) is available for any AOI
+    // entity, not just the local player. Empty for a single-class entity (no timeline needed) and for
+    // old deserialized entries (not persisted — same-session only, matching AttrPeaks).
+    // ClassSpanProf[i]/ClassSpanStart[i]/ClassSpanEnd[i] together are one [professionId, startMs, endMs] span.
+    public long[] ClassSpanProf  = System.Array.Empty<long>();
+    public long[] ClassSpanStart = System.Array.Empty<long>();
+    public long[] ClassSpanEnd   = System.Array.Empty<long>();
+
     public int[] GearSlots   = System.Array.Empty<int>();
     public int[] GearItemIds = System.Array.Empty<int>();
 

@@ -244,6 +244,7 @@ public sealed partial class Plugin
             Trigger          = ArchiveReasonTag(reason),
         };
         ApplyAttrRanges(entry);
+        ApplyClassSpans(entry);
         return entry;
     }
 

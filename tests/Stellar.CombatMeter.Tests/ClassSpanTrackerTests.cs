@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 
@@ -79,5 +80,36 @@ public class ClassSpanTrackerTests
         t.Observe(1, 2, 0);
         t.Observe(2, 9, 0);
         Assert.Equal(new long[] { 1, 2 }, t.Entities().OrderBy(x => x).ToArray());
+    }
+
+    // -------------------------------------------------------------------------
+    // WriteClassSpansToSnapshot (Task 2 wiring): bakes the tracker's folded spans into an
+    // EntitySnapshot's parallel ClassSpanProf/Start/End arrays — pure, mirrors
+    // AttrRangeTrackerTests' WriteRangeToSnapshot coverage.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void WriteClassSpansToSnapshot_WritesParallelArrays()
+    {
+        var snap = new EntitySnapshot();
+        var spans = new List<long[]> { new long[] { 2, 0, 5000 }, new long[] { 5, 5000, 12_000 } };
+
+        Plugin.WriteClassSpansToSnapshot(snap, spans);
+
+        Assert.Equal(new long[] { 2, 5 }, snap.ClassSpanProf);
+        Assert.Equal(new long[] { 0, 5000 }, snap.ClassSpanStart);
+        Assert.Equal(new long[] { 5000, 12_000 }, snap.ClassSpanEnd);
+    }
+
+    [Fact]
+    public void WriteClassSpansToSnapshot_EmptySpans_WritesEmptyArrays()
+    {
+        var snap = new EntitySnapshot();
+
+        Plugin.WriteClassSpansToSnapshot(snap, System.Array.Empty<long[]>());
+
+        Assert.Empty(snap.ClassSpanProf);
+        Assert.Empty(snap.ClassSpanStart);
+        Assert.Empty(snap.ClassSpanEnd);
     }
 }
