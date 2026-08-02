@@ -163,6 +163,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred += OnCombatEvent;
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
+        _services.Inventory.SelfGearChanged        += OnSelfGearChanged;
         _lastSceneName = _services.ClientState.CurrentSceneName;
         _sceneIsCandidate = ResolveSceneCandidate(_lastSceneName);
 
@@ -245,6 +246,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;
+        _services.Inventory.SelfGearChanged        -= OnSelfGearChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;
         OnInspectRequested -= HandleInspectRequested;
 

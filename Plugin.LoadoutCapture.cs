@@ -91,7 +91,29 @@ public sealed partial class Plugin
     {
         TickLoadoutRunBoundary();
         PollLocalProfession();
+        TickGearRecapture();
         TickAttrRangeSample();
+    }
+
+    // Set on IInventory.SelfGearChanged, which fires on the network/sync thread (see that event's
+    // threading contract) — so the handler ONLY flips this flag and NEVER touches game state (IL2CPP
+    // reads off the tick thread are a native-crash class). The tick below consumes it. Event-driven:
+    // no polling — the game pushes a full gear sync only on login / map change / class swap / gear edit.
+    private volatile bool _gearDirty;
+
+    private void OnSelfGearChanged() => _gearDirty = true;
+
+    // A class swap re-syncs the new class's gear a MOMENT AFTER the profession attr flips, so
+    // PollLocalProfession's switch-instant capture froze the OLD class's stale gear (owner-reported:
+    // gear identical across classes; root cause docs/recon/combatmeter-data-facts.md). When the fresh
+    // sync lands we re-capture the active class — latest-wins overwrites the stale gear (and re-reads
+    // modules/fashion/etc. too). Runs at most once per gear sync, on the game tick.
+    private void TickGearRecapture()
+    {
+        if (!_gearDirty) return;
+        _gearDirty = false;
+        var prof = _services.PlayerState.Profession;
+        if (prof != 0) CaptureActiveClassLoadout(prof);
     }
 
     /// <summary>True when <paramref name="newRunId"/> marks the START of a run the accumulator hasn't
