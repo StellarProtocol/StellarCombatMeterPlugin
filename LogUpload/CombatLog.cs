@@ -98,7 +98,8 @@ internal sealed record Actor(
     IReadOnlyList<ModuleEntry>? Modules = null,
     int TalentStageId = 0,
     IReadOnlyList<LoadoutEntry>? Loadouts = null,
-    IReadOnlyList<int>? TalentNodes = null);   // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<long[]>? AttrPeaks = null); // [attrId, peakValue] sparse self combat peaks (base+peak stats 2026-08-02)
 
 /// <summary>Self-only per-item instance detail, mirroring the game's Item Detail popup.
 /// Rolls are RESOLVED at capture (attr id + display value + 0-100 percentile) so consumers
@@ -135,4 +136,5 @@ internal sealed record LoadoutEntry(
     IReadOnlyList<ModuleEntry>? Modules,
     int TalentStageId,
     IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
-    IReadOnlyList<long[]>? Attributes = null); // [attrId, value] attribute sheet for THIS class (self-only)
+    IReadOnlyList<long[]>? Attributes = null, // [attrId, value] attribute sheet for THIS class (self-only)
+    IReadOnlyList<long[]>? AttrPeaks = null); // [attrId, peakValue] sparse per-class combat peaks (self-only)

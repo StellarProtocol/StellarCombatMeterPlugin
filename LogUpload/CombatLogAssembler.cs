@@ -251,6 +251,16 @@ internal sealed class CombatLogAssembler
         return actors;
     }
 
+    /// <summary>Snapshot sparse peak arrays → [attrId, peakValue][] for upload; null when empty.</summary>
+    internal static IReadOnlyList<long[]>? BuildActorAttrPeaks(EntitySnapshot snap)
+    {
+        if (snap.AttrPeakIds.Length == 0) return null;
+        var peaks = new long[snap.AttrPeakIds.Length][];
+        for (var i = 0; i < snap.AttrPeakIds.Length; i++)
+            peaks[i] = new long[] { snap.AttrPeakIds[i], snap.AttrPeakValues[i] };
+        return peaks;
+    }
+
     private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue,
         IReadOnlyList<CapturedLoadout> runLoadouts)
     {
@@ -326,7 +336,8 @@ internal sealed class CombatLogAssembler
             Modules:      modules,
             TalentStageId: talentStageId,
             Loadouts:     loadouts,
-            TalentNodes:  talentNodes);
+            TalentNodes:  talentNodes,
+            AttrPeaks:    BuildActorAttrPeaks(snap));
     }
 
     /// <summary>
@@ -367,7 +378,8 @@ internal sealed class CombatLogAssembler
                 Modules:       BuildModuleEntries(l.Modules),
                 TalentStageId: l.TalentStageId,
                 TalentNodes:   l.TalentNodes,
-                Attributes:    l.Attributes));
+                Attributes:    l.Attributes,
+                AttrPeaks:     l.AttrPeaks));
         return list;
     }
 

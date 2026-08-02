@@ -82,4 +82,16 @@ public class AttrRangeTrackerTests
         Assert.Equal(new[] { 11710 }, snap.AttrPeakIds);
         Assert.Equal(new long[] { 2330 }, snap.AttrPeakValues);
     }
+
+    [Fact]
+    public void SnapToActor_MapsSparsePeaksAndNullWhenEmpty()
+    {
+        var withPeak = new EntitySnapshot { AttrIds = new[] { 11710 }, AttrValues = new long[] { 500 },
+            AttrPeakIds = new[] { 11710 }, AttrPeakValues = new long[] { 2330 } };
+        var noPeak   = new EntitySnapshot { AttrIds = new[] { 11710 }, AttrValues = new long[] { 500 } };
+
+        Assert.Equal(new long[] { 11710, 2330 },
+            Stellar.CombatMeter.LogUpload.CombatLogAssembler.BuildActorAttrPeaks(withPeak).Single());
+        Assert.Null(Stellar.CombatMeter.LogUpload.CombatLogAssembler.BuildActorAttrPeaks(noPeak));
+    }
 }
