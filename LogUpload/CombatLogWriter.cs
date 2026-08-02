@@ -199,6 +199,9 @@ internal static class CombatLogWriter
             w.Name("abilityScore").Number(a.AbilityScore);
             w.Name("maxHp").Number(a.MaxHp);
             w.Name("attributes"); WriteLongPairs(w, a.Attributes);
+            // Base+peak stats (2026-08-02): sparse self-only combat peaks — emitted only when present
+            // (absent on old runs / non-self / no buff moved a stat), so old-run payloads are unchanged.
+            if (a.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
             w.Name("gear"); WriteIntArrays(w, a.Gear);
             w.Name("skills"); WriteIntArrays(w, a.Skills);
             w.Name("fashion"); WriteFashion(w, a.Fashion);
@@ -245,6 +248,7 @@ internal static class CombatLogWriter
             if (l.TalentStageId > 0) w.Name("talentStageId").Number(l.TalentStageId);
             if (l.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
             if (l.Attributes is { Count: > 0 } at) { w.Name("attributes"); WriteLongPairs(w, at); }
+            if (l.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
             w.EndObject();
         }
         w.EndArray();

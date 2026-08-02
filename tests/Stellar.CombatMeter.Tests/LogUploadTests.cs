@@ -754,6 +754,29 @@ public sealed class LogUploadTests
     }
 
     [Fact]
+    public void WriteActor_and_loadout_emit_attrPeaks_when_present_omit_when_absent()
+    {
+        // Base+peak stats (2026-08-02): the hand-rolled upload writer must emit the sparse combat
+        // peaks for BOTH the per-actor snapshot and each per-class loadout, or the site never sees a
+        // peak. Regression pin — the plan's Task 4 originally missed this writer.
+        var loadoutWithPeaks = MakeLoadoutEntry() with { AttrPeaks = new List<long[]> { new long[] { 11710, 2330 } } };
+        var actor = new Actor(
+            Name: "Aria", Kind: "player", TeamId: 1, IsLocal: true, Uid: 1248014,
+            ProfessionId: 12, Level: 60, AbilityScore: 1, MaxHp: 1,
+            Attributes: new List<long[]> { new long[] { 11710, 500 } },
+            Gear: new List<int[]>(), Skills: new List<int[]>(), Fashion: new List<Fashion>(),
+            Loadouts: new List<LoadoutEntry> { loadoutWithPeaks },
+            AttrPeaks: new List<long[]> { new long[] { 11710, 2330 } });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor));
+        Assert.Contains("\"attrPeaks\":[[11710,2330]]", json);                                  // actor-level
+        Assert.Contains("\"skills\":[[1241,30,6]],\"fashion\":[],\"attrPeaks\":[[11710,2330]]", json); // loadout-level
+
+        var noPeaks = actor with { AttrPeaks = null, Loadouts = new List<LoadoutEntry> { MakeLoadoutEntry() } };
+        Assert.DoesNotContain("\"attrPeaks\"", CombatLogWriter.Write(MakeLoadoutLog(noPeaks)));
+    }
+
+    [Fact]
     public void BuildModuleEntries_maps_fields_and_returns_null_when_empty()
     {
         var captured = new List<CapturedModule> { new(0, 5500102, 5, new List<int[]> { new[] { 1110, 5 } }) };
