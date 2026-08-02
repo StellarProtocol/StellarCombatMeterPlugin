@@ -306,7 +306,7 @@ internal sealed class CombatLogAssembler
         // Uid: the high 48 bits of EntityId.Value encode the CharId (per Plugin.cs GetClassLine).
         long? uid = entityId.IsPlayer ? (entityId.Value >> 16) : (long?)null;
 
-        var (loadouts, modules, talentStageId) = ResolveLoadoutFields(isLocal, professionId, runLoadouts);
+        var (loadouts, modules, talentStageId, talentNodes) = ResolveLoadoutFields(isLocal, professionId, runLoadouts);
 
         return new Actor(
             Name:         name ?? "Unknown",
@@ -325,7 +325,8 @@ internal sealed class CombatLogAssembler
             GearDetail:   BuildGearDetail(snap),
             Modules:      modules,
             TalentStageId: talentStageId,
-            Loadouts:     loadouts);
+            Loadouts:     loadouts,
+            TalentNodes:  talentNodes);
     }
 
     /// <summary>
@@ -339,15 +340,15 @@ internal sealed class CombatLogAssembler
     /// (final) <paramref name="professionId"/> — null/0 if that class was never captured (e.g. the
     /// player never triggered a profession-change poll this run, or captured before Task 2 shipped).
     /// </summary>
-    internal static (IReadOnlyList<LoadoutEntry>? Loadouts, IReadOnlyList<ModuleEntry>? Modules, int TalentStageId)
+    internal static (IReadOnlyList<LoadoutEntry>? Loadouts, IReadOnlyList<ModuleEntry>? Modules, int TalentStageId, IReadOnlyList<int>? TalentNodes)
         ResolveLoadoutFields(bool isLocal, int professionId, IReadOnlyList<CapturedLoadout> runLoadouts)
     {
-        if (!isLocal || runLoadouts.Count == 0) return (null, null, 0);
+        if (!isLocal || runLoadouts.Count == 0) return (null, null, 0, null);
 
         var loadouts = BuildLoadoutEntries(runLoadouts);
         foreach (var l in runLoadouts)
-            if (l.ProfessionId == professionId) return (loadouts, BuildModuleEntries(l.Modules), l.TalentStageId);
-        return (loadouts, null, 0);
+            if (l.ProfessionId == professionId) return (loadouts, BuildModuleEntries(l.Modules), l.TalentStageId, l.TalentNodes);
+        return (loadouts, null, 0, null);
     }
 
     // Count == 0 ? null helper — mirrors BuildGearDetail's own null-when-empty convention.
@@ -364,7 +365,8 @@ internal sealed class CombatLogAssembler
                 Skills:        l.Skills,
                 Fashion:       l.Fashion,
                 Modules:       BuildModuleEntries(l.Modules),
-                TalentStageId: l.TalentStageId));
+                TalentStageId: l.TalentStageId,
+                TalentNodes:   l.TalentNodes));
         return list;
     }
 

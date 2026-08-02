@@ -93,11 +93,12 @@ internal sealed record Actor(
     IReadOnlyList<GearDetail>? GearDetail = null,
     // Per-class-loadout plan (Task 3), all self-only — the accumulator only ever captures the
     // LOCAL player's own classes, so every non-local actor leaves these at their defaults.
-    // Modules/TalentStageId mirror whichever captured class matches THIS actor's (final)
-    // ProfessionId above; Loadouts carries every class played so far this run.
+    // Modules/TalentStageId/TalentNodes mirror whichever captured class matches THIS actor's
+    // (final) ProfessionId above; Loadouts carries every class played so far this run.
     IReadOnlyList<ModuleEntry>? Modules = null,
     int TalentStageId = 0,
-    IReadOnlyList<LoadoutEntry>? Loadouts = null);
+    IReadOnlyList<LoadoutEntry>? Loadouts = null,
+    IReadOnlyList<int>? TalentNodes = null);   // actual allocated talent-tree node ids (self-only)
 
 /// <summary>Self-only per-item instance detail, mirroring the game's Item Detail popup.
 /// Rolls are RESOLVED at capture (attr id + display value + 0-100 percentile) so consumers
@@ -132,4 +133,5 @@ internal sealed record LoadoutEntry(
     IReadOnlyList<int[]> Skills,              // [skillId, level, tier]
     IReadOnlyList<Fashion> Fashion,
     IReadOnlyList<ModuleEntry>? Modules,
-    int TalentStageId);
+    int TalentStageId,
+    IReadOnlyList<int>? TalentNodes = null);   // actual allocated talent-tree node ids (self-only)

@@ -671,7 +671,7 @@ public sealed class LogUploadTests
 
     private static CapturedLoadout MakeCapturedLoadout(int professionId, string? projectName = null,
         int talentStageId = 0, IReadOnlyList<GearDetail>? gearDetail = null,
-        IReadOnlyList<CapturedModule>? modules = null) => new(
+        IReadOnlyList<CapturedModule>? modules = null, IReadOnlyList<int>? talentNodes = null) => new(
         ProfessionId:  professionId,
         ProjectName:   projectName,
         TalentStageId: talentStageId,
@@ -679,7 +679,8 @@ public sealed class LogUploadTests
         GearDetail:    gearDetail ?? new List<GearDetail>(),
         Skills:        new List<int[]> { new[] { 1241, 30, 6 } },
         Fashion:       new List<Fashion>(),
-        Modules:       modules ?? new List<CapturedModule>());
+        Modules:       modules ?? new List<CapturedModule>(),
+        TalentNodes:   talentNodes);
 
     private static CombatLog MakeLoadoutLog(Actor actor, string key = "1248014") =>
         new(1,
@@ -797,14 +798,15 @@ public sealed class LogUploadTests
     [Fact]
     public void ResolveLoadoutFields_nonLocal_alwaysNullRegardlessOfCapturedData()
     {
-        var runLoadouts = new List<CapturedLoadout> { MakeCapturedLoadout(2, talentStageId: 104) };
+        var runLoadouts = new List<CapturedLoadout> { MakeCapturedLoadout(2, talentStageId: 104, talentNodes: new[] { 233002, 5205 }) };
 
-        var (loadouts, modules, talentStageId) = CombatLogAssembler.ResolveLoadoutFields(
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
             isLocal: false, professionId: 2, runLoadouts);
 
         Assert.Null(loadouts);
         Assert.Null(modules);
         Assert.Equal(0, talentStageId);
+        Assert.Null(talentNodes);   // self-only gate strips node ids for non-local actors too
     }
 
     [Fact]
@@ -814,10 +816,10 @@ public sealed class LogUploadTests
         var runLoadouts = new List<CapturedLoadout>
         {
             MakeCapturedLoadout(5, projectName: "Old class", talentStageId: 900),   // played earlier, not current
-            MakeCapturedLoadout(2, projectName: "Current class", talentStageId: 104, modules: moduleForClass2),
+            MakeCapturedLoadout(2, projectName: "Current class", talentStageId: 104, modules: moduleForClass2, talentNodes: new[] { 233002, 5205, 222011 }),
         };
 
-        var (loadouts, modules, talentStageId) = CombatLogAssembler.ResolveLoadoutFields(
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
             isLocal: true, professionId: 2, runLoadouts);
 
         Assert.NotNull(loadouts);
@@ -825,6 +827,7 @@ public sealed class LogUploadTests
         Assert.NotNull(modules);
         Assert.Single(modules!);                          // top-level mirrors class 2 (the final profession) only
         Assert.Equal(104, talentStageId);
+        Assert.Equal(new[] { 233002, 5205, 222011 }, talentNodes);   // top-level nodes mirror the final class
     }
 
     [Fact]
@@ -832,13 +835,14 @@ public sealed class LogUploadTests
     {
         var runLoadouts = new List<CapturedLoadout> { MakeCapturedLoadout(5, talentStageId: 900) };
 
-        var (loadouts, modules, talentStageId) = CombatLogAssembler.ResolveLoadoutFields(
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
             isLocal: true, professionId: 99, runLoadouts);   // profession 99 was never captured
 
         Assert.NotNull(loadouts);
         Assert.Single(loadouts!);
         Assert.Null(modules);
         Assert.Equal(0, talentStageId);
+        Assert.Null(talentNodes);   // no matching class → no top-level nodes
     }
 
     // -------------------------------------------------------------------------

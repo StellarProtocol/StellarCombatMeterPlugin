@@ -208,6 +208,7 @@ internal static class CombatLogWriter
             // own presence-guard convention.
             if (a.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
             if (a.TalentStageId > 0) w.Name("talentStageId").Number(a.TalentStageId);
+            if (a.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
             if (a.Loadouts is { Count: > 0 } l) { w.Name("loadouts"); WriteLoadouts(w, l); }
         }
         w.EndObject();
@@ -242,8 +243,17 @@ internal static class CombatLogWriter
             w.Name("fashion"); WriteFashion(w, l.Fashion);
             if (l.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
             if (l.TalentStageId > 0) w.Name("talentStageId").Number(l.TalentStageId);
+            if (l.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
             w.EndObject();
         }
+        w.EndArray();
+    }
+
+    // Flat array of numbers (e.g. talent-tree node ids).
+    private static void WriteIntList(JsonWriter w, IReadOnlyList<int> xs)
+    {
+        w.BeginArray();
+        foreach (var x in xs) w.Number(x);
         w.EndArray();
     }
 

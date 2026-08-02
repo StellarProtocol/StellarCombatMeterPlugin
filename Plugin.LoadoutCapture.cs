@@ -26,7 +26,8 @@ internal sealed record CapturedLoadout(
     IReadOnlyList<GearDetail> GearDetail,     // self-only rolled detail — same shape as CaptureSelfGearDetail
     IReadOnlyList<int[]> Skills,              // [skillId, level, tier]
     IReadOnlyList<Fashion> Fashion,
-    IReadOnlyList<CapturedModule> Modules);
+    IReadOnlyList<CapturedModule> Modules,
+    IReadOnlyList<int>? TalentNodes = null);  // actual allocated talent-tree node ids (self-only)
 
 /// <summary>
 /// Pure per-class loadout accumulator — a plain latest-wins upsert keyed by professionId. Holds NO
@@ -127,7 +128,7 @@ public sealed partial class Plugin
         var self = _services.CombatSnapshot.LocalEntityId;
         if (!self.IsPlayer) return;
 
-        var (projectName, talentStageId) = ResolveActiveProject(professionId);
+        var (projectName, talentStageId, talentNodes) = ResolveActiveProject(professionId);
         var gearInstances = _services.Inventory.GetSelfGear();
 
         _loadoutCapture.Capture(new CapturedLoadout(
@@ -138,16 +139,18 @@ public sealed partial class Plugin
             GearDetail:    BuildLoadoutGearDetail(gearInstances),
             Skills:        BuildLoadoutSkills(self),
             Fashion:       BuildLoadoutFashion(self),
-            Modules:       BuildLoadoutModules()));
+            Modules:       BuildLoadoutModules(),
+            TalentNodes:   talentNodes));
     }
 
-    // The active class's saved-loadout name + talent stage (Task 1's enriched LoadoutSlot) — the one
-    // datum IInventory cannot give. Absent (0/null) when no saved slot currently matches this class.
-    private (string? ProjectName, int TalentStageId) ResolveActiveProject(int professionId)
+    // The active class's saved-loadout name + talent stage + allocated talent nodes (the enriched
+    // LoadoutSlot) — the data IInventory cannot give. Absent (0/null) when no saved slot currently
+    // matches this class.
+    private (string? ProjectName, int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveActiveProject(int professionId)
     {
         foreach (var slot in _services.Loadout.GetSlots())
-            if (slot.ProfessionId == professionId) return (slot.Name, slot.TalentStageId);
-        return (null, 0);
+            if (slot.ProfessionId == professionId) return (slot.Name, slot.TalentStageId, slot.TalentNodes);
+        return (null, 0, null);
     }
 
     private static List<int[]> BuildGearPairs(IReadOnlyList<GearInstance> gear)
