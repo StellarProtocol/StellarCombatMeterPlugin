@@ -73,6 +73,25 @@ public class LoadoutCaptureTests
     public void CaptureIsANoOpOnAnEmptyAccumulatorBeforeAnyPoll()
         => Assert.Empty(new LoadoutCapture().Snapshot());
 
+    [Fact]
+    public void SnapshotIsFrozen_LaterCaptureAndResetDoNotMutateIt()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "first-2"));
+        capture.Capture(Fake(5, "only-5"));
+
+        var frozen = capture.Snapshot();
+
+        // Mutate the live accumulator AFTER the snapshot was taken.
+        capture.Capture(Fake(9, "third-9"));
+        capture.ResetForRun();
+
+        var professions = frozen.Select(l => l.ProfessionId).OrderBy(p => p);
+        Assert.Equal(new[] { 2, 5 }, professions);
+        Assert.Equal("first-2", frozen.Single(l => l.ProfessionId == 2).ProjectName);
+        Assert.Equal("only-5", frozen.Single(l => l.ProfessionId == 5).ProjectName);
+    }
+
     // --- run-boundary gate (Plugin.IsNewLoadoutRun) — reset only at true run START ---
 
     [Theory]

@@ -115,7 +115,7 @@ internal sealed record GearDetail(
 internal sealed record Fashion(int Slot, int FashionId, IReadOnlyList<float> Dyes); // RGBA flattened
 
 /// <summary>One equipped module on the wire: slot, the module's config id + quality, and its
-/// rolled parts ([effectId, value]). Self-only (see <see cref="Actor.Modules"/>/<see cref="LoadoutEntry.Modules"/>).
+/// rolled parts ([attrId, value]). Self-only (see <see cref="Actor.Modules"/>/<see cref="LoadoutEntry.Modules"/>).
 /// Mirrors the plugin-internal capture shape <c>CapturedModule</c> (<c>Plugin.LoadoutCapture.cs</c>) —
 /// the assembler maps one onto the other 1:1.</summary>
 internal sealed record ModuleEntry(int Slot, int ConfigId, int Quality, IReadOnlyList<int[]> Parts);
