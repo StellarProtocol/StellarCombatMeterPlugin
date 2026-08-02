@@ -27,7 +27,8 @@ internal sealed record CapturedLoadout(
     IReadOnlyList<int[]> Skills,              // [skillId, level, tier]
     IReadOnlyList<Fashion> Fashion,
     IReadOnlyList<CapturedModule> Modules,
-    IReadOnlyList<int>? TalentNodes = null);  // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<long[]>? Attributes = null); // [attrId, value] self attribute sheet at capture (self-only)
 
 /// <summary>
 /// Pure per-class loadout accumulator — a plain latest-wins upsert keyed by professionId. Holds NO
@@ -140,7 +141,22 @@ public sealed partial class Plugin
             Skills:        BuildLoadoutSkills(self),
             Fashion:       BuildLoadoutFashion(self),
             Modules:       BuildLoadoutModules(),
-            TalentNodes:   talentNodes));
+            TalentNodes:   talentNodes,
+            Attributes:    BuildLoadoutAttributes(self)));
+    }
+
+    // Snapshot the local player's non-zero attribute sheet ([attrId, value]) at capture time so the
+    // site can show THIS class's stats (self-only; each class captured while it was active). Same
+    // source the whole-player upload uses (IEntityDetail.GetAttributes).
+    private List<long[]> BuildLoadoutAttributes(EntityId self)
+    {
+        var attrs = _services.EntityDetail.GetAttributes(self);
+        var list = new List<long[]>(attrs.Count);
+        foreach (var (attrId, value) in attrs)
+        {
+            if (value != 0) list.Add(new long[] { attrId, value });
+        }
+        return list;
     }
 
     // The active class's saved-loadout name + talent stage + allocated talent nodes (the enriched

@@ -244,6 +244,7 @@ internal static class CombatLogWriter
             if (l.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
             if (l.TalentStageId > 0) w.Name("talentStageId").Number(l.TalentStageId);
             if (l.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
+            if (l.Attributes is { Count: > 0 } at) { w.Name("attributes"); WriteLongPairs(w, at); }
             w.EndObject();
         }
         w.EndArray();

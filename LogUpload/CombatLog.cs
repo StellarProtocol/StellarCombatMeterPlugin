@@ -134,4 +134,5 @@ internal sealed record LoadoutEntry(
     IReadOnlyList<Fashion> Fashion,
     IReadOnlyList<ModuleEntry>? Modules,
     int TalentStageId,
-    IReadOnlyList<int>? TalentNodes = null);   // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<long[]>? Attributes = null); // [attrId, value] attribute sheet for THIS class (self-only)

@@ -366,7 +366,8 @@ internal sealed class CombatLogAssembler
                 Fashion:       l.Fashion,
                 Modules:       BuildModuleEntries(l.Modules),
                 TalentStageId: l.TalentStageId,
-                TalentNodes:   l.TalentNodes));
+                TalentNodes:   l.TalentNodes,
+                Attributes:    l.Attributes));
         return list;
     }
 
