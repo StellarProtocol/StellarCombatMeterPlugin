@@ -114,6 +114,7 @@ public sealed partial class Plugin
         if (!_gearDirty) return;
         _gearDirty = false;
         var prof = _services.PlayerState.Profession;
+        LogGearSyncDiag(prof);   // Part B gear investigation — no-op unless STELLAR_DIAGNOSTICS
         if (prof != 0) CaptureActiveClassLoadout(prof);
     }
 
@@ -145,7 +146,9 @@ public sealed partial class Plugin
     {
         var current = _services.PlayerState.Profession;
         if (current == 0 || current == _lastPolledProfession) return;
+        var prev = _lastPolledProfession;
         _lastPolledProfession = current;
+        LogProfChangeDiag(prev, current);   // Part B gear investigation — no-op unless STELLAR_DIAGNOSTICS
         CaptureActiveClassLoadout(current);
     }
 
