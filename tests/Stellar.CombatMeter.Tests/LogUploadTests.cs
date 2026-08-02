@@ -776,6 +776,27 @@ public sealed class LogUploadTests
         Assert.DoesNotContain("\"attrPeaks\"", CombatLogWriter.Write(MakeLoadoutLog(noPeaks)));
     }
 
+    // Per-entity class detection (Task 3): the hand-rolled upload writer must emit the per-actor
+    // professionId timeline (self AND party — NOT gated to local, unlike modules/loadouts/talents)
+    // as sparse [professionId,startMs,endMs] triples, or the site never learns a party member swapped
+    // class mid-run. Regression pin, mirroring the attrPeaks writer test above.
+    [Fact]
+    public void WriteActor_emits_classSpans_for_a_2class_actor_omits_for_1class()
+    {
+        var twoClass = new Actor(
+            Name: "Teammate", Kind: "player", TeamId: 1, IsLocal: false, Uid: 999,
+            ProfessionId: 5, Level: 60, AbilityScore: 0, MaxHp: 1,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>(),
+            ClassSpans: new List<long[]> { new long[] { 2, 0, 5000 }, new long[] { 5, 5000, 12_000 } });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(twoClass, "999"));
+        Assert.Contains("\"classSpans\":[[2,0,5000],[5,5000,12000]]", json);
+
+        var oneClass = twoClass with { ClassSpans = null };
+        Assert.DoesNotContain("\"classSpans\"", CombatLogWriter.Write(MakeLoadoutLog(oneClass, "999")));
+    }
+
     [Fact]
     public void BuildModuleEntries_maps_fields_and_returns_null_when_empty()
     {

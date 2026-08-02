@@ -112,4 +112,29 @@ public class ClassSpanTrackerTests
         Assert.Empty(snap.ClassSpanStart);
         Assert.Empty(snap.ClassSpanEnd);
     }
+
+    // -------------------------------------------------------------------------
+    // CombatLogAssembler.BuildActorClassSpans (Task 3): maps the snapshot's parallel arrays into
+    // upload-ready [professionId,startMs,endMs][] triples — pure, mirrors AttrRangeTrackerTests'
+    // SnapToActor_MapsSparsePeaksAndNullWhenEmpty coverage of BuildActorAttrPeaks.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void BuildActorClassSpans_MapsTriplesAndNullWhenEmpty()
+    {
+        var withSpans = new EntitySnapshot
+        {
+            ClassSpanProf  = new long[] { 2, 5 },
+            ClassSpanStart = new long[] { 0, 5000 },
+            ClassSpanEnd   = new long[] { 5000, 12_000 },
+        };
+        var noSpans = new EntitySnapshot();
+
+        var mapped = Stellar.CombatMeter.LogUpload.CombatLogAssembler.BuildActorClassSpans(withSpans);
+        Assert.NotNull(mapped);
+        Assert.Equal(new long[] { 2, 0, 5000 }, mapped![0]);
+        Assert.Equal(new long[] { 5, 5000, 12_000 }, mapped[1]);
+
+        Assert.Null(Stellar.CombatMeter.LogUpload.CombatLogAssembler.BuildActorClassSpans(noSpans));
+    }
 }

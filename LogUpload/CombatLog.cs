@@ -99,7 +99,13 @@ internal sealed record Actor(
     int TalentStageId = 0,
     IReadOnlyList<LoadoutEntry>? Loadouts = null,
     IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
-    IReadOnlyList<long[]>? AttrPeaks = null); // [attrId, peakValue] sparse self combat peaks (base+peak stats 2026-08-02)
+    IReadOnlyList<long[]>? AttrPeaks = null,  // [attrId, peakValue] sparse self combat peaks (base+peak stats 2026-08-02)
+    // Per-entity class detection (2026-08-03): this actor's professionId timeline this run, as
+    // [professionId, startMs, endMs] triples — populated for EVERY player actor (self AND party,
+    // NOT self-only like Modules/Loadouts/TalentNodes above), because the tracker samples from the
+    // broadcast attr-220 stream which is available for any AOI entity. Null/omitted when the actor
+    // played a single class all run (no timeline needed).
+    IReadOnlyList<long[]>? ClassSpans = null);
 
 /// <summary>Self-only per-item instance detail, mirroring the game's Item Detail popup.
 /// Rolls are RESOLVED at capture (attr id + display value + 0-100 percentile) so consumers

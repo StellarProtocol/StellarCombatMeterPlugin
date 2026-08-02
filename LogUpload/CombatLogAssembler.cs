@@ -261,6 +261,18 @@ internal sealed class CombatLogAssembler
         return peaks;
     }
 
+    /// <summary>Snapshot's parallel ClassSpan* arrays (baked in by <c>Plugin.ApplyClassSpans</c> at
+    /// archive) → [professionId,startMs,endMs][] for upload; null when empty (single-class actor — no
+    /// timeline needed). Populated for EVERY player actor, self AND party alike.</summary>
+    internal static IReadOnlyList<long[]>? BuildActorClassSpans(EntitySnapshot snap)
+    {
+        if (snap.ClassSpanProf.Length == 0) return null;
+        var spans = new long[snap.ClassSpanProf.Length][];
+        for (var i = 0; i < snap.ClassSpanProf.Length; i++)
+            spans[i] = new long[] { snap.ClassSpanProf[i], snap.ClassSpanStart[i], snap.ClassSpanEnd[i] };
+        return spans;
+    }
+
     private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue,
         IReadOnlyList<CapturedLoadout> runLoadouts)
     {
@@ -337,7 +349,8 @@ internal sealed class CombatLogAssembler
             TalentStageId: talentStageId,
             Loadouts:     loadouts,
             TalentNodes:  talentNodes,
-            AttrPeaks:    BuildActorAttrPeaks(snap));
+            AttrPeaks:    BuildActorAttrPeaks(snap),
+            ClassSpans:   BuildActorClassSpans(snap));
     }
 
     /// <summary>

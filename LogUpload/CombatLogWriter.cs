@@ -202,6 +202,9 @@ internal static class CombatLogWriter
             // Base+peak stats (2026-08-02): sparse self-only combat peaks — emitted only when present
             // (absent on old runs / non-self / no buff moved a stat), so old-run payloads are unchanged.
             if (a.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
+            // Per-entity class detection (2026-08-03): self AND party — unlike modules/loadouts/
+            // talents below, NOT gated to isLocal (see Actor.ClassSpans doc).
+            if (a.ClassSpans is { Count: > 0 } cs) { w.Name("classSpans"); WriteLongTriples(w, cs); }
             w.Name("gear"); WriteIntArrays(w, a.Gear);
             w.Name("skills"); WriteIntArrays(w, a.Skills);
             w.Name("fashion"); WriteFashion(w, a.Fashion);
@@ -284,6 +287,16 @@ internal static class CombatLogWriter
     }
 
     private static void WriteLongPairs(JsonWriter w, IReadOnlyList<long[]> rows)
+    {
+        w.BeginArray();
+        foreach (var r in rows) { w.BeginArray(); foreach (var n in r) w.Number(n); w.EndArray(); }
+        w.EndArray();
+    }
+
+    // [professionId,startMs,endMs] triples (Actor.ClassSpans). Mechanically identical to
+    // WriteLongPairs (each row writes however many numbers it holds) — named separately so the
+    // call site documents the 3-element contract rather than reusing a "pairs" name for triples.
+    private static void WriteLongTriples(JsonWriter w, IReadOnlyList<long[]> rows)
     {
         w.BeginArray();
         foreach (var r in rows) { w.BeginArray(); foreach (var n in r) w.Number(n); w.EndArray(); }
