@@ -67,4 +67,19 @@ public class AttrRangeTrackerTests
         Assert.DoesNotContain(t.Base(2), p => p[0] == 11710);
         Assert.Contains(t.Base(2), p => p[0] == 11110);
     }
+
+    [Fact]
+    public void WriteRangeToSnapshot_WritesBaseIntoAttrArraysAndSparsePeaks()
+    {
+        var snap = new EntitySnapshot();
+        var baseAttrs = new List<long[]> { new long[] { 11710, 500 }, new long[] { 11110, 2400 } };
+        var peaks     = new List<long[]> { new long[] { 11710, 2330 } };
+
+        Plugin.WriteRangeToSnapshot(snap, baseAttrs, peaks);
+
+        Assert.Equal(new[] { 11710, 11110 }, snap.AttrIds);
+        Assert.Equal(new long[] { 500, 2400 }, snap.AttrValues);
+        Assert.Equal(new[] { 11710 }, snap.AttrPeakIds);
+        Assert.Equal(new long[] { 2330 }, snap.AttrPeakValues);
+    }
 }

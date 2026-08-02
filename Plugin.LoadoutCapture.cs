@@ -28,7 +28,8 @@ internal sealed record CapturedLoadout(
     IReadOnlyList<Fashion> Fashion,
     IReadOnlyList<CapturedModule> Modules,
     IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
-    IReadOnlyList<long[]>? Attributes = null); // [attrId, value] self attribute sheet at capture (self-only)
+    IReadOnlyList<long[]>? Attributes = null,    // [attrId, value] self attribute sheet (BASE) at capture (self-only)
+    IReadOnlyList<long[]>? AttrPeaks  = null);   // [attrId, peakValue] sparse combat peaks (self-only)
 
 /// <summary>
 /// Pure per-class loadout accumulator — a plain latest-wins upsert keyed by professionId. Holds NO

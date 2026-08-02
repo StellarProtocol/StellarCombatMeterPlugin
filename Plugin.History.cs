@@ -219,7 +219,7 @@ public sealed partial class Plugin
     {
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
-        return new EncounterHistoryEntry
+        var entry = new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
             EnteredAtMs      = _combatStartMs,
@@ -243,6 +243,8 @@ public sealed partial class Plugin
             Defeated         = _services.Dungeon.LastDefeatedCount,
             Trigger          = ArchiveReasonTag(reason),
         };
+        ApplyAttrRanges(entry);
+        return entry;
     }
 
     internal static string ArchiveReasonTag(AutoArchive.ArchiveReason r) => r switch

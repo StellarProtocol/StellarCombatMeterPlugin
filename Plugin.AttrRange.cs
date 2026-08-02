@@ -83,4 +83,45 @@ public sealed partial class Plugin
         if (!self.IsPlayer) return;
         _attrRange.Observe(prof, _services.EntityDetail.GetAttributes(self));
     }
+
+    /// <summary>Pure: writes BASE ([attrId, min]) into <paramref name="snap"/>'s AttrIds/AttrValues and
+    /// sparse PEAKS ([attrId, max]) into AttrPeakIds/AttrPeakValues. Testable without services.</summary>
+    internal static void WriteRangeToSnapshot(EntitySnapshot snap,
+        IReadOnlyList<long[]> baseAttrs, IReadOnlyList<long[]> peaks)
+    {
+        snap.AttrIds    = new int[baseAttrs.Count];
+        snap.AttrValues = new long[baseAttrs.Count];
+        for (var i = 0; i < baseAttrs.Count; i++)
+        {
+            snap.AttrIds[i]    = (int)baseAttrs[i][0];
+            snap.AttrValues[i] = baseAttrs[i][1];
+        }
+        snap.AttrPeakIds    = new int[peaks.Count];
+        snap.AttrPeakValues = new long[peaks.Count];
+        for (var i = 0; i < peaks.Count; i++)
+        {
+            snap.AttrPeakIds[i]    = (int)peaks[i][0];
+            snap.AttrPeakValues[i] = peaks[i][1];
+        }
+    }
+
+    /// <summary>At archive: replace the SELF actor snapshot's attrs with the run's BASE (min) + sparse
+    /// PEAKS (max), and rebuild each captured loadout with its class's base/peak. The tracker is fully
+    /// accumulated by archive time. No-op per profession the tracker never saw (keeps the existing
+    /// single-read fallback). Self-only — non-self snapshots are untouched.</summary>
+    private void ApplyAttrRanges(EncounterHistoryEntry entry)
+    {
+        var self = _services.CombatSnapshot.LocalEntityId;
+        var prof = _services.PlayerState.Profession;
+        if (prof != 0 && _attrRange.Has(prof) && entry.Entities.TryGetValue(self, out var snap))
+            WriteRangeToSnapshot(snap, _attrRange.Base(prof), _attrRange.Peaks(prof));
+
+        if (entry.Loadouts.Count == 0) return;
+        var resolved = new List<CapturedLoadout>(entry.Loadouts.Count);
+        foreach (var l in entry.Loadouts)
+            resolved.Add(_attrRange.Has(l.ProfessionId)
+                ? l with { Attributes = _attrRange.Base(l.ProfessionId), AttrPeaks = _attrRange.Peaks(l.ProfessionId) }
+                : l);
+        entry.Loadouts = resolved;
+    }
 }
