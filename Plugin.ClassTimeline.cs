@@ -75,15 +75,21 @@ public sealed partial class Plugin
     /// reads attr 220 off the broadcast attribute stream (<c>IEntityDetail.GetAttributes</c>) — the
     /// SAME source <c>CaptureAttributes</c> (EntitySnapshot.cs) already reads for its snapshot, so
     /// it's available for party members too, not just self. Stamped with
-    /// <c>ICombatSnapshot.ServerNowMs</c> — the SAME server-epoch-ms clock <c>CombatEvent.TimestampMs</c>
-    /// is stamped with (confirmed from the framework contracts: <c>ICombatSnapshot.ServerNowMs</c>'s
-    /// doc reads "Latest server epoch (ms)…"; <c>CombatEvent.TimestampMs</c>'s reads "Server epoch
-    /// timestamp… in milliseconds" — one clock), so a baked span's ms lines up with the site's
-    /// <c>CombatLogEvent.Ms</c>-anchored timeline. Called from <c>TickLoadoutCapture</c> at its
-    /// existing ~10 Hz cadence (Plugin.LoadoutCapture.cs) — class swaps are rare, a ~100 ms
-    /// resolution is ample.</summary>
+    /// <c>ICombatSnapshot.ServerNowMs</c>, which is ASSUMED aligned with <c>CombatEvent.TimestampMs</c>
+    /// (the site anchors <c>CombatLogEvent.Ms</c> from it) closely enough for timeline boundaries —
+    /// the SAME assumption the shipped elapsed-duration already relies on (<c>ArchivedAtMs</c>=ServerNowMs
+    /// vs <c>EnteredAtMs</c>=event-clock, Plugin.History.cs). They are NOT literally one clock
+    /// (ServerNowMs is server-broadcast-anchored; TimestampMs is client wall-clock at wire-receive), so a
+    /// class-swap boundary lining up with nearby event ms within tolerance is an IN-GAME verification item.
+    /// Throttled to ~5 Hz (every other 10 Hz tick, like <c>TickAttrRangeSample</c>) so the per-entity
+    /// <c>GetAttributes</c> dict-copy isn't paid for every party member every frame — class swaps are rare,
+    /// ~200 ms resolution is ample.</summary>
+    private int _classTimelineThrottle;
+
     private void TickClassTimeline()
     {
+        _classTimelineThrottle ^= 1;
+        if (_classTimelineThrottle == 0) return;   // every other tick → ~5 Hz
         var self  = _services.CombatSnapshot.LocalEntityId;
         var nowMs = _services.CombatSnapshot.ServerNowMs;
         foreach (var id in _stats.Keys)
