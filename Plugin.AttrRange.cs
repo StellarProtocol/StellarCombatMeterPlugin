@@ -71,12 +71,15 @@ public sealed partial class Plugin
 
     /// <summary>Samples the local player's live attribute sheet into the tracker for the currently
     /// active profession. Called from <see cref="TickLoadoutCapture"/> (10 Hz), throttled to ~5 Hz.
-    /// Runs pre-combat + in-combat so idle reads establish the unbuffed floor. No-op out of world /
-    /// profession unknown. Self-only.</summary>
+    /// Gated to IN-RUN only (CurrentRunId != 0): the in-dungeon pre-pull reads still establish the
+    /// unbuffed floor, while town samples — which <see cref="AttrRangeTracker.ResetForRun"/> clears at
+    /// the next run start anyway — are skipped so we never pay the ~130-entry GetAttributes copy idling
+    /// in a hub. No-op out of world / profession unknown. Self-only.</summary>
     private void TickAttrRangeSample()
     {
         _attrRangeSampleToggle ^= 1;
         if (_attrRangeSampleToggle == 0) return;   // every other tick → ~5 Hz
+        if (_services.Dungeon.CurrentRunId == 0) return;   // in-run only (spec perf constraint)
         var prof = _services.PlayerState.Profession;
         if (prof == 0) return;
         var self = _services.CombatSnapshot.LocalEntityId;
@@ -108,7 +111,11 @@ public sealed partial class Plugin
     /// <summary>At archive: replace the SELF actor snapshot's attrs with the run's BASE (min) + sparse
     /// PEAKS (max), and rebuild each captured loadout with its class's base/peak. The tracker is fully
     /// accumulated by archive time. No-op per profession the tracker never saw (keeps the existing
-    /// single-read fallback). Self-only — non-self snapshots are untouched.</summary>
+    /// single-read fallback). Self-only — non-self snapshots are untouched.
+    /// NOTE: <see cref="WriteRangeToSnapshot"/> mutates the (possibly sticky) EntitySnapshot in place —
+    /// safe only because SnapshotEntities transfers ownership at archive and ManualArchive Clear()s
+    /// _entitySnaps immediately after (EntitySnapshot.cs). A future SnapshotEntities returning a
+    /// shared/cached snap must copy-on-write here.</summary>
     private void ApplyAttrRanges(EncounterHistoryEntry entry)
     {
         var self = _services.CombatSnapshot.LocalEntityId;
