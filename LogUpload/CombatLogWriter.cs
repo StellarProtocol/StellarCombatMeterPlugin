@@ -203,8 +203,48 @@ internal static class CombatLogWriter
             w.Name("skills"); WriteIntArrays(w, a.Skills);
             w.Name("fashion"); WriteFashion(w, a.Fashion);
             if (a.GearDetail is { Count: > 0 } gd) { w.Name("gearDetail"); WriteGearDetail(w, gd); }
+            // Per-class-loadout plan (Task 3), all self-only — the assembler leaves these null/0
+            // for every non-local actor (ResolveLoadoutFields), so this simply mirrors GearDetail's
+            // own presence-guard convention.
+            if (a.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
+            if (a.TalentStageId > 0) w.Name("talentStageId").Number(a.TalentStageId);
+            if (a.Loadouts is { Count: > 0 } l) { w.Name("loadouts"); WriteLoadouts(w, l); }
         }
         w.EndObject();
+    }
+
+    private static void WriteModules(JsonWriter w, IReadOnlyList<ModuleEntry> rows)
+    {
+        w.BeginArray();
+        foreach (var m in rows)
+        {
+            w.BeginObject();
+            w.Name("slot").Number(m.Slot);
+            w.Name("configId").Number(m.ConfigId);
+            w.Name("quality").Number(m.Quality);
+            w.Name("parts"); WriteIntArrays(w, m.Parts);
+            w.EndObject();
+        }
+        w.EndArray();
+    }
+
+    private static void WriteLoadouts(JsonWriter w, IReadOnlyList<LoadoutEntry> rows)
+    {
+        w.BeginArray();
+        foreach (var l in rows)
+        {
+            w.BeginObject();
+            w.Name("professionId").Number(l.ProfessionId);
+            if (l.ProjectName != null) w.Name("projectName").Str(l.ProjectName);
+            w.Name("gear"); WriteIntArrays(w, l.Gear);
+            if (l.GearDetail is { Count: > 0 } gd) { w.Name("gearDetail"); WriteGearDetail(w, gd); }
+            w.Name("skills"); WriteIntArrays(w, l.Skills);
+            w.Name("fashion"); WriteFashion(w, l.Fashion);
+            if (l.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
+            if (l.TalentStageId > 0) w.Name("talentStageId").Number(l.TalentStageId);
+            w.EndObject();
+        }
+        w.EndArray();
     }
 
     private static void WriteGearDetail(JsonWriter w, IReadOnlyList<GearDetail> rows)

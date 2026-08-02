@@ -37,6 +37,10 @@ public sealed partial class Plugin
         public List<DeathEntry> DeathLog = new();   // complete killing-blow list (truncation-independent)
         public List<ImagineCastEntry> ImagineCasts = new();   // imagine casts w/ true ms (truncation-independent)
         public Dictionary<EntityId, EntitySnapshot> Entities = new();   // per-player frozen entity snapshot (issue #5)
+        // Per-class loadouts captured so far this run (Task 2's LoadoutCapture.Snapshot()), frozen
+        // HERE at archive time — never read live at upload-assemble time, so a post-run town
+        // class-swap cannot pollute an already-archived run (per-class-loadout plan, Task 3).
+        public IReadOnlyList<CapturedLoadout> Loadouts = Array.Empty<CapturedLoadout>();
         public PartyType PartyType;
         public int       MemberCount;
         public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
@@ -226,6 +230,7 @@ public sealed partial class Plugin
             DeathLog         = new List<DeathEntry>(_deaths),
             ImagineCasts     = new List<ImagineCastEntry>(_imagineCasts),
             Entities         = SnapshotEntities(),
+            Loadouts         = LoadoutSnapshot(),
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
