@@ -415,7 +415,7 @@ public sealed partial class Plugin
     // "bosskill" was), indistinguishable from a manual archive. internal (not private) so
     // TriggerSuffix_covers_every_auto_reason can pin completeness against every ArchiveReason value.
     internal static string TriggerSuffix(string trigger)
-        => trigger is "wipe" or "boss" or "idle" or "stage" or "bosskill" ? $" · {trigger}" : "";
+        => trigger is "wipe" or "boss" or "idle" or "stage" or "bosskill" or "clear" or "prepare" ? $" · {trigger}" : "";
 
     private void RebuildSessionRows()
     {
@@ -445,7 +445,7 @@ public sealed partial class Plugin
                 Name = !string.IsNullOrEmpty(frozen?.Name)
                     ? frozen!.Name!
                     : EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
-                Class = frozen != null && ResolveSnapProfession(frozen) is { Length: > 0 } fc ? fc : GetClassLine(id),
+                Class = ResolveArchivedClassLine(frozen, h.EnteredAtMs, h.ArchivedAtMs, id),
                 Dmg = FormatAmount(value),                                              // primary = metric value
                 Dps = FormatAmount(ComputeArchivedDps(value, h.CombatDurationMs)),       // rate = metric / sec
                 Pct = FormatPercent(pct),
@@ -453,6 +453,36 @@ public sealed partial class Plugin
                 Role = RoleColorFor(id),
             });
         }
+    }
+
+    // Class label for an ARCHIVED row: EVERY class the player actually played in THIS archive, from
+    // the frozen classSpans clamped to the archive's own [EnteredAtMs, ArchivedAtMs] window, joined in
+    // play order (e.g. "Verdant Oracle · Frost Mage"). The single frozen professionId (attr 220 at
+    // bank time) can't express "was Oracle, ended as Frost Mage", so a clear-phase archive banked
+    // after a swap mislabelled the player as the boss class (the LUz6opkvNX bug). A single-class
+    // archive bakes no spans → falls back to the frozen professionId (unchanged for the common case);
+    // an unfrozen/legacy row falls back to the live class line.
+    private string ResolveArchivedClassLine(EntitySnapshot? frozen, long startMs, long endMs, EntityId id)
+    {
+        if (frozen != null)
+        {
+            var profs = ClassesPlayedInWindow(frozen, startMs, endMs);
+            if (profs.Count > 0)
+            {
+                var line = ProfessionDisplayName(profs[0]);
+                for (var i = 1; i < profs.Count; i++) line += " · " + ProfessionDisplayName(profs[i]);
+                return line;
+            }
+            if (ResolveSnapProfession(frozen) is { Length: > 0 } fc) return fc;
+        }
+        return GetClassLine(id);
+    }
+
+    // ProfessionId → display name (mirrors ResolveSnapProfession's resolution for a single id).
+    private string ProfessionDisplayName(int profId)
+    {
+        var prof = _services.GameData.Combat.GetProfession(profId);
+        return prof is { Name: { Length: > 0 } n } ? n : $"Class {profId}";
     }
 
     // ----- pure formatting helpers (carried over from the IMGUI build) -----

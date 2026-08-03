@@ -137,4 +137,67 @@ public class ClassSpanTrackerTests
 
         Assert.Null(Stellar.CombatMeter.LogUpload.CombatLogAssembler.BuildActorClassSpans(noSpans));
     }
+
+    // -------------------------------------------------------------------------
+    // ClassesPlayedInWindow (per-archive class label): the archived row must show EVERY class the
+    // entity actually played DURING that archive, clamped to the archive's own [EnteredAtMs,
+    // ArchivedAtMs] window — NOT the single frozen professionId (which is whatever the entity had at
+    // bank time, so a clear-phase archive banked after a swap mislabels the player as the boss class:
+    // the LUz6opkvNX bug where the 34s clear phase read "Frost Mage" though the owner was Verdant
+    // Oracle for 26 of its 34s). The classSpans are run-anchored and accumulate across archives, so
+    // clamping to the archive window is what stops an earlier archive's span from bleeding in.
+    // -------------------------------------------------------------------------
+
+    // Real LUz6opkvNX self timeline: Oracle(5) 173538→199399, then Frost Mage(2) 199399→257649.
+    private static EntitySnapshot RevetteSnap() => new()
+    {
+        ClassSpanProf  = new long[] { 5, 2 },
+        ClassSpanStart = new long[] { 173538, 199399 },
+        ClassSpanEnd   = new long[] { 199399, 257649 },
+    };
+
+    [Fact]
+    public void ClassesPlayedInWindow_ClearPhaseArchive_ShowsBothInPlayOrder()
+    {
+        // Archive 1 (clear phase) window: 173386 → 207415 (34s). Oracle spans 25.9s of it, then FM 8s.
+        var order = Plugin.ClassesPlayedInWindow(RevetteSnap(), 173386, 207415);
+        Assert.Equal(new[] { 5, 2 }, order.ToArray());   // Oracle first (played first), then Frost Mage
+    }
+
+    [Fact]
+    public void ClassesPlayedInWindow_BossArchive_DropsThePreArchiveOracleSpan()
+    {
+        // Archive 2 (boss) window: 207415 → 257930. The Oracle span ended at 199399 — entirely BEFORE
+        // this archive — so it must NOT bleed in; only Frost Mage overlaps.
+        var order = Plugin.ClassesPlayedInWindow(RevetteSnap(), 207415, 257930);
+        Assert.Equal(new[] { 2 }, order.ToArray());
+    }
+
+    [Fact]
+    public void ClassesPlayedInWindow_NoTimeline_ReturnsEmpty()
+    {
+        // Single-class archive (tracker baked no spans) → empty, so the caller falls back to the
+        // frozen professionId (unchanged behavior for the overwhelmingly common single-class row).
+        Assert.Empty(Plugin.ClassesPlayedInWindow(new EntitySnapshot(), 0, 10_000));
+    }
+
+    [Fact]
+    public void ClassesPlayedInWindow_DegenerateWindow_ReturnsEmpty()
+    {
+        // endMs <= startMs (missing/garbage window) must not throw or invent a class.
+        Assert.Empty(Plugin.ClassesPlayedInWindow(RevetteSnap(), 207415, 207415));
+    }
+
+    [Fact]
+    public void ClassesPlayedInWindow_DedupesAClassPlayedInTwoSeparateSpans()
+    {
+        // FM → Oracle → FM within the window: two distinct classes, FM listed once (first appearance).
+        var snap = new EntitySnapshot
+        {
+            ClassSpanProf  = new long[] { 2, 5, 2 },
+            ClassSpanStart = new long[] { 0, 4000, 8000 },
+            ClassSpanEnd   = new long[] { 4000, 8000, 12_000 },
+        };
+        Assert.Equal(new[] { 2, 5 }, Plugin.ClassesPlayedInWindow(snap, 0, 12_000).ToArray());
+    }
 }

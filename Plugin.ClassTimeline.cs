@@ -120,6 +120,37 @@ public sealed partial class Plugin
         }
     }
 
+    /// <summary>Distinct professionIds this snapshot's baked class timeline shows the entity playing
+    /// during <c>[startMs, endMs]</c>, in first-appearance (chronological) order. Empty when the
+    /// snapshot carries no timeline (a single-class archive — the tracker bakes spans only for an
+    /// entity that swapped) or when nothing overlaps the window.
+    ///
+    /// This is what lets an archived row show EVERY class the player actually played in THAT archive
+    /// instead of the single frozen professionId (attr 220 at bank time) — which mislabels a
+    /// clear-phase archive banked after a swap as the boss class (the LUz6opkvNX bug: a 34s clear
+    /// phase read "Frost Mage" though the player was Verdant Oracle for 26 of its 34s). The classSpans
+    /// are RUN-anchored and accumulate across archives (<see cref="ClassSpanTracker"/> resets per RUN,
+    /// not per archive), so clamping each span to the archive's own <c>[EnteredAtMs, ArchivedAtMs]</c>
+    /// window is exactly what stops an earlier archive's span from bleeding into a later one. Pure —
+    /// unit-tested in <c>ClassSpanTrackerTests</c>.</summary>
+    internal static IReadOnlyList<int> ClassesPlayedInWindow(EntitySnapshot snap, long startMs, long endMs)
+    {
+        var n = System.Math.Min(snap.ClassSpanProf.Length, System.Math.Min(snap.ClassSpanStart.Length, snap.ClassSpanEnd.Length));
+        if (n == 0 || endMs <= startMs) return System.Array.Empty<int>();
+        var seen = new HashSet<int>();
+        var order = new List<int>();
+        for (var i = 0; i < n; i++)
+        {
+            // Overlap of span i with the archive window — a span entirely before/after contributes none.
+            var ovStart = System.Math.Max(snap.ClassSpanStart[i], startMs);
+            var ovEnd   = System.Math.Min(snap.ClassSpanEnd[i], endMs);
+            if (ovEnd - ovStart <= 0) continue;
+            var prof = (int)snap.ClassSpanProf[i];
+            if (prof > 0 && seen.Add(prof)) order.Add(prof);   // dedupe a class played across two spans
+        }
+        return order;
+    }
+
     /// <summary>At archive: bakes EVERY tracked player's professionId timeline into its frozen
     /// EntitySnapshot — self AND party alike (mirrors <c>ApplyAttrRanges</c>'s bake-in pattern,
     /// Plugin.AttrRange.cs). No-op for an entity the tracker never saw a class swap for
