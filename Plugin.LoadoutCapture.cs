@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Domain.Inventory;
+using Stellar.Abstractions.Domain.Loadout;
 using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
@@ -194,9 +195,52 @@ public sealed partial class Plugin
     // matches this class.
     private (string? ProjectName, int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveActiveProject(int professionId)
     {
+        var slot = FindLoadoutSlot(professionId);
+        return slot is null ? (null, 0, null) : (slot.Name, slot.TalentStageId, slot.TalentNodes);
+    }
+
+    // First saved LoadoutSlot whose class matches, or null. The framework populates each slot's
+    // per-class Gear/Modules from its saved plan's item container (class-blind live IInventory can't).
+    private LoadoutSlot? FindLoadoutSlot(int professionId)
+    {
         foreach (var slot in _services.Loadout.GetSlots())
-            if (slot.ProfessionId == professionId) return (slot.Name, slot.TalentStageId, slot.TalentNodes);
-        return (null, 0, null);
+            if (slot.ProfessionId == professionId) return slot;
+        return null;
+    }
+
+    // At archive (Plugin.AttrRange.cs ApplyAttrRanges): replace a captured class's gear/modules with its
+    // REAL per-class set from the matching LoadoutSlot. The GetSelfGear/GetModules read at capture time is
+    // CLASS-BLIND (a class swap never re-broadcasts them — [ClassGearDiag]-proven; owner-reported
+    // "identical gear/modules across classes"), so this override is what actually makes per-class gear +
+    // modules correct. Falls back to the captured set ONLY when the slot's gear hasn't resolved yet
+    // (unchanged behavior for that edge). Gear detail reuses the same flatteners as the capture path;
+    // refine/enchant are absent for a non-active plan (not on the item — recon/loadout-switch-findings.md).
+    private CapturedLoadout ApplyPerClassGear(CapturedLoadout l)
+    {
+        var slot = FindLoadoutSlot(l.ProfessionId);
+        if (slot?.Gear is not { Count: > 0 } gear) return l;
+        return l with
+        {
+            Gear       = BuildGearPairs(gear),
+            GearDetail = BuildLoadoutGearDetail(gear),
+            Modules    = BuildLoadoutModulesFromSlot(slot.Modules),
+        };
+    }
+
+    // Maps a LoadoutSlot's per-class module set (slot → ModuleInfo, framework-resolved with rolled parts)
+    // to the plugin's CapturedModule upload shape. Mirrors BuildLoadoutModules but sourced per-class.
+    private static List<CapturedModule> BuildLoadoutModulesFromSlot(IReadOnlyDictionary<int, ModuleInfo>? modules)
+    {
+        if (modules is null || modules.Count == 0) return new List<CapturedModule>();
+        var list = new List<CapturedModule>(modules.Count);
+        foreach (var (slot, info) in modules)
+        {
+            var parts = new int[info.Parts.Count][];
+            for (var i = 0; i < info.Parts.Count; i++)
+                parts[i] = new[] { info.Parts[i].AttrId, info.Parts[i].Value };
+            list.Add(new CapturedModule(slot, info.ConfigId, info.Quality, parts));
+        }
+        return list;
     }
 
     private static List<int[]> BuildGearPairs(IReadOnlyList<GearInstance> gear)
