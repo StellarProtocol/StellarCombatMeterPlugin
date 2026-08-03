@@ -126,15 +126,9 @@ public sealed partial class Plugin
         if (entry.Loadouts.Count == 0) return;
         var resolved = new List<CapturedLoadout>(entry.Loadouts.Count);
         foreach (var l in entry.Loadouts)
-        {
-            var withAttrs = _attrRange.Has(l.ProfessionId)
+            resolved.Add(_attrRange.Has(l.ProfessionId)
                 ? l with { Attributes = _attrRange.Base(l.ProfessionId), AttrPeaks = _attrRange.Peaks(l.ProfessionId) }
-                : l;
-            // Override the class-blind capture-time gear/modules with the REAL per-class set from the
-            // matching LoadoutSlot (framework-resolved from each plan's item container). This is the
-            // actual per-class gear/modules fix — see Plugin.LoadoutCapture.cs ApplyPerClassGear.
-            resolved.Add(ApplyPerClassGear(withAttrs));
-        }
+                : l);
         entry.Loadouts = resolved;
     }
 }

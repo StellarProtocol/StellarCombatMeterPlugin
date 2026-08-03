@@ -161,17 +161,20 @@ public sealed partial class Plugin
         if (!self.IsPlayer) return;
 
         var (projectName, talentStageId, talentNodes) = ResolveActiveProject(professionId);
-        var gearInstances = _services.Inventory.GetSelfGear();
+        // LIVE equipped set from the containers — reflects manual gear/module edits + this class's actual
+        // gear (GetSelfGear/GetModules are the class-blind stale wire caches). Captured while THIS class is
+        // active (event-driven via SelfGearChanged → TickGearRecapture), keyed by professionId, latest-wins.
+        var live = _services.Inventory.GetLiveEquipped();
 
         _loadoutCapture.Capture(new CapturedLoadout(
             ProfessionId:  professionId,
             ProjectName:   projectName,
             TalentStageId: talentStageId,
-            Gear:          BuildGearPairs(gearInstances),
-            GearDetail:    BuildLoadoutGearDetail(gearInstances),
+            Gear:          BuildGearPairs(live.Gear),
+            GearDetail:    BuildLoadoutGearDetail(live.Gear),
             Skills:        BuildLoadoutSkills(self),
             Fashion:       BuildLoadoutFashion(self),
-            Modules:       BuildLoadoutModules(),
+            Modules:       BuildLoadoutModulesFromSlot(live.Modules),
             TalentNodes:   talentNodes,
             Attributes:    BuildLoadoutAttributes(self)));
     }
@@ -208,27 +211,8 @@ public sealed partial class Plugin
         return null;
     }
 
-    // At archive (Plugin.AttrRange.cs ApplyAttrRanges): replace a captured class's gear/modules with its
-    // REAL per-class set from the matching LoadoutSlot. The GetSelfGear/GetModules read at capture time is
-    // CLASS-BLIND (a class swap never re-broadcasts them — [ClassGearDiag]-proven; owner-reported
-    // "identical gear/modules across classes"), so this override is what actually makes per-class gear +
-    // modules correct. Falls back to the captured set ONLY when the slot's gear hasn't resolved yet
-    // (unchanged behavior for that edge). Gear detail reuses the same flatteners as the capture path;
-    // refine/enchant are absent for a non-active plan (not on the item — recon/loadout-switch-findings.md).
-    private CapturedLoadout ApplyPerClassGear(CapturedLoadout l)
-    {
-        var slot = FindLoadoutSlot(l.ProfessionId);
-        if (slot?.Gear is not { Count: > 0 } gear) return l;
-        return l with
-        {
-            Gear       = BuildGearPairs(gear),
-            GearDetail = BuildLoadoutGearDetail(gear),
-            Modules    = BuildLoadoutModulesFromSlot(slot.Modules),
-        };
-    }
-
-    // Maps a LoadoutSlot's per-class module set (slot → ModuleInfo, framework-resolved with rolled parts)
-    // to the plugin's CapturedModule upload shape. Mirrors BuildLoadoutModules but sourced per-class.
+    // Maps the LIVE equipped module set (slot → ModuleInfo, framework-resolved with rolled parts) to the
+    // plugin's CapturedModule upload shape.
     private static List<CapturedModule> BuildLoadoutModulesFromSlot(IReadOnlyDictionary<int, ModuleInfo>? modules)
     {
         if (modules is null || modules.Count == 0) return new List<CapturedModule>();
@@ -319,24 +303,4 @@ public sealed partial class Plugin
         return list;
     }
 
-    private List<CapturedModule> BuildLoadoutModules()
-    {
-        var equipped = _services.Inventory.GetEquipped();
-        var snapshot = _services.Inventory.GetModules();
-        if (equipped is null || snapshot is null) return new List<CapturedModule>();
-
-        var byUuid = new Dictionary<long, ModuleInfo>(snapshot.Modules.Count);
-        foreach (var m in snapshot.Modules) byUuid[m.Uuid] = m;
-
-        var modules = new List<CapturedModule>(equipped.ModuleUuidsBySlot.Count);
-        foreach (var (slot, uuid) in equipped.ModuleUuidsBySlot)
-        {
-            if (!byUuid.TryGetValue(uuid, out var info)) continue;
-            var parts = new int[info.Parts.Count][];
-            for (var i = 0; i < info.Parts.Count; i++)
-                parts[i] = new[] { info.Parts[i].AttrId, info.Parts[i].Value };
-            modules.Add(new CapturedModule(slot, info.ConfigId, info.Quality, parts));
-        }
-        return modules;
-    }
 }
