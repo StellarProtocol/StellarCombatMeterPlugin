@@ -283,7 +283,6 @@ public sealed partial class Plugin : IStellarPlugin
 
     private void OnUpdate(float deltaTime)
     {
-        DrainPortraitAcks();
         EnsureReadyCheckSubscribed();
         TickRowMenuPlace();
         PumpClassIcons();

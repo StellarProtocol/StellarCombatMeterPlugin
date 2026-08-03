@@ -2,7 +2,6 @@
 // to StellarLogs, throttled to once per 24 h per character (keyed by entity uid).
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -24,7 +23,6 @@ public sealed partial class Plugin
     private const int MasterScoreNeverSent = -1;                                    // sentinel: no persisted baseline yet
 
     private Dictionary<long, long>? _portraitStamps;                     // loaded lazily from prefs
-    private readonly ConcurrentQueue<(List<long> Uids, long SentAtMs)> _portraitAcks = new();
     private bool _portraitEmptyLogged;                                   // one-shot breadcrumb, see LogNothingToReportOnce
 
     /// <summary>Called from AssembleAndUpload right after the log upload is fired (main thread).
@@ -61,7 +59,9 @@ public sealed partial class Plugin
             var sentAt = now;
             PortraitUploader.UploadFireAndForget(body, (ok, status) =>
             {
-                if (ok) _portraitAcks.Enqueue((uids, sentAt));           // stamp on the main thread later
+                // Upload callback runs off the main thread — marshal the stamp+persist back onto the
+                // plugin's next Update tick (framework Post) before it touches _portraitStamps/_prefs.
+                if (ok) _services.Framework.Post(() => StampPortraitSent(uids, sentAt));
                 else _services.Log.Warning($"[CombatMeter.Portraits] Report FAILED (HTTP {status}).");
             });
         }
@@ -162,18 +162,13 @@ public sealed partial class Plugin
         _services.Log.Info("[CombatMeter.Portraits] Nothing to report: no eligible roster entries and no self social snapshot cached yet.");
     }
 
-    /// <summary>Drain acks on the main thread (call from the plugin's existing per-frame poll,
-    /// next to the other cross-thread drains). Persists stamps only after a 2xx.</summary>
-    private void DrainPortraitAcks()
+    /// <summary>Records a successful portrait batch on the main thread (via <c>Framework.Post</c> from the
+    /// off-thread upload callback). Persists stamps only after a 2xx.</summary>
+    private void StampPortraitSent(List<long> uids, long sentAtMs)
     {
-        var dirty = false;
-        while (_portraitAcks.TryDequeue(out var ack))
-        {
-            _portraitStamps ??= LoadPortraitStamps();
-            foreach (var uid in ack.Uids) _portraitStamps[uid] = ack.SentAtMs;
-            dirty = true;
-        }
-        if (dirty) SavePortraitStamps();
+        _portraitStamps ??= LoadPortraitStamps();
+        foreach (var uid in uids) _portraitStamps[uid] = sentAtMs;
+        SavePortraitStamps();
     }
 
     /// <summary>Same localUid source as <c>CombatLogAssembler.Assemble</c>'s <c>Uploader.LocalUid</c>.</summary>
