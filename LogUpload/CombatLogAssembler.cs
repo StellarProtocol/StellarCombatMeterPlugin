@@ -246,12 +246,35 @@ internal sealed class CombatLogAssembler
         foreach (var (entityId, snap) in entry.Entities)
         {
             var key = entityId.Value.ToString(CultureInfo.InvariantCulture);
-            actors[key] = SnapToActor(entityId, snap, localEntityIdValue);
+            actors[key] = SnapToActor(entityId, snap, localEntityIdValue, entry.Loadouts);
         }
         return actors;
     }
 
-    private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue)
+    /// <summary>Snapshot sparse peak arrays → [attrId, peakValue][] for upload; null when empty.</summary>
+    internal static IReadOnlyList<long[]>? BuildActorAttrPeaks(EntitySnapshot snap)
+    {
+        if (snap.AttrPeakIds.Length == 0) return null;
+        var peaks = new long[snap.AttrPeakIds.Length][];
+        for (var i = 0; i < snap.AttrPeakIds.Length; i++)
+            peaks[i] = new long[] { snap.AttrPeakIds[i], snap.AttrPeakValues[i] };
+        return peaks;
+    }
+
+    /// <summary>Snapshot's parallel ClassSpan* arrays (baked in by <c>Plugin.ApplyClassSpans</c> at
+    /// archive) → [professionId,startMs,endMs][] for upload; null when empty (single-class actor — no
+    /// timeline needed). Populated for EVERY player actor, self AND party alike.</summary>
+    internal static IReadOnlyList<long[]>? BuildActorClassSpans(EntitySnapshot snap)
+    {
+        if (snap.ClassSpanProf.Length == 0) return null;
+        var spans = new long[snap.ClassSpanProf.Length][];
+        for (var i = 0; i < snap.ClassSpanProf.Length; i++)
+            spans[i] = new long[] { snap.ClassSpanProf[i], snap.ClassSpanStart[i], snap.ClassSpanEnd[i] };
+        return spans;
+    }
+
+    private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue,
+        IReadOnlyList<CapturedLoadout> runLoadouts)
     {
         var isLocal  = entityId.Value == localEntityIdValue;
         var teamId   = snap.TeamId;
@@ -305,6 +328,8 @@ internal sealed class CombatLogAssembler
         // Uid: the high 48 bits of EntityId.Value encode the CharId (per Plugin.cs GetClassLine).
         long? uid = entityId.IsPlayer ? (entityId.Value >> 16) : (long?)null;
 
+        var (loadouts, modules, talentStageId, talentNodes) = ResolveLoadoutFields(isLocal, professionId, runLoadouts);
+
         return new Actor(
             Name:         name ?? "Unknown",
             Kind:         "player",
@@ -319,7 +344,64 @@ internal sealed class CombatLogAssembler
             Gear:         gear,
             Skills:       skills,
             Fashion:      fashion,
-            GearDetail:   BuildGearDetail(snap));
+            GearDetail:   BuildGearDetail(snap),
+            Modules:      modules,
+            TalentStageId: talentStageId,
+            Loadouts:     loadouts,
+            TalentNodes:  talentNodes,
+            AttrPeaks:    BuildActorAttrPeaks(snap),
+            ClassSpans:   BuildActorClassSpans(snap));
+    }
+
+    /// <summary>
+    /// Self-only GATE for the per-class-loadout fields (Task 3): a non-local actor always gets
+    /// null/null/0 regardless of <paramref name="runLoadouts"/> content — the accumulator
+    /// (<c>LoadoutCapture</c>, Plugin.LoadoutCapture.cs) only ever captures the LOCAL player's own
+    /// classes, so without this gate every teammate's Actor would wrongly carry the uploader's own
+    /// loadout data (the flattened list has no per-teammate distinction). When local,
+    /// <c>Loadouts</c> carries every class played so far this run; the top-level
+    /// <c>Modules</c>/<c>TalentStageId</c> mirror whichever captured class matches the actor's
+    /// (final) <paramref name="professionId"/> — null/0 if that class was never captured (e.g. the
+    /// player never triggered a profession-change poll this run, or captured before Task 2 shipped).
+    /// </summary>
+    internal static (IReadOnlyList<LoadoutEntry>? Loadouts, IReadOnlyList<ModuleEntry>? Modules, int TalentStageId, IReadOnlyList<int>? TalentNodes)
+        ResolveLoadoutFields(bool isLocal, int professionId, IReadOnlyList<CapturedLoadout> runLoadouts)
+    {
+        if (!isLocal || runLoadouts.Count == 0) return (null, null, 0, null);
+
+        var loadouts = BuildLoadoutEntries(runLoadouts);
+        foreach (var l in runLoadouts)
+            if (l.ProfessionId == professionId) return (loadouts, BuildModuleEntries(l.Modules), l.TalentStageId, l.TalentNodes);
+        return (loadouts, null, 0, null);
+    }
+
+    // Count == 0 ? null helper — mirrors BuildGearDetail's own null-when-empty convention.
+    internal static IReadOnlyList<LoadoutEntry>? BuildLoadoutEntries(IReadOnlyList<CapturedLoadout> loadouts)
+    {
+        if (loadouts.Count == 0) return null;
+        var list = new List<LoadoutEntry>(loadouts.Count);
+        foreach (var l in loadouts)
+            list.Add(new LoadoutEntry(
+                ProfessionId:  l.ProfessionId,
+                ProjectName:   l.ProjectName,
+                Gear:          l.Gear,
+                GearDetail:    l.GearDetail.Count == 0 ? null : l.GearDetail,
+                Skills:        l.Skills,
+                Fashion:       l.Fashion,
+                Modules:       BuildModuleEntries(l.Modules),
+                TalentStageId: l.TalentStageId,
+                TalentNodes:   l.TalentNodes,
+                Attributes:    l.Attributes,
+                AttrPeaks:     l.AttrPeaks));
+        return list;
+    }
+
+    internal static IReadOnlyList<ModuleEntry>? BuildModuleEntries(IReadOnlyList<CapturedModule> modules)
+    {
+        if (modules.Count == 0) return null;
+        var list = new List<ModuleEntry>(modules.Count);
+        foreach (var m in modules) list.Add(new ModuleEntry(m.Slot, m.ConfigId, m.Quality, m.Parts));
+        return list;
     }
 
     // Self-only per-piece instance detail (captured into the snapshot from IInventory.GetSelfGear;

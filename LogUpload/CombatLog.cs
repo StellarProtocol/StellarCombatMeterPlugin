@@ -90,7 +90,22 @@ internal sealed record Actor(
     IReadOnlyList<Fashion> Fashion,
     // Per-piece ACTUAL rolls — SELF ONLY (other players broadcast slot+itemId; their rolls
     // are per-instance and never on the wire). Null/empty for everyone but the uploader.
-    IReadOnlyList<GearDetail>? GearDetail = null);
+    IReadOnlyList<GearDetail>? GearDetail = null,
+    // Per-class-loadout plan (Task 3), all self-only — the accumulator only ever captures the
+    // LOCAL player's own classes, so every non-local actor leaves these at their defaults.
+    // Modules/TalentStageId/TalentNodes mirror whichever captured class matches THIS actor's
+    // (final) ProfessionId above; Loadouts carries every class played so far this run.
+    IReadOnlyList<ModuleEntry>? Modules = null,
+    int TalentStageId = 0,
+    IReadOnlyList<LoadoutEntry>? Loadouts = null,
+    IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<long[]>? AttrPeaks = null,  // [attrId, peakValue] sparse self combat peaks (base+peak stats 2026-08-02)
+    // Per-entity class detection (2026-08-03): this actor's professionId timeline this run, as
+    // [professionId, startMs, endMs] triples — populated for EVERY player actor (self AND party,
+    // NOT self-only like Modules/Loadouts/TalentNodes above), because the tracker samples from the
+    // broadcast attr-220 stream which is available for any AOI entity. Null/omitted when the actor
+    // played a single class all run (no timeline needed).
+    IReadOnlyList<long[]>? ClassSpans = null);
 
 /// <summary>Self-only per-item instance detail, mirroring the game's Item Detail popup.
 /// Rolls are RESOLVED at capture (attr id + display value + 0-100 percentile) so consumers
@@ -106,3 +121,26 @@ internal sealed record GearDetail(
     int BreakThrough = 0);               // breakthrough stage — display Lv = EquipBreakThroughTable stage EquipGs
 
 internal sealed record Fashion(int Slot, int FashionId, IReadOnlyList<float> Dyes); // RGBA flattened
+
+/// <summary>One equipped module on the wire: slot, the module's config id + quality, and its
+/// rolled parts ([attrId, value]). Self-only (see <see cref="Actor.Modules"/>/<see cref="LoadoutEntry.Modules"/>).
+/// Mirrors the plugin-internal capture shape <c>CapturedModule</c> (<c>Plugin.LoadoutCapture.cs</c>) —
+/// the assembler maps one onto the other 1:1.</summary>
+internal sealed record ModuleEntry(int Slot, int ConfigId, int Quality, IReadOnlyList<int[]> Parts);
+
+/// <summary>One played class's full loadout on the wire — gear (ids + self-only rolled detail),
+/// modules, skills, fashion, its saved-loadout project name, and active talent stage. Self-only;
+/// one entry per distinct class the uploader played THIS run (latest-wins per class while playing
+/// it — see <c>LoadoutCapture</c>). Mirrors the plugin-internal capture shape <c>CapturedLoadout</c>.</summary>
+internal sealed record LoadoutEntry(
+    int ProfessionId,
+    string? ProjectName,
+    IReadOnlyList<int[]> Gear,               // [slot, itemId]
+    IReadOnlyList<GearDetail>? GearDetail,    // null when the capture had none (mirrors Actor.GearDetail)
+    IReadOnlyList<int[]> Skills,              // [skillId, level, tier]
+    IReadOnlyList<Fashion> Fashion,
+    IReadOnlyList<ModuleEntry>? Modules,
+    int TalentStageId,
+    IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
+    IReadOnlyList<long[]>? Attributes = null, // [attrId, value] attribute sheet for THIS class (self-only)
+    IReadOnlyList<long[]>? AttrPeaks = null); // [attrId, peakValue] sparse per-class combat peaks (self-only)

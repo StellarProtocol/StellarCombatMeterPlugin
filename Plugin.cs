@@ -163,6 +163,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred += OnCombatEvent;
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
+        _services.Inventory.SelfGearChanged        += OnSelfGearChanged;
         _lastSceneName = _services.ClientState.CurrentSceneName;
         _sceneIsCandidate = ResolveSceneCandidate(_lastSceneName);
 
@@ -245,6 +246,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;
+        _services.Inventory.SelfGearChanged        -= OnSelfGearChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;
         OnInspectRequested -= HandleInspectRequested;
 
@@ -301,6 +303,7 @@ public sealed partial class Plugin : IStellarPlugin
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
+        TickLoadoutCapture();        // ~10 Hz: per-class loadout accumulator (poll profession + run-boundary reset)
         RebuildSnapshots();
     }
 

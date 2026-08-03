@@ -648,6 +648,248 @@ public sealed class LogUploadTests
     }
 
     // -------------------------------------------------------------------------
+    // Task 3 (per-class-loadout plan): self-only modules/talentStageId/loadouts on the uploader
+    // Actor. Frozen onto the history entry at archive time (Plugin.History.cs's BuildHistoryEntry
+    // sets Loadouts = LoadoutSnapshot()) rather than read live from the LoadoutCapture accumulator —
+    // a post-run town class-swap must not pollute an already-archived run's upload. The assembler's
+    // self-only GATE (CombatLogAssembler.ResolveLoadoutFields) is what stops every teammate's Actor
+    // from wrongly carrying the uploader's own loadout data — the accumulator has no per-teammate
+    // distinction once flattened, since it only ever captures the LOCAL player's classes.
+    // -------------------------------------------------------------------------
+
+    private static ModuleEntry MakeModuleEntry(int slot = 0, int configId = 5500102, int quality = 5) =>
+        new(slot, configId, quality, new List<int[]> { new[] { 1110, 5 } });
+
+    private static LoadoutEntry MakeLoadoutEntry(int professionId = 2, int talentStageId = 0) =>
+        new(ProfessionId: professionId, ProjectName: null,
+            Gear: new List<int[]> { new[] { 200, 2011227 } },
+            GearDetail: null,
+            Skills: new List<int[]> { new[] { 1241, 30, 6 } },
+            Fashion: new List<Fashion>(),
+            Modules: null,
+            TalentStageId: talentStageId);
+
+    private static CapturedLoadout MakeCapturedLoadout(int professionId, string? projectName = null,
+        int talentStageId = 0, IReadOnlyList<GearDetail>? gearDetail = null,
+        IReadOnlyList<CapturedModule>? modules = null, IReadOnlyList<int>? talentNodes = null) => new(
+        ProfessionId:  professionId,
+        ProjectName:   projectName,
+        TalentStageId: talentStageId,
+        Gear:          new List<int[]> { new[] { 200, professionId } },
+        GearDetail:    gearDetail ?? new List<GearDetail>(),
+        Skills:        new List<int[]> { new[] { 1241, 30, 6 } },
+        Fashion:       new List<Fashion>(),
+        Modules:       modules ?? new List<CapturedModule>(),
+        TalentNodes:   talentNodes);
+
+    private static CombatLog MakeLoadoutLog(Actor actor, string key = "1248014") =>
+        new(1,
+            new LogHeader("cm-loadout-test", 0, "2.11", "sea", null, null, "unlisted",
+                new Encounter("dungeon", 1, null, 1, 0, null, 0, null, null, 0, "kill", 0, 0, 0, 0),
+                new Uploader(1248014, "sig", "nonce")),
+            new Dictionary<string, Actor> { [key] = actor },
+            Array.Empty<CombatLogEvent>());
+
+    [Fact]
+    public void WriteActor_emits_modules_talentStageId_loadouts_when_present()
+    {
+        var actor = new Actor(
+            Name: "Aria", Kind: "player", TeamId: 1, IsLocal: true, Uid: 1248014,
+            ProfessionId: 12, Level: 60, AbilityScore: 184230, MaxHp: 1850000,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>(),
+            GearDetail: null,
+            Modules: new List<ModuleEntry> { MakeModuleEntry() },
+            TalentStageId: 104,
+            Loadouts: new List<LoadoutEntry> { MakeLoadoutEntry() });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor));
+
+        Assert.Contains(
+            "\"modules\":[{\"slot\":0,\"configId\":5500102,\"quality\":5,\"parts\":[[1110,5]]}]", json);
+        Assert.Contains("\"talentStageId\":104", json);
+        Assert.Contains(
+            "\"loadouts\":[{\"professionId\":2,\"gear\":[[200,2011227]],\"skills\":[[1241,30,6]],\"fashion\":[]}]",
+            json);
+    }
+
+    [Fact]
+    public void WriteActor_omits_modules_talentStageId_loadouts_when_absent()
+    {
+        // Defaults (null/null/0) — exactly what a non-local teammate's Actor looks like.
+        var actor = new Actor(
+            Name: "Teammate", Kind: "player", TeamId: 1, IsLocal: false, Uid: 999,
+            ProfessionId: 3, Level: 60, AbilityScore: 0, MaxHp: 1,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>());
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor, "999"));
+
+        Assert.DoesNotContain("\"modules\"", json);
+        Assert.DoesNotContain("\"talentStageId\"", json);
+        Assert.DoesNotContain("\"loadouts\"", json);
+    }
+
+    [Fact]
+    public void WriteActor_nonPlayerKind_never_carries_loadout_fields_even_if_populated()
+    {
+        // The writer's own Kind=="player" guard is what withholds every player-only field
+        // (professionId/gear/skills/... and now modules/talentStageId/loadouts too) — defense in
+        // depth even though the assembler never actually populates these for a non-player Kind.
+        var actor = new Actor(
+            Name: "Astralisk", Kind: "boss", TeamId: 2, IsLocal: false, Uid: null,
+            ProfessionId: 0, Level: 0, AbilityScore: 0, MaxHp: 0,
+            Attributes: Array.Empty<long[]>(), Gear: Array.Empty<int[]>(), Skills: Array.Empty<int[]>(),
+            Fashion: Array.Empty<Fashion>(),
+            GearDetail: null,
+            Modules: new List<ModuleEntry> { MakeModuleEntry() },
+            TalentStageId: 104,
+            Loadouts: new List<LoadoutEntry> { MakeLoadoutEntry() });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor, "9001"));
+
+        Assert.DoesNotContain("\"modules\"", json);
+        Assert.DoesNotContain("\"talentStageId\"", json);
+        Assert.DoesNotContain("\"loadouts\"", json);
+    }
+
+    [Fact]
+    public void WriteActor_and_loadout_emit_attrPeaks_when_present_omit_when_absent()
+    {
+        // Base+peak stats (2026-08-02): the hand-rolled upload writer must emit the sparse combat
+        // peaks for BOTH the per-actor snapshot and each per-class loadout, or the site never sees a
+        // peak. Regression pin — the plan's Task 4 originally missed this writer.
+        var loadoutWithPeaks = MakeLoadoutEntry() with { AttrPeaks = new List<long[]> { new long[] { 11710, 2330 } } };
+        var actor = new Actor(
+            Name: "Aria", Kind: "player", TeamId: 1, IsLocal: true, Uid: 1248014,
+            ProfessionId: 12, Level: 60, AbilityScore: 1, MaxHp: 1,
+            Attributes: new List<long[]> { new long[] { 11710, 500 } },
+            Gear: new List<int[]>(), Skills: new List<int[]>(), Fashion: new List<Fashion>(),
+            Loadouts: new List<LoadoutEntry> { loadoutWithPeaks },
+            AttrPeaks: new List<long[]> { new long[] { 11710, 2330 } });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor));
+        Assert.Contains("\"attrPeaks\":[[11710,2330]]", json);                                  // actor-level
+        Assert.Contains("\"skills\":[[1241,30,6]],\"fashion\":[],\"attrPeaks\":[[11710,2330]]", json); // loadout-level
+
+        var noPeaks = actor with { AttrPeaks = null, Loadouts = new List<LoadoutEntry> { MakeLoadoutEntry() } };
+        Assert.DoesNotContain("\"attrPeaks\"", CombatLogWriter.Write(MakeLoadoutLog(noPeaks)));
+    }
+
+    // Per-entity class detection (Task 3): the hand-rolled upload writer must emit the per-actor
+    // professionId timeline (self AND party — NOT gated to local, unlike modules/loadouts/talents)
+    // as sparse [professionId,startMs,endMs] triples, or the site never learns a party member swapped
+    // class mid-run. Regression pin, mirroring the attrPeaks writer test above.
+    [Fact]
+    public void WriteActor_emits_classSpans_for_a_2class_actor_omits_for_1class()
+    {
+        var twoClass = new Actor(
+            Name: "Teammate", Kind: "player", TeamId: 1, IsLocal: false, Uid: 999,
+            ProfessionId: 5, Level: 60, AbilityScore: 0, MaxHp: 1,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>(),
+            ClassSpans: new List<long[]> { new long[] { 2, 0, 5000 }, new long[] { 5, 5000, 12_000 } });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(twoClass, "999"));
+        Assert.Contains("\"classSpans\":[[2,0,5000],[5,5000,12000]]", json);
+
+        var oneClass = twoClass with { ClassSpans = null };
+        Assert.DoesNotContain("\"classSpans\"", CombatLogWriter.Write(MakeLoadoutLog(oneClass, "999")));
+    }
+
+    [Fact]
+    public void BuildModuleEntries_maps_fields_and_returns_null_when_empty()
+    {
+        var captured = new List<CapturedModule> { new(0, 5500102, 5, new List<int[]> { new[] { 1110, 5 } }) };
+
+        var mapped = CombatLogAssembler.BuildModuleEntries(captured);
+
+        var m = Assert.Single(Assert.IsAssignableFrom<IReadOnlyList<ModuleEntry>>(mapped));
+        Assert.Equal(0, m.Slot);
+        Assert.Equal(5500102, m.ConfigId);
+        Assert.Equal(5, m.Quality);
+        Assert.Equal(new[] { 1110, 5 }, m.Parts[0]);
+
+        Assert.Null(CombatLogAssembler.BuildModuleEntries(new List<CapturedModule>()));
+    }
+
+    [Fact]
+    public void BuildLoadoutEntries_maps_fields_nulling_empty_gearDetail_and_modules()
+    {
+        var captured = new List<CapturedLoadout>
+        {
+            MakeCapturedLoadout(2, projectName: "Frost Build", talentStageId: 104,
+                modules: new List<CapturedModule> { new(0, 5500102, 5, new List<int[]>()) }),
+        };
+
+        var mapped = CombatLogAssembler.BuildLoadoutEntries(captured);
+
+        var l = Assert.Single(Assert.IsAssignableFrom<IReadOnlyList<LoadoutEntry>>(mapped));
+        Assert.Equal(2, l.ProfessionId);
+        Assert.Equal("Frost Build", l.ProjectName);
+        Assert.Equal(104, l.TalentStageId);
+        Assert.Null(l.GearDetail);          // empty capture -> null on the wire (mirrors BuildGearDetail)
+        Assert.NotNull(l.Modules);
+        Assert.Single(l.Modules!);
+
+        Assert.Null(CombatLogAssembler.BuildLoadoutEntries(new List<CapturedLoadout>()));
+    }
+
+    // ResolveLoadoutFields is the self-only GATE: non-local always null/null/0 regardless of what
+    // the run captured; local carries the full Loadouts list plus the top-level Modules/TalentStageId
+    // for whichever captured class matches the actor's FINAL professionId (not necessarily the last
+    // one captured — a run can end back on an earlier class).
+    [Fact]
+    public void ResolveLoadoutFields_nonLocal_alwaysNullRegardlessOfCapturedData()
+    {
+        var runLoadouts = new List<CapturedLoadout> { MakeCapturedLoadout(2, talentStageId: 104, talentNodes: new[] { 233002, 5205 }) };
+
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
+            isLocal: false, professionId: 2, runLoadouts);
+
+        Assert.Null(loadouts);
+        Assert.Null(modules);
+        Assert.Equal(0, talentStageId);
+        Assert.Null(talentNodes);   // self-only gate strips node ids for non-local actors too
+    }
+
+    [Fact]
+    public void ResolveLoadoutFields_local_carriesFullListAndMatchesTopLevelToFinalProfession()
+    {
+        var moduleForClass2 = new List<CapturedModule> { new(0, 5500102, 5, new List<int[]>()) };
+        var runLoadouts = new List<CapturedLoadout>
+        {
+            MakeCapturedLoadout(5, projectName: "Old class", talentStageId: 900),   // played earlier, not current
+            MakeCapturedLoadout(2, projectName: "Current class", talentStageId: 104, modules: moduleForClass2, talentNodes: new[] { 233002, 5205, 222011 }),
+        };
+
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
+            isLocal: true, professionId: 2, runLoadouts);
+
+        Assert.NotNull(loadouts);
+        Assert.Equal(2, loadouts!.Count);                 // BOTH played classes ride along
+        Assert.NotNull(modules);
+        Assert.Single(modules!);                          // top-level mirrors class 2 (the final profession) only
+        Assert.Equal(104, talentStageId);
+        Assert.Equal(new[] { 233002, 5205, 222011 }, talentNodes);   // top-level nodes mirror the final class
+    }
+
+    [Fact]
+    public void ResolveLoadoutFields_local_currentClassNeverCaptured_topLevelNullButListStillCarries()
+    {
+        var runLoadouts = new List<CapturedLoadout> { MakeCapturedLoadout(5, talentStageId: 900) };
+
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
+            isLocal: true, professionId: 99, runLoadouts);   // profession 99 was never captured
+
+        Assert.NotNull(loadouts);
+        Assert.Single(loadouts!);
+        Assert.Null(modules);
+        Assert.Equal(0, talentStageId);
+        Assert.Null(talentNodes);   // no matching class → no top-level nodes
+    }
+
+    // -------------------------------------------------------------------------
     // Task 11: BuildPrecheckHeader carries the real region from the log header.
     // -------------------------------------------------------------------------
 

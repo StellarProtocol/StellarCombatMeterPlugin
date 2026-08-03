@@ -37,6 +37,10 @@ public sealed partial class Plugin
         public List<DeathEntry> DeathLog = new();   // complete killing-blow list (truncation-independent)
         public List<ImagineCastEntry> ImagineCasts = new();   // imagine casts w/ true ms (truncation-independent)
         public Dictionary<EntityId, EntitySnapshot> Entities = new();   // per-player frozen entity snapshot (issue #5)
+        // Per-class loadouts captured so far this run (Task 2's LoadoutCapture.Snapshot()), frozen
+        // HERE at archive time — never read live at upload-assemble time, so a post-run town
+        // class-swap cannot pollute an already-archived run (per-class-loadout plan, Task 3).
+        public IReadOnlyList<CapturedLoadout> Loadouts = Array.Empty<CapturedLoadout>();
         public PartyType PartyType;
         public int       MemberCount;
         public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
@@ -215,7 +219,7 @@ public sealed partial class Plugin
     {
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
-        return new EncounterHistoryEntry
+        var entry = new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
             EnteredAtMs      = _combatStartMs,
@@ -226,6 +230,7 @@ public sealed partial class Plugin
             DeathLog         = new List<DeathEntry>(_deaths),
             ImagineCasts     = new List<ImagineCastEntry>(_imagineCasts),
             Entities         = SnapshotEntities(),
+            Loadouts         = LoadoutSnapshot(),
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
@@ -236,8 +241,11 @@ public sealed partial class Plugin
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
             Defeated         = _services.Dungeon.LastDefeatedCount,
-            Trigger          = ArchiveReasonTag(reason),
+            Trigger          = ResolveTriggerTag(reason),
         };
+        ApplyAttrRanges(entry);
+        ApplyClassSpans(entry);
+        return entry;
     }
 
     internal static string ArchiveReasonTag(AutoArchive.ArchiveReason r) => r switch
@@ -250,6 +258,27 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.BossKill    => "bosskill",
         _                                     => "manual",
     };
+
+    /// <summary>The stored <c>Trigger</c> tag for an archive. Identical to <see cref="ArchiveReasonTag"/>
+    /// for every reason EXCEPT <see cref="AutoArchive.ArchiveReason.BossPhase"/>: that reason banks the
+    /// pre-boss segment cut at the FIRST boss hit, so the banked archive is everything BEFORE boss
+    /// combat (the first boss hit lands in the NEXT segment) — it contains no boss damage and must not
+    /// read "boss" (owner 2026-08-03). Name it for its CONTENT via <see cref="PreBossPhaseTag"/>:
+    /// "clear" when the party fought (dealt damage), "prepare" when only healing happened.</summary>
+    private string ResolveTriggerTag(AutoArchive.ArchiveReason reason)
+    {
+        if (reason != AutoArchive.ArchiveReason.BossPhase) return ArchiveReasonTag(reason);
+        long dmg = 0, heal = 0;
+        foreach (var s in _stats.Values) { dmg += s.TotalDamage; heal += s.TotalHealing; }
+        return PreBossPhaseTag(dmg, heal);
+    }
+
+    /// <summary>Content-based tag for the pre-boss archive: "clear" when any damage was dealt (a trash
+    /// fight), "prepare" when no damage but healing happened (a heal-up before the pull), "clear" as
+    /// the defensive fallback (all-zero archives never reach here — they are suppressed upstream).
+    /// Pure so it pins headless (<c>HistoryTriggerFieldTests</c>).</summary>
+    internal static string PreBossPhaseTag(long totalDamage, long totalHealing)
+        => totalDamage > 0 ? "clear" : (totalHealing > 0 ? "prepare" : "clear");
 
     /// <summary>True when an AUTO-triggered archive is junk and should be skipped. Suppressed iff it
     /// is NOT a <see cref="AutoArchive.ArchiveReason.Manual"/> archive (manual is always kept),

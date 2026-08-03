@@ -199,12 +199,70 @@ internal static class CombatLogWriter
             w.Name("abilityScore").Number(a.AbilityScore);
             w.Name("maxHp").Number(a.MaxHp);
             w.Name("attributes"); WriteLongPairs(w, a.Attributes);
+            // Base+peak stats (2026-08-02): sparse self-only combat peaks — emitted only when present
+            // (absent on old runs / non-self / no buff moved a stat), so old-run payloads are unchanged.
+            if (a.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
+            // Per-entity class detection (2026-08-03): self AND party — unlike modules/loadouts/
+            // talents below, NOT gated to isLocal (see Actor.ClassSpans doc).
+            if (a.ClassSpans is { Count: > 0 } cs) { w.Name("classSpans"); WriteLongTriples(w, cs); }
             w.Name("gear"); WriteIntArrays(w, a.Gear);
             w.Name("skills"); WriteIntArrays(w, a.Skills);
             w.Name("fashion"); WriteFashion(w, a.Fashion);
             if (a.GearDetail is { Count: > 0 } gd) { w.Name("gearDetail"); WriteGearDetail(w, gd); }
+            // Per-class-loadout plan (Task 3), all self-only — the assembler leaves these null/0
+            // for every non-local actor (ResolveLoadoutFields), so this simply mirrors GearDetail's
+            // own presence-guard convention.
+            if (a.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
+            if (a.TalentStageId > 0) w.Name("talentStageId").Number(a.TalentStageId);
+            if (a.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
+            if (a.Loadouts is { Count: > 0 } l) { w.Name("loadouts"); WriteLoadouts(w, l); }
         }
         w.EndObject();
+    }
+
+    private static void WriteModules(JsonWriter w, IReadOnlyList<ModuleEntry> rows)
+    {
+        w.BeginArray();
+        foreach (var m in rows)
+        {
+            w.BeginObject();
+            w.Name("slot").Number(m.Slot);
+            w.Name("configId").Number(m.ConfigId);
+            w.Name("quality").Number(m.Quality);
+            w.Name("parts"); WriteIntArrays(w, m.Parts);
+            w.EndObject();
+        }
+        w.EndArray();
+    }
+
+    private static void WriteLoadouts(JsonWriter w, IReadOnlyList<LoadoutEntry> rows)
+    {
+        w.BeginArray();
+        foreach (var l in rows)
+        {
+            w.BeginObject();
+            w.Name("professionId").Number(l.ProfessionId);
+            if (l.ProjectName != null) w.Name("projectName").Str(l.ProjectName);
+            w.Name("gear"); WriteIntArrays(w, l.Gear);
+            if (l.GearDetail is { Count: > 0 } gd) { w.Name("gearDetail"); WriteGearDetail(w, gd); }
+            w.Name("skills"); WriteIntArrays(w, l.Skills);
+            w.Name("fashion"); WriteFashion(w, l.Fashion);
+            if (l.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
+            if (l.TalentStageId > 0) w.Name("talentStageId").Number(l.TalentStageId);
+            if (l.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
+            if (l.Attributes is { Count: > 0 } at) { w.Name("attributes"); WriteLongPairs(w, at); }
+            if (l.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
+            w.EndObject();
+        }
+        w.EndArray();
+    }
+
+    // Flat array of numbers (e.g. talent-tree node ids).
+    private static void WriteIntList(JsonWriter w, IReadOnlyList<int> xs)
+    {
+        w.BeginArray();
+        foreach (var x in xs) w.Number(x);
+        w.EndArray();
     }
 
     private static void WriteGearDetail(JsonWriter w, IReadOnlyList<GearDetail> rows)
@@ -229,6 +287,16 @@ internal static class CombatLogWriter
     }
 
     private static void WriteLongPairs(JsonWriter w, IReadOnlyList<long[]> rows)
+    {
+        w.BeginArray();
+        foreach (var r in rows) { w.BeginArray(); foreach (var n in r) w.Number(n); w.EndArray(); }
+        w.EndArray();
+    }
+
+    // [professionId,startMs,endMs] triples (Actor.ClassSpans). Mechanically identical to
+    // WriteLongPairs (each row writes however many numbers it holds) — named separately so the
+    // call site documents the 3-element contract rather than reusing a "pairs" name for triples.
+    private static void WriteLongTriples(JsonWriter w, IReadOnlyList<long[]> rows)
     {
         w.BeginArray();
         foreach (var r in rows) { w.BeginArray(); foreach (var n in r) w.Number(n); w.EndArray(); }
