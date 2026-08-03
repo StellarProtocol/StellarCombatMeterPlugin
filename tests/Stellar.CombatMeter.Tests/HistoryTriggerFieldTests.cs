@@ -35,6 +35,30 @@ public class HistoryTriggerFieldTests
         Assert.Equal("bosskill", Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.BossKill));
     }
 
+    // The pre-boss archive banked at the inline boss cut (ArchiveReason.BossPhase) carries NO boss
+    // combat by construction — the cut fires at the FIRST boss hit, which goes into the NEXT segment.
+    // So "boss" was always the wrong chip for it (owner 2026-08-03: "if before current bossphase
+    // player didn't attack boss at all it shouldn't name that archive as boss"). Name it for its
+    // CONTENT: "clear" when the party actually fought (dealt damage), "prepare" when only healing
+    // happened (a heal-up before the pull). All-zero archives are suppressed upstream, so the
+    // damage-less+heal-less fallback ("clear") is defensive only.
+    [Theory]
+    [InlineData(100, 0, "clear")]     // dealt damage → trash clear
+    [InlineData(100, 50, "clear")]    // damage present wins over healing
+    [InlineData(0, 50, "prepare")]    // no damage, only healing → heal-up before the pull
+    [InlineData(0, 0, "clear")]       // fallback (should not reach here — all-zero is suppressed)
+    public void PreBossPhaseTag_names_by_content(long dmg, long heal, string expected)
+        => Assert.Equal(expected, Plugin.PreBossPhaseTag(dmg, heal));
+
+    [Fact]
+    public void TriggerSuffix_shows_clear_and_prepare()
+    {
+        // The content-derived pre-boss tags must render a suffix in the session list too (else a
+        // "clear"/"prepare" archive would look like an untagged manual one).
+        Assert.Equal(" · clear", Plugin.TriggerSuffix("clear"));
+        Assert.Equal(" · prepare", Plugin.TriggerSuffix("prepare"));
+    }
+
     [Fact]
     public void TriggerSuffix_covers_every_auto_reason()
         // Finding 5 (review round 2026-07-27): Plugin.HistoryWindow's TriggerSuffix has its OWN

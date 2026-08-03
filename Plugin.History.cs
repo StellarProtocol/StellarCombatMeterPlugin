@@ -241,7 +241,7 @@ public sealed partial class Plugin
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
             Defeated         = _services.Dungeon.LastDefeatedCount,
-            Trigger          = ArchiveReasonTag(reason),
+            Trigger          = ResolveTriggerTag(reason),
         };
         ApplyAttrRanges(entry);
         ApplyClassSpans(entry);
@@ -258,6 +258,27 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.BossKill    => "bosskill",
         _                                     => "manual",
     };
+
+    /// <summary>The stored <c>Trigger</c> tag for an archive. Identical to <see cref="ArchiveReasonTag"/>
+    /// for every reason EXCEPT <see cref="AutoArchive.ArchiveReason.BossPhase"/>: that reason banks the
+    /// pre-boss segment cut at the FIRST boss hit, so the banked archive is everything BEFORE boss
+    /// combat (the first boss hit lands in the NEXT segment) — it contains no boss damage and must not
+    /// read "boss" (owner 2026-08-03). Name it for its CONTENT via <see cref="PreBossPhaseTag"/>:
+    /// "clear" when the party fought (dealt damage), "prepare" when only healing happened.</summary>
+    private string ResolveTriggerTag(AutoArchive.ArchiveReason reason)
+    {
+        if (reason != AutoArchive.ArchiveReason.BossPhase) return ArchiveReasonTag(reason);
+        long dmg = 0, heal = 0;
+        foreach (var s in _stats.Values) { dmg += s.TotalDamage; heal += s.TotalHealing; }
+        return PreBossPhaseTag(dmg, heal);
+    }
+
+    /// <summary>Content-based tag for the pre-boss archive: "clear" when any damage was dealt (a trash
+    /// fight), "prepare" when no damage but healing happened (a heal-up before the pull), "clear" as
+    /// the defensive fallback (all-zero archives never reach here — they are suppressed upstream).
+    /// Pure so it pins headless (<c>HistoryTriggerFieldTests</c>).</summary>
+    internal static string PreBossPhaseTag(long totalDamage, long totalHealing)
+        => totalDamage > 0 ? "clear" : (totalHealing > 0 ? "prepare" : "clear");
 
     /// <summary>True when an AUTO-triggered archive is junk and should be skipped. Suppressed iff it
     /// is NOT a <see cref="AutoArchive.ArchiveReason.Manual"/> archive (manual is always kept),
