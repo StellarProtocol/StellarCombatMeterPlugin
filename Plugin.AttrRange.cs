@@ -126,9 +126,14 @@ public sealed partial class Plugin
         if (entry.Loadouts.Count == 0) return;
         var resolved = new List<CapturedLoadout>(entry.Loadouts.Count);
         foreach (var l in entry.Loadouts)
-            resolved.Add(_attrRange.Has(l.ProfessionId)
+        {
+            var withAttrs = _attrRange.Has(l.ProfessionId)
                 ? l with { Attributes = _attrRange.Base(l.ProfessionId), AttrPeaks = _attrRange.Peaks(l.ProfessionId) }
-                : l);
+                : l;
+            // Fill each played class's gear/modules from its LoadoutSlot (saved-loadout base + live overlay
+            // for the current class) — the actual per-class gear/modules.
+            resolved.Add(ApplyPerClassGear(withAttrs));
+        }
         entry.Loadouts = resolved;
     }
 }

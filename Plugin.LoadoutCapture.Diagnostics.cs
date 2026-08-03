@@ -45,4 +45,25 @@ public sealed partial class Plugin
             $"[ClassGearDiag] gear SYNC consumed @ {_services.CombatSnapshot.ServerNowMs}ms " +
             $"prof={prof} gear=[{GearSig(_services.Inventory.GetSelfGear())}]");
     }
+
+    // EVENT-DRIVEN (fires when CaptureActiveClassLoadout captures — i.e. on a gear/module-change or
+    // profession-change EVENT, never a poll): logs the LIVE captured per-class gear + modules. A
+    // class+equipment switch run confirms, before any fight/upload, that the capture reflects the ACTUAL
+    // equipped set — distinct per class, with manual edits + refine/enchant. Gated on STELLAR_DIAGNOSTICS.
+    private void LogLiveCaptureDiag(CapturedLoadout cap)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        var sb = new StringBuilder();
+        sb.Append("[LiveCapture] prof=").Append(cap.ProfessionId).Append(" gear=").Append(cap.Gear.Count).Append(" [");
+        foreach (var g in cap.Gear) sb.Append(g[0]).Append(':').Append(g[1]).Append(' ');
+        sb.Append("] mods=").Append(cap.Modules.Count).Append(" [");
+        foreach (var m in cap.Modules) sb.Append(m.Slot).Append(':').Append(m.ConfigId).Append('(').Append(m.Parts.Count).Append("p) ");
+        sb.Append(']');
+        if (cap.GearDetail.Count > 0)
+        {
+            var d = cap.GearDetail[0];
+            sb.Append(" g0(slot=").Append(d.Slot).Append(" refine=").Append(d.RefineLevel).Append(" enchant=").Append(d.EnchantId).Append(')');
+        }
+        _services.Log.Info(sb.ToString());
+    }
 }

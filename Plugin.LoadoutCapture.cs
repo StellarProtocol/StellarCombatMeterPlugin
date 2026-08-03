@@ -161,20 +161,18 @@ public sealed partial class Plugin
         if (!self.IsPlayer) return;
 
         var (projectName, talentStageId, talentNodes) = ResolveActiveProject(professionId);
-        // LIVE equipped set from the containers — reflects manual gear/module edits + this class's actual
-        // gear (GetSelfGear/GetModules are the class-blind stale wire caches). Captured while THIS class is
-        // active (event-driven via SelfGearChanged → TickGearRecapture), keyed by professionId, latest-wins.
-        var live = _services.Inventory.GetLiveEquipped();
-
+        // Gear/modules are filled at ARCHIVE from the matching LoadoutSlot (saved-loadout base, per class,
+        // + the live overlay for the current class) — see ApplyPerClassGear. Here we only capture the
+        // active-class skills/fashion/attrs/talents (the data LoadoutSlot doesn't carry).
         _loadoutCapture.Capture(new CapturedLoadout(
             ProfessionId:  professionId,
             ProjectName:   projectName,
             TalentStageId: talentStageId,
-            Gear:          BuildGearPairs(live.Gear),
-            GearDetail:    BuildLoadoutGearDetail(live.Gear),
+            Gear:          System.Array.Empty<int[]>(),
+            GearDetail:    System.Array.Empty<GearDetail>(),
             Skills:        BuildLoadoutSkills(self),
             Fashion:       BuildLoadoutFashion(self),
-            Modules:       BuildLoadoutModulesFromSlot(live.Modules),
+            Modules:       System.Array.Empty<CapturedModule>(),
             TalentNodes:   talentNodes,
             Attributes:    BuildLoadoutAttributes(self)));
     }
@@ -211,8 +209,24 @@ public sealed partial class Plugin
         return null;
     }
 
-    // Maps the LIVE equipped module set (slot → ModuleInfo, framework-resolved with rolled parts) to the
-    // plugin's CapturedModule upload shape.
+    // At archive (Plugin.AttrRange.cs ApplyAttrRanges): fill each played class's gear/modules from its
+    // matching LoadoutSlot — the saved-loadout base (distinct per class), which the framework overlays with
+    // the LIVE equipped set for the class currently active (so manual edits show). No-op when the slot's
+    // gear hasn't resolved yet (keeps the empty capture; the site falls back gracefully).
+    private CapturedLoadout ApplyPerClassGear(CapturedLoadout l)
+    {
+        var slot = FindLoadoutSlot(l.ProfessionId);
+        if (slot?.Gear is not { Count: > 0 } gear) return l;
+        return l with
+        {
+            Gear       = BuildGearPairs(gear),
+            GearDetail = BuildLoadoutGearDetail(gear),
+            Modules    = BuildLoadoutModulesFromSlot(slot.Modules),
+        };
+    }
+
+    // Maps a LoadoutSlot's per-class module set (slot → ModuleInfo, framework-resolved with rolled parts)
+    // to the plugin's CapturedModule upload shape.
     private static List<CapturedModule> BuildLoadoutModulesFromSlot(IReadOnlyDictionary<int, ModuleInfo>? modules)
     {
         if (modules is null || modules.Count == 0) return new List<CapturedModule>();
