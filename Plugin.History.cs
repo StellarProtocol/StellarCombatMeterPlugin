@@ -226,11 +226,43 @@ public sealed partial class Plugin
     /// solo/unformed at both.</summary>
     internal static long LatchTeamId(long latched, long live) => latched != 0 ? latched : live;
 
+    /// <summary>Owner request 2026-08-05: the run page / meter must list EVERY party member IN THIS RUN,
+    /// not only those who dealt or took damage in the archived window — a short archive can miss members
+    /// who simply hadn't acted yet, so the roster looked incomplete. Ensures each in-instance party
+    /// member has a stats row so an otherwise-silent member still archives as a 0/0/0 actor (its name +
+    /// class are resolved live at snapshot from the roster/AOI). Never OVERWRITES an active row (kept via
+    /// ContainsKey).
+    ///
+    /// SCOPED to the local player's scene: a member whose fast-sync <see cref="PartyMember.SceneId"/>
+    /// differs from self's is out-of-instance (another floor / town / loading — see the SceneId doc) and
+    /// must NOT be injected, or it would pollute this run's roster and the site's per-dungeon
+    /// distinct-player counts. Self is sorted first (<see cref="IPartyRoster.Members"/>); we prefer the
+    /// IsSelf member and fall back to members[0]. An empty roster — a true solo run with no party or bots
+    /// — adds nothing, so solo runs stay byte-identical. Pure seam over (members, stats); the caller
+    /// feeds the live roster and <c>_stats</c>. Run at archive time only, never on the per-frame hot
+    /// path.</summary>
+    internal static void EnsurePartyMembersTracked(
+        IReadOnlyList<PartyMember> members, IDictionary<EntityId, SourceStats> stats)
+    {
+        if (members.Count == 0) return;                       // solo: no-op (byte-identical)
+        var localScene = members[0].SceneId;                 // roster is self-first…
+        foreach (var m in members) if (m.IsSelf) { localScene = m.SceneId; break; }   // …but be explicit
+        foreach (var m in members)
+            if (m.CharId > 0 && m.SceneId == localScene && !stats.ContainsKey(m.EntityId))
+                stats[m.EntityId] = new SourceStats();
+    }
+
     // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
     // snapshot rationale (sticky LastSettlement vs fresh-kill baseline) is documented on
     // IsFreshKill below and _settlementAtCombatStart's declaration.
     private EncounterHistoryEntry BuildHistoryEntry(AutoArchive.ArchiveReason reason)
     {
+        // Owner 2026-08-05: list EVERY party member (0/0/0 rows for the silent ones), not just those
+        // active in this — possibly brief — archived window. Runs after the junk-suppression check
+        // (ManualArchive) so injected zeros can't un-suppress an all-zero junk archive, and before the
+        // DeepCopyStats/SnapshotEntities capture below so both the stats copy and the entity snapshot
+        // include them. The post-archive Clear() drops these rows, so live meter state stays clean.
+        EnsurePartyMembersTracked(_services.PartyRoster.Members, _stats);
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
         var entry = new EncounterHistoryEntry

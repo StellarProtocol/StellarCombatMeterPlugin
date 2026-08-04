@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter;
 using Xunit;
@@ -185,4 +186,47 @@ public sealed class HistoryCaptureTests
     [InlineData(0,   0,   0)]    // solo throughout (both unformed)
     public void LatchTeamId_prefers_the_run_start_latch_over_a_live_read(long latched, long live, long expected)
         => Assert.Equal(expected, Plugin.LatchTeamId(latched, live));
+
+    // -------------------------------------------------------------------------
+    // EnsurePartyMembersTracked — owner 2026-08-05: the run/meter must list EVERY party member,
+    // including ones who were silent (0 dmg / 0 heal / 0 taken) in a short archived window. Injects a
+    // zero-stat row per current party member WITHOUT overwriting an active one; an empty roster (a true
+    // solo run — no party or bots) is a no-op so solo runs stay byte-identical.
+    // -------------------------------------------------------------------------
+
+    private static PartyMember Member(long charId, int sceneId = 100, bool isSelf = false) => new(
+        CharId: charId, Name: "P" + charId, Profession: 5, Level: 1, Hp: 1, MaxHp: 1,
+        SceneId: sceneId, Position: default, IsOnline: true, IsSelf: isSelf, GroupId: 0);
+
+    [Fact]
+    public void EnsurePartyMembersTracked_injects_in_scene_silent_members_only()
+    {
+        var self       = Member(100, sceneId: 7, isSelf: true);   // self, in-instance, already active
+        var silentHere = Member(200, sceneId: 7);                 // in-instance, silent -> inject a 0 row
+        var elsewhere  = Member(300, sceneId: 9);                 // another floor / town -> MUST be skipped
+        var stats = new Dictionary<EntityId, SourceStats>
+        {
+            [self.EntityId] = new SourceStats { TotalDamage = 500 },   // already-active member
+        };
+
+        Plugin.EnsurePartyMembersTracked(new[] { self, silentHere, elsewhere }, stats);
+
+        Assert.Equal(2, stats.Count);
+        Assert.Equal(500, stats[self.EntityId].TotalDamage);       // active row NOT overwritten
+        Assert.True(stats.ContainsKey(silentHere.EntityId));       // in-instance silent member present …
+        Assert.Equal(0, stats[silentHere.EntityId].TotalDamage);   // … as a 0/0/0 actor
+        Assert.False(stats.ContainsKey(elsewhere.EntityId));       // out-of-instance member NOT injected
+    }
+
+    [Fact]
+    public void EnsurePartyMembersTracked_empty_roster_is_a_noop_for_solo()
+    {
+        var self  = Member(100).EntityId;
+        var stats = new Dictionary<EntityId, SourceStats> { [self] = new SourceStats { TotalDamage = 7 } };
+
+        Plugin.EnsurePartyMembersTracked(System.Array.Empty<PartyMember>(), stats);
+
+        Assert.Single(stats);
+        Assert.Equal(7, stats[self].TotalDamage);
+    }
 }
