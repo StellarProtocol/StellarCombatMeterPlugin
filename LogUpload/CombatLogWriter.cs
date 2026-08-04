@@ -157,6 +157,7 @@ internal static class CombatLogWriter
         if (e.DifficultyLevel != 0) w.Name("difficultyLevel").Number(e.DifficultyLevel);
         if (e.DungeonStartMs != 0) w.Name("dungeonStartMs").Number(e.DungeonStartMs);
         if (e.DefeatedCount != 0) w.Name("defeated").Number(e.DefeatedCount);
+        if (e.PartyId != 0) w.Name("partyId").Str(e.PartyId.ToString(CultureInfo.InvariantCulture));
         w.EndObject();
     }
 

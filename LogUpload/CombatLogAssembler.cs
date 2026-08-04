@@ -190,7 +190,8 @@ internal sealed class CombatLogAssembler
             PassTime:        entry.PassTime,
             DifficultyLevel: entry.DifficultyLevel,
             DungeonStartMs:  entry.DungeonStartMs,
-            DefeatedCount:   entry.Defeated);
+            DefeatedCount:   entry.Defeated,
+            PartyId:         entry.PartyId);
     }
 
     /// <summary>

@@ -420,6 +420,50 @@ public sealed class LogUploadTests
         Assert.DoesNotContain("dungeonStartMs", json);
     }
 
+    // Party id (GrpcTeam team_id), latched at run-start (B1) onto EncounterHistoryEntry.PartyId,
+    // flows through BuildEncounter and is emitted as a STRING (never a bare number — a long id
+    // would round past 2^53 through the server's JSON.parse; mirrors levelUuid's own Str() emission).
+    [Fact]
+    public void BuildEncounter_carries_partyId_and_writer_emits_it_as_string_when_set()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 11_000, CombatDurationMs = 10_000,
+            LevelUuid = 42, Result = "kill",
+            PartyId = 8837421,
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(8837421L, enc.PartyId);
+
+        var hdr = new LogHeader("cm-partyid", 11_000L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains("\"partyId\":\"8837421\"", json);
+    }
+
+    // Unknown/solo party (0) is OMITTED from header.encounter — the server then applies its
+    // u<uploaderUid> fallback keying.
+    [Fact]
+    public void Writer_omits_partyId_when_unknown()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 11_000, CombatDurationMs = 10_000,
+            LevelUuid = 42, Result = "partial",   // PartyId left at default 0
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(0L, enc.PartyId);
+
+        var hdr = new LogHeader("cm-no-partyid", 11_000L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.DoesNotContain("partyId", json);
+    }
+
     // -------------------------------------------------------------------------
     // Manual-upload offline serialize smoke: a CombatLog built from an entry's
     // aggregates with EMPTY events serializes correctly — every rendered number

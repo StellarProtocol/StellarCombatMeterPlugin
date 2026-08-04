@@ -72,7 +72,10 @@ internal sealed record Encounter(
     long DungeonStartMs = 0,
     // IDungeonState.LastDefeatedCount snapshotted at archive. Additive — 0/omitted when unknown
     // (also 0 until the attr feeding it is wired on the framework side).
-    int DefeatedCount = 0);
+    int DefeatedCount = 0,
+    // Party id (GrpcTeam team_id) frozen at run-start (B1). Emitted as a STRING; additive —
+    // 0/omitted when solo/unknown.
+    long PartyId = 0);
 
 // MasterScore: the uploader's CURRENT account master-mode score (SocialIdentity.MasterScore),
 // attached on every upload so the StellarLogs char page reflects a fresh dungeon clear promptly
