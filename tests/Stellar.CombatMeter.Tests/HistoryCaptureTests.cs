@@ -165,4 +165,24 @@ public sealed class HistoryCaptureTests
         var scoreOnly = new DungeonSettlementInfo(0, 0, 340);
         Assert.Equal("partial", Plugin.ResolveVerdict(scoreOnly, DungeonOutcome.None));
     }
+
+    // -------------------------------------------------------------------------
+    // LatchTeamId — run-identity fix (Task B1): the party id (GrpcTeam team_id) that BuildHistoryEntry
+    // stamps onto EncounterHistoryEntry.PartyId must be the value LATCHED at combat start
+    // (Plugin.Capture.cs's EnsureCombatStarted -> _lastTeamId), not a live re-read at archive time —
+    // otherwise a mid-run/post-run party change (member leaves, party disbands, re-forms) would
+    // retroactively relabel an already-in-progress or already-archived encounter with the WRONG party,
+    // defeating the server's per-party run-identity key (docs/superpowers/specs/
+    // 2026-08-04-run-identity-party-teamkey-design.md). Mirrors LevelUuid's latched-fallback shape,
+    // but with the opposite preference order: latched wins here; live is only a fallback for the
+    // solo-at-combat-start (latch == 0) edge case.
+    // -------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(500, 999, 500)]  // latched preferred over a DIFFERENT live value (party changed mid-run)
+    [InlineData(500, 0,   500)]  // latched preferred even after the live party has since disbanded (live -> 0)
+    [InlineData(0,   777, 777)]  // solo at combat start (no latch) -> falls back to a live read
+    [InlineData(0,   0,   0)]    // solo throughout (both unformed)
+    public void LatchTeamId_prefers_the_run_start_latch_over_a_live_read(long latched, long live, long expected)
+        => Assert.Equal(expected, Plugin.LatchTeamId(latched, live));
 }

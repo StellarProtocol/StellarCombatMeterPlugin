@@ -44,6 +44,7 @@ public sealed partial class Plugin
         public PartyType PartyType;
         public int       MemberCount;
         public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
+        public long      PartyId;          // party id (GrpcTeam team_id) latched at run-start; 0 = solo/unformed
         public int       PassTime;         // settlement clear-time seconds at archive
         public int       MasterModeScore;  // settlement master-mode MAX/PAR score (master_mode_score) at archive
         public int       TotalScore;       // achieved DungeonScore.total_score at archive (numerator of "686/700")
@@ -212,6 +213,19 @@ public sealed partial class Plugin
     internal static bool ShouldAdvanceWatermark(bool replayDocPresent, bool summaryFired, bool directUploadHandedOff)
         => replayDocPresent && (summaryFired || directUploadHandedOff);
 
+    /// <summary>Resolves the party id (GrpcTeam team_id) an archived entry carries: the value LATCHED
+    /// at combat start (<paramref name="latched"/>, Plugin.Capture.cs's <c>_lastTeamId</c>) wins
+    /// outright when non-zero, so a mid-run/post-run party change (member leaves, party disbands,
+    /// re-forms) never retroactively relabels an already-in-progress or already-archived encounter —
+    /// the server keys a run's identity on the party (docs/superpowers/specs/
+    /// 2026-08-04-run-identity-party-teamkey-design.md), so this id must stay stable for the whole
+    /// run. <paramref name="live"/> (a fresh <c>PartySnapshot.PartyId</c> read) is only a fallback for
+    /// the solo-at-combat-start edge case (latch == 0). Deliberately the OPPOSITE preference order
+    /// from <c>LevelUuid</c>'s <c>CurrentRunId != 0 ? CurrentRunId : _lastRunId</c> (live preferred
+    /// there, latched here) — different fields, different failure mode each guards against. 0 =
+    /// solo/unformed at both.</summary>
+    internal static long LatchTeamId(long latched, long live) => latched != 0 ? latched : live;
+
     // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
     // snapshot rationale (sticky LastSettlement vs fresh-kill baseline) is documented on
     // IsFreshKill below and _settlementAtCombatStart's declaration.
@@ -234,6 +248,7 @@ public sealed partial class Plugin
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
+            PartyId          = LatchTeamId(_lastTeamId, _services.PartySnapshot.PartyId),
             PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
             TotalScore       = freshSettlement?.TotalScore ?? 0,

@@ -105,6 +105,7 @@ public sealed partial class Plugin : IStellarPlugin
     private long _combatStartMs;
     private long _lastDamageMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
+    private long _lastTeamId;  // party id (GrpcTeam team_id) latched at combat start; 0 = solo/unformed
     private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
                                             // run-id change (e.g. a fail-out to a new scene) that can precede archive.
     private bool _combatActive;

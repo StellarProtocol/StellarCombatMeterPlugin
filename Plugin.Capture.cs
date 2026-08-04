@@ -71,6 +71,11 @@ public sealed partial class Plugin
         // to 0 on scene-leave, which may be exactly when the archive fires. ManualArchive uses this if the
         // live id is already 0 at archive time.
         _lastRunId     = _services.Dungeon.CurrentRunId;
+        // Latch the party id (GrpcTeam team_id) too, for the same reason: the server keys a run's
+        // identity on the party (docs/superpowers/specs/2026-08-04-run-identity-party-teamkey-design.md),
+        // so a mid-run/post-run party change (member leaves, party disbands, re-forms) must not
+        // retroactively relabel this encounter. See LatchTeamId (Plugin.History.cs) for the read-side.
+        _lastTeamId    = _services.PartySnapshot.PartyId;
         // Baseline for the false-KILL fix: remember whatever LastSettlement already read BEFORE this
         // encounter started, so archive-time can tell a fresh kill (settlement changed since combat
         // started) apart from a stale settlement carried over from an earlier segment of the same run.
