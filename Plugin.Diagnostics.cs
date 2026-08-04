@@ -133,13 +133,16 @@ public sealed partial class Plugin
 
     // One line per deferred AUTO archive that actually commits after the idle-settle wait — pair it
     // with the preceding [auto-archive] fired line to confirm the quiet-window gap in-game. quietMs is
-    // how long combat had been silent (all channels) at commit; armedMs is the wait since the trigger.
-    private void LogAutoArchiveCommit(AutoArchive.ArchiveReason reason, long nowMs)
+    // how long the general damage clock (_lastDamageMs — every deferrable reason watches the SAME clock
+    // as of the 2026-07-28 owner ruling; a prior boss-only narrowing is retired) had been silent at
+    // commit; armedMs is the wait since the trigger. Takes the already-computed settle clock rather
+    // than re-deriving it, so this line can never drift from what PendingArchiveDue actually used.
+    private void LogAutoArchiveCommit(AutoArchive.ArchiveReason reason, long nowMs, long settleClockMs)
     {
         if (!StellarDiagnostics.IsEnabled) return;
         _services.Log.Info(
             $"[CombatMeter][auto-archive] commit reason={ArchiveReasonTag(reason)} now={nowMs} " +
-            $"quietMs={nowMs - _lastCombatEventMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={_archiveSettleMs}");
+            $"quietMs={nowMs - settleClockMs} armedMs={nowMs - _pendingArchiveArmedMs} settle={_archiveSettleMs}");
     }
 
     // One line per ManualArchive ATTEMPT with its outcome (skip-empty | suppressed | banked |
@@ -147,7 +150,83 @@ public sealed partial class Plugin
     // rare per-run lifecycle events, and their SILENT skip variants are exactly what field
     // debugging needs (2026-07-19: a full dungeon run produced no history entry and no upload
     // with zero log evidence; the overwritten-on-boot BepInEx log then destroyed the trail).
+    //
+    // 2026-07-26: extended with the settle facts (quietMs / armedMs / settle). The gated
+    // [auto-archive] fired|commit pair was the only place these appeared, so a 1.6 MB owner log
+    // carried ZERO evidence of why a boss archive cut mid-damage — the diagnosis needed a site chart.
+    // quietMs is how long the general damage clock (_lastDamageMs) had been silent at this attempt —
+    // owner ruling 2026-07-28: every deferrable reason, BossKill included, watches this SAME clock now;
+    // a prior boss-only narrowing (SettleClockMs) is retired, see Plugin.AutoArchive.cs's note. armedMs
+    // is the deferred wait and reads 0 for an immediate archive.
+    //
+    // quietMs uses a sentinel "n/a" when the clock was never set (no damage landed in that segment);
+    // a numeric reading is a real elapsed age. This avoids ambiguity: a segment with only heals and
+    // damage-taken carries _lastDamageMs=0 (never incremented), which would collide with a legitimately
+    // 0-ms quiet segment if we printed the numeric 0.
+    //
+    // armedMs is gated on IsDeferrableArchive deliberately: ManualArchive nulls _pendingArchiveReason
+    // on entry but _pendingArchiveArmedMs is never cleared, so an immediate archive (manual / scene /
+    // the inline BossPhase cut) would otherwise print the age of some earlier, unrelated pending.
+    //
+    // 2026-07-28 (P0 gone-timeout fix): cause= distinguishes a BossKill fired by a CONFIRMED death from
+    // one fired by AutoArchiveEngine.BossGoneTimeoutMs — the owner's stage-1 raid boss never reads
+    // HP<=0 at all, so without this the ungated line alone could not tell the two apart on the next
+    // field diagnosis. Reads "n/a" for every non-BossKill reason (the field is meaningless there — a
+    // fixed sentinel, same pattern quietMs already uses, so the line's field COUNT never varies).
     private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
-        => _services.Log.Info(
-            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs}");
+    {
+        var now = _services.CombatSnapshot.ServerNowMs;
+        var quietMsText = _lastDamageMs == 0 ? "n/a" : (now - _lastDamageMs).ToString();
+        var armedMs = IsDeferrableArchive(reason) && _pendingArchiveArmedMs != 0
+            ? now - _pendingArchiveArmedMs
+            : 0;
+        var causeText = reason != AutoArchive.ArchiveReason.BossKill ? "n/a"
+            : _autoArchive.BossKillWasTimeout ? "timeout" : "death";
+        // flow=<state>#<version>: WHICH run-end state cut this archive, and how many transitions have been
+        // seen. The stage trigger arms on a transition into ANY of End/Settlement/Vote and the game steps
+        // through them in sequence, so one run end produced up to three archives (owner report 2026-07-30:
+        // bosskill + 2x stage, ~5s apart, merged only by the Min-gap cooldown). The reason tag alone says
+        // "stage" for all of them, so the log could not distinguish them and there was no evidence for
+        // WHICH states actually fire in real content — which is what the per-stage settings need in order
+        // to pick a default rather than guess. Read at archive time: the stage archive commits within
+        // ~15-20ms of arming (see armedMs), so this is the arming state in practice.
+        _services.Log.Info(
+            $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
+            $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText} " +
+            $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}");
+    }
+
+    // Remembers the last flow version SEEN here, so only real transitions log (this runs per tick).
+    private int _loggedFlowVersion = -1;
+
+    /// <summary>One line per dungeon flow-state TRANSITION. The archive outcome line only reveals the state
+    /// at the moment an archive cuts, which leaves the states that armed the stage trigger and then lost to
+    /// the Min-gap cooldown completely invisible — a cooldown-suppressed tick returns null and logs nothing.
+    /// The owner's 2026-07-30 run showed <c>Playing#3 -> Settlement#5 -> None#7</c>: transitions 4 and 6
+    /// happened unobserved, and whether they are End/Vote was inference, not measurement. The per-stage
+    /// auto-archive settings need the real sequence to decide which stages to OFFER and which to default to;
+    /// guessing risks shipping a control that matches nothing.
+    ///
+    /// <para>UNGATED, like the sibling [archive] line: bounded at a handful per run (a dungeon has ~7
+    /// transitions), and it is the only record of WHY an archive did or did not cut.</para></summary>
+    private void LogFlowTransition(DungeonFlowState state, int version)
+    {
+        if (version == _loggedFlowVersion) return;
+        var previous = _loggedFlowVersion;
+        _loggedFlowVersion = version;
+        if (previous < 0) return;   // first observation adopts silently, matching the engine's own rule
+        _services.Log.Info($"[CombatMeter][flow] {state}#{version} (was #{previous})");
+    }
+
+    // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
+    // (review round, 2026-07-26) — deliberately UNGATED Warning, same reasoning as LogArchiveOutcome
+    // above: the standing rule is diagnostics stay gated behind StellarDiagnostics.IsEnabled, but a
+    // saturation here means a correctness guarantee just weakened (the evicted boss id becomes
+    // re-adoptable again — the exact loop this tracker exists to close), and hitting 64 distinct
+    // confirmed-dead bosses in one run is rarer than an ordinary archive. That combination — rare +
+    // correctness-relevant — puts it with the sanctioned ungated [archive] line rather than behind the
+    // per-event diagnostics gate.
+    private void LogKilledBossEviction(EntityId evictedId, EntityId newlyMarkedId)
+        => _services.Log.Warning(
+            $"[CombatMeter][killed-boss] cap hit ({AutoArchive.KilledBossTracker.MaxEntries}) — evicted oldest mark id={evictedId.Value} to record id={newlyMarkedId.Value}; evicted id is re-adoptable again");
 }

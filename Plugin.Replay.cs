@@ -12,19 +12,9 @@ namespace Stellar.CombatMeter;
 public sealed partial class Plugin
 {
     // -----------------------------------------------------------------------
-    // ReplayDefaults — static seam used by unit tests (Plugin can't be headless-instantiated)
+    // Constants
     // -----------------------------------------------------------------------
 
-    internal static class ReplayDefaults
-    {
-        public const bool UploadReplayDefault = true;
-    }
-
-    // -----------------------------------------------------------------------
-    // Prefs + constants
-    // -----------------------------------------------------------------------
-
-    private const string PrefUploadReplay       = "logUpload.uploadReplay";
     private const int    ReplaySampleIntervalMs  = 500;       // 2 Hz
     private const int    ReplayMaxSamplesPerTrack = 3600;
     private const int    ReplayMaxTotalSamples    = 200_000;
@@ -39,7 +29,6 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     private ReplayCapture? _replay;
-    private bool _uploadReplay = ReplayDefaults.UploadReplayDefault;
 
     // Latches the dungeon run-id TickReplayCapture last observed, so a transition to a
     // DIFFERENT run (including via 0, e.g. a crash → re-enter) can be detected and the prior
@@ -102,23 +91,12 @@ public sealed partial class Plugin
     // time always yielded 0 (same timing bug as the boss name). Sticky: first non-zero wins.
     private readonly Dictionary<long, int> _replaySpecs = new();
 
-    /// <summary>
-    /// Capture + upload the replay position track for dungeon/raid runs.
-    /// Default ON; separate from AutoUpload.
-    /// </summary>
-    internal bool UploadReplay
-    {
-        get => _uploadReplay;
-        set { _uploadReplay = value; _prefs.Set(PrefUploadReplay, value); _prefs.Save(); }
-    }
-
     // -----------------------------------------------------------------------
     // Lifecycle
     // -----------------------------------------------------------------------
 
     private void InitReplay()
     {
-        _uploadReplay = _prefs.Get(PrefUploadReplay, ReplayDefaults.UploadReplayDefault);
         _replay = new ReplayCapture(
             tryGet: SafeTryGetTransform,
             maxSamplesPerTrack:  ReplayMaxSamplesPerTrack,
@@ -171,7 +149,7 @@ public sealed partial class Plugin
         return false;
     }
 
-    // Called every frame from OnUpdate. Gate: toggle on + dungeon/raid run in progress. Deliberately
+    // Called every frame from OnUpdate. Gate: ANY replay cell not `off` + dungeon/raid run. Deliberately
     // NOT gated on _combatActive — the run-id latch (IsInstancedRun) fires on dungeon ENTER, well
     // before the first pull, so the replay's walk-in from the dungeon entrance to the first pack is
     // captured too (previously the track started at the first damage event, mid-dungeon). The DPS
@@ -184,7 +162,11 @@ public sealed partial class Plugin
 
     private void TickReplayCapture(float deltaTimeSec)
     {
-        if (_replay is null || !_uploadReplay) return;
+        // ONE cached bool, no kind resolution and no prefs access on this per-frame path. It is true
+        // whenever ANY kind's replay cell is not `off` — kind-INDEPENDENT on purpose, because the live
+        // kind and the archived entry's kind can differ and an unsampled walk-in is unrecoverable
+        // (P0 start clip). See AnyReplayCellEnabled / RecomputeUploadPolicyCache.
+        if (_replay is null || !_replayCaptureEnabled) return;
 
         // Loading-screen hardening (2026-07-19 silent-crash follow-up): the settle gate arms on
         // the SceneChanged EVENT (load START); a load longer than ReplaySettleMs left the first
@@ -372,21 +354,40 @@ public sealed partial class Plugin
     // Archive upload
     // -----------------------------------------------------------------------
 
+    /// <summary>Spec § 2.4: the archive-time replay upload runs only when this run's content has its
+    /// replay cell on <c>auto</c>. A <c>manual</c> or <c>off</c> cell prepares no doc, so
+    /// <c>FinalizeAndMaybeUploadReplay</c> hands nothing off and the watermark HOLDS — the samples
+    /// merge into the next window (D2; advancing it here would clip the run's replay, a P0 defect).
+    /// The one refusal line (spec § 2.4) is logged HERE, not in <see cref="PrepareReplayDoc"/> whose
+    /// body already sits at its 50-line ceiling. Decision logic is the pure static overload.</summary>
+    internal bool ReplayAutoUploadAllowed(EncounterHistoryEntry entry)
+    {
+        if (ReplayAutoUploadAllowed(_contentKinds, _uploadPolicy, entry)) return true;
+        var kind = ResolveKind(entry);
+        LogUploadRefusal(kind, UploadArtifact.Replay, UploadTrigger.Auto, UploadPolicyFor(kind, UploadArtifact.Replay));
+        return false;
+    }
+
     /// <summary>
     /// Delta-window serializer (owner design 2026-07-19): assembles + signs the replay doc for the
     /// window <c>(watermark, now]</c> — the samples captured since the last uploaded window — linked to
     /// <paramref name="entry"/>'s damage segment. Does NOT reset or advance anything: the recorder
     /// keeps accumulating, and the watermark advances only once the caller confirms the upload was
     /// handed off (see <see cref="AdvanceReplayWatermark"/> / <c>FinalizeAndMaybeUploadReplay</c>).
-    /// Returns <c>null</c> — leaving the watermark and buffers untouched — when replay upload is off,
-    /// there is no capture, the run has no level id, or the window is EMPTY (no samples since the
-    /// watermark, e.g. a suppressed-junk or between-pull archive). Never throws. Task 7: the boss cut
-    /// caps the upper to (firstBossHit − keepBefore) so the run-up moves into the next window.</summary>
+    /// Returns <c>null</c> — leaving the watermark and buffers untouched — when this run's replay cell
+    /// is not <c>auto</c>, there is no capture, the run has no level id, or the window is EMPTY (no
+    /// samples since the watermark, e.g. a suppressed-junk or between-pull archive). Never throws.
+    /// Task 7: the boss cut caps the upper to (firstBossHit − keepBefore) so the run-up moves next.</summary>
     internal PositionUploadDoc? PrepareReplayDoc(EncounterHistoryEntry entry, long replayUpperCapServerMs = ReplayUpperCapUnset)
     {
         try
         {
-            if (!_uploadReplay || _replay is null) return null;      // Clear-decouple: NEVER reset here
+            if (_replay is null) return null;                        // Clear-decouple: NEVER reset here
+            // The replay POLICY is deliberately NOT consulted here any more. Owner ruling 2026-07-29:
+            // "it suppose to store all replay even flag mark off" — `off` withholds the SEND, never the
+            // record. The doc is always serialized so it reaches the retained container (PersistReUpload /
+            // RetainWithoutUpload both carry it), and FinalizeAndMaybeUploadReplay decides send vs store.
+            // Open field is still excluded, structurally: a field fight has no run id.
             if (entry.LevelUuid == 0) return null;
 
             // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs); a boss-cut cap (same truncation) moves it earlier.

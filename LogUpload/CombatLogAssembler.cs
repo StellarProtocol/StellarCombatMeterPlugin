@@ -69,7 +69,7 @@ internal sealed class CombatLogAssembler
         // Use the capture-time snapshot when available; fall back to live resolution for
         // deferred manual uploads of old entries (caches may still be warm if still in-map).
         var bossConfigId = snapshotBossConfigId != 0 ? snapshotBossConfigId : ResolveBossConfigId(entry);
-        var encounter    = BuildEncounter(entry, bossConfigId);
+        var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName));
 
         // --- Uploader ---
         var localEntityId = _services.CombatSnapshot.LocalEntityId;
@@ -132,12 +132,31 @@ internal sealed class CombatLogAssembler
     /// the currently-live run's identity onto it.
     /// </summary>
     /// <param name="entry">The archived encounter history entry.</param>
+    /// <summary>The game's own display name for an archived run's scene, or null when the scene table has
+    /// no row (the server and site then fall back to their own mapId lookup). Mirrors the resolution the
+    /// History window uses; this is the call the assembler's long-standing TODO asked for.</summary>
+    private string? ResolveSceneDisplayName(string? sceneToken)
+    {
+        if (!int.TryParse(sceneToken ?? "", NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+            return null;
+        var name = _services.GameData.World.GetScene(id)?.Name;
+        return string.IsNullOrWhiteSpace(name) ? null : name;
+    }
+
     /// <param name="bossConfigId">
     /// Monster-table config id of the identified boss entity, or 0 when no boss was found.
     /// Resolved from <c>IGameDataWorld.GetMonsterByEntity</c> at assemble time via
     /// <see cref="ResolveBossConfigId"/>.
     /// </param>
-    internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry, int bossConfigId = 0)
+    /// <param name="sceneDisplayName">
+    /// The game's own scene name for this run, resolved by the caller from
+    /// <c>IGameDataWorld.GetScene(mapId)?.Name</c> — the same lookup the History window uses
+    /// (<c>Plugin.HistoryWindow.cs</c>'s <c>ResolveSceneName</c>). Optional so the replay-doc call site,
+    /// which has no use for it, is unchanged. Blank is normalised to null so the server and site fall
+    /// back to their own mapId lookup rather than storing an empty string.
+    /// </param>
+    internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry, int bossConfigId = 0,
+                                            string? sceneDisplayName = null)
     {
         var sceneName = entry.SceneName ?? "";
         if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
@@ -156,7 +175,9 @@ internal sealed class CombatLogAssembler
             DungeonGuid:     null,                 // TODO(enrich-later): from SceneData via IGameDataWorld.GetScene
             MapId:           sceneMapId,
             LineId:          0,                    // TODO(enrich-later): lineId from server scene info
-            Name:            null,                 // TODO(enrich-later): GetScene(sceneMapId)?.Name
+            // Resolved by the caller from the game's own scene table (TODO closed 2026-07-29 — the
+            // History window had been doing this lookup all along while uploads sent null).
+            Name:            string.IsNullOrWhiteSpace(sceneDisplayName) ? null : sceneDisplayName,
             BossId:          bossConfigId,
             BossName:        null,
             Difficulty:      null,
@@ -225,12 +246,35 @@ internal sealed class CombatLogAssembler
         foreach (var (entityId, snap) in entry.Entities)
         {
             var key = entityId.Value.ToString(CultureInfo.InvariantCulture);
-            actors[key] = SnapToActor(entityId, snap, localEntityIdValue);
+            actors[key] = SnapToActor(entityId, snap, localEntityIdValue, entry.Loadouts);
         }
         return actors;
     }
 
-    private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue)
+    /// <summary>Snapshot sparse peak arrays → [attrId, peakValue][] for upload; null when empty.</summary>
+    internal static IReadOnlyList<long[]>? BuildActorAttrPeaks(EntitySnapshot snap)
+    {
+        if (snap.AttrPeakIds.Length == 0) return null;
+        var peaks = new long[snap.AttrPeakIds.Length][];
+        for (var i = 0; i < snap.AttrPeakIds.Length; i++)
+            peaks[i] = new long[] { snap.AttrPeakIds[i], snap.AttrPeakValues[i] };
+        return peaks;
+    }
+
+    /// <summary>Snapshot's parallel ClassSpan* arrays (baked in by <c>Plugin.ApplyClassSpans</c> at
+    /// archive) → [professionId,startMs,endMs][] for upload; null when empty (single-class actor — no
+    /// timeline needed). Populated for EVERY player actor, self AND party alike.</summary>
+    internal static IReadOnlyList<long[]>? BuildActorClassSpans(EntitySnapshot snap)
+    {
+        if (snap.ClassSpanProf.Length == 0) return null;
+        var spans = new long[snap.ClassSpanProf.Length][];
+        for (var i = 0; i < snap.ClassSpanProf.Length; i++)
+            spans[i] = new long[] { snap.ClassSpanProf[i], snap.ClassSpanStart[i], snap.ClassSpanEnd[i] };
+        return spans;
+    }
+
+    private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue,
+        IReadOnlyList<CapturedLoadout> runLoadouts)
     {
         var isLocal  = entityId.Value == localEntityIdValue;
         var teamId   = snap.TeamId;
@@ -284,6 +328,8 @@ internal sealed class CombatLogAssembler
         // Uid: the high 48 bits of EntityId.Value encode the CharId (per Plugin.cs GetClassLine).
         long? uid = entityId.IsPlayer ? (entityId.Value >> 16) : (long?)null;
 
+        var (loadouts, modules, talentStageId, talentNodes) = ResolveLoadoutFields(isLocal, professionId, runLoadouts);
+
         return new Actor(
             Name:         name ?? "Unknown",
             Kind:         "player",
@@ -298,7 +344,64 @@ internal sealed class CombatLogAssembler
             Gear:         gear,
             Skills:       skills,
             Fashion:      fashion,
-            GearDetail:   BuildGearDetail(snap));
+            GearDetail:   BuildGearDetail(snap),
+            Modules:      modules,
+            TalentStageId: talentStageId,
+            Loadouts:     loadouts,
+            TalentNodes:  talentNodes,
+            AttrPeaks:    BuildActorAttrPeaks(snap),
+            ClassSpans:   BuildActorClassSpans(snap));
+    }
+
+    /// <summary>
+    /// Self-only GATE for the per-class-loadout fields (Task 3): a non-local actor always gets
+    /// null/null/0 regardless of <paramref name="runLoadouts"/> content — the accumulator
+    /// (<c>LoadoutCapture</c>, Plugin.LoadoutCapture.cs) only ever captures the LOCAL player's own
+    /// classes, so without this gate every teammate's Actor would wrongly carry the uploader's own
+    /// loadout data (the flattened list has no per-teammate distinction). When local,
+    /// <c>Loadouts</c> carries every class played so far this run; the top-level
+    /// <c>Modules</c>/<c>TalentStageId</c> mirror whichever captured class matches the actor's
+    /// (final) <paramref name="professionId"/> — null/0 if that class was never captured (e.g. the
+    /// player never triggered a profession-change poll this run, or captured before Task 2 shipped).
+    /// </summary>
+    internal static (IReadOnlyList<LoadoutEntry>? Loadouts, IReadOnlyList<ModuleEntry>? Modules, int TalentStageId, IReadOnlyList<int>? TalentNodes)
+        ResolveLoadoutFields(bool isLocal, int professionId, IReadOnlyList<CapturedLoadout> runLoadouts)
+    {
+        if (!isLocal || runLoadouts.Count == 0) return (null, null, 0, null);
+
+        var loadouts = BuildLoadoutEntries(runLoadouts);
+        foreach (var l in runLoadouts)
+            if (l.ProfessionId == professionId) return (loadouts, BuildModuleEntries(l.Modules), l.TalentStageId, l.TalentNodes);
+        return (loadouts, null, 0, null);
+    }
+
+    // Count == 0 ? null helper — mirrors BuildGearDetail's own null-when-empty convention.
+    internal static IReadOnlyList<LoadoutEntry>? BuildLoadoutEntries(IReadOnlyList<CapturedLoadout> loadouts)
+    {
+        if (loadouts.Count == 0) return null;
+        var list = new List<LoadoutEntry>(loadouts.Count);
+        foreach (var l in loadouts)
+            list.Add(new LoadoutEntry(
+                ProfessionId:  l.ProfessionId,
+                ProjectName:   l.ProjectName,
+                Gear:          l.Gear,
+                GearDetail:    l.GearDetail.Count == 0 ? null : l.GearDetail,
+                Skills:        l.Skills,
+                Fashion:       l.Fashion,
+                Modules:       BuildModuleEntries(l.Modules),
+                TalentStageId: l.TalentStageId,
+                TalentNodes:   l.TalentNodes,
+                Attributes:    l.Attributes,
+                AttrPeaks:     l.AttrPeaks));
+        return list;
+    }
+
+    internal static IReadOnlyList<ModuleEntry>? BuildModuleEntries(IReadOnlyList<CapturedModule> modules)
+    {
+        if (modules.Count == 0) return null;
+        var list = new List<ModuleEntry>(modules.Count);
+        foreach (var m in modules) list.Add(new ModuleEntry(m.Slot, m.ConfigId, m.Quality, m.Parts));
+        return list;
     }
 
     // Self-only per-piece instance detail (captured into the snapshot from IInventory.GetSelfGear;

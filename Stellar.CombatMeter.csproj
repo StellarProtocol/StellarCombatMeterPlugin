@@ -13,8 +13,23 @@
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
-  <ItemGroup>
+  <!-- Stellar.Abstractions resolves from the framework SOURCE when this repo sits inside the DevKit
+       superproject (../../framework present), and from the published package otherwise. Reason: the
+       plugin is deployed straight to the owner's client from a local build and is never released, so it
+       must be able to use a framework API added in the same session — waiting for a NuGet publish is not
+       part of this workflow. A standalone clone (CI, contributors) finds no ../../framework and keeps the
+       PackageReference path below, byte-for-byte as before. -->
+  <PropertyGroup>
+    <StellarAbstractionsSrc>$(MSBuildThisFileDirectory)../../framework/src/Stellar.Abstractions/Stellar.Abstractions.csproj</StellarAbstractionsSrc>
+    <UseLocalStellarAbstractions Condition="Exists('$(StellarAbstractionsSrc)')">true</UseLocalStellarAbstractions>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(UseLocalStellarAbstractions)' == 'true'">
+    <ProjectReference Include="$(StellarAbstractionsSrc)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseLocalStellarAbstractions)' != 'true'">
     <PackageReference Include="Stellar.Abstractions" Version="2.0.0" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
   </ItemGroup>

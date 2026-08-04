@@ -92,14 +92,18 @@ public sealed partial class Plugin : IStellarPlugin
 
     private readonly IConfigSection _prefs;
 
-    // Combat-timer state (unix ms).
+    // Combat-timer state (unix ms). _lastDamageMs also DOUBLES as the settle-window clock for EVERY
+    // deferrable auto-archive reason, BossKill included (owner ruling 2026-07-28, superseding
+    // 2026-07-26's boss-targeted narrowing — see Plugin.AutoArchive.cs's retired-SettleClockMs note and
+    // the 2026-07-26-combatmeter-bosskill-settle-design.md spec's corrected §2.6): only ever stamped by
+    // AccumulateDamage (player-source, non-heal damage — see its call site in OnCombatEvent), so heals
+    // still never count, matching the half of the 2026-07-26 ruling that stands. A dedicated
+    // boss-targeted clock (_lastBossDamageMs / _settleBossId / IsSettleBossDamage) used to narrow the
+    // window for BossKill specifically; it is RETIRED — adds/DoTs elsewhere kept that narrower clock
+    // quiet while still landing damage that should have held the window open, spilling into the head of
+    // the FOLLOWING archive (owner: "there's mini dps that left to early of 2,4,6").
     private long _combatStartMs;
     private long _lastDamageMs;
-    // Timestamp of the most recent combat event of ANY channel (dealt / heal / taken) — distinct from
-    // _lastDamageMs (dealt-only, which the Idle trigger depends on). Feeds the auto-archive idle-settle
-    // delay: a deferred AUTO archive waits until this has gone quiet for _archiveSettleMs so trailing
-    // DoTs / killing-blow ticks land before the snapshot (Plugin.AutoArchive.cs).
-    private long _lastCombatEventMs;
     private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
     private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
                                             // run-id change (e.g. a fail-out to a new scene) that can precede archive.
@@ -140,7 +144,7 @@ public sealed partial class Plugin : IStellarPlugin
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
         _filter   = (FilterMode) _prefs.Get("scope",  (int)FilterMode.Party);
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
-        InitLogUpload();   // SP1: cache the auto-upload bool off the per-event hot path
+        InitUploadPolicy();  // SP1: load/migrate the 8 upload-policy cells + cache the hot-path bools
         InitReplay();      // Replay R1: load pref + create capture instance
         InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
 
@@ -159,6 +163,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred += OnCombatEvent;
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
+        _services.Inventory.SelfGearChanged        += OnSelfGearChanged;
         _lastSceneName = _services.ClientState.CurrentSceneName;
         _sceneIsCandidate = ResolveSceneCandidate(_lastSceneName);
 
@@ -245,6 +250,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;
+        _services.Inventory.SelfGearChanged        -= OnSelfGearChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;
         OnInspectRequested -= HandleInspectRequested;
 
@@ -296,8 +302,11 @@ public sealed partial class Plugin : IStellarPlugin
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
         PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
+        DrainContentKindsNotice();     // surface a manual content-list refresh result (Notifications is main-thread only)
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
+        TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
+        TickLoadoutCapture();        // ~10 Hz: per-class loadout accumulator (poll profession + run-boundary reset)
         RebuildSnapshots();
     }
 
@@ -345,7 +354,6 @@ public sealed partial class Plugin : IStellarPlugin
         _combatActive  = false;
         _combatStartMs = 0;
         _lastDamageMs  = 0;
-        _lastCombatEventMs = 0;
         _lastRunId     = 0;
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;

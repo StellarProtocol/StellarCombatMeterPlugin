@@ -37,6 +37,10 @@ public sealed partial class Plugin
         public List<DeathEntry> DeathLog = new();   // complete killing-blow list (truncation-independent)
         public List<ImagineCastEntry> ImagineCasts = new();   // imagine casts w/ true ms (truncation-independent)
         public Dictionary<EntityId, EntitySnapshot> Entities = new();   // per-player frozen entity snapshot (issue #5)
+        // Per-class loadouts captured so far this run (Task 2's LoadoutCapture.Snapshot()), frozen
+        // HERE at archive time — never read live at upload-assemble time, so a post-run town
+        // class-swap cannot pollute an already-archived run (per-class-loadout plan, Task 3).
+        public IReadOnlyList<CapturedLoadout> Loadouts = Array.Empty<CapturedLoadout>();
         public PartyType PartyType;
         public int       MemberCount;
         public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
@@ -66,6 +70,21 @@ public sealed partial class Plugin
         // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
         // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
         _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
+        // New scene = new run: forget which bosses died in the previous one, so the same boss template
+        // in the next run cuts normally. Deliberately NOT in Clear() — that runs on every archive.
+        _killedBosses.Clear();
+        // Critical A (review round 2026-07-27, second pass): the tracked boss id gets a per-run reset
+        // here too. Before this fix, a run that ended without the tracked boss ever being observed at
+        // hp<=0 (wipe-and-leave — the owner's normal loop, an abandoned pull, a fail-out, the boss
+        // despawning on reset) left _autoArchiveBossId pinned to a dead-and-gone entity for the REST OF
+        // THE SESSION: ObserveAutoArchiveBoss's `!= 0` early-out then blocks every later boss — in this
+        // run or the next one — from ever being adopted again, so no BossKill ever fires again. Scoping
+        // this to the scene boundary is what makes a fresh dungeon in the same session detect its own
+        // boss normally. (A sibling _settleBossId used to get the same reset here — retired with the
+        // rest of finding 3's boss-only settle clock, owner ruling 2026-07-28; see
+        // Plugin.AutoArchive.cs's retired-SettleClockMs note.)
+        _autoArchiveBossId = default;
+        RecomputeUploadPolicyCache();   // new scene ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;
@@ -158,22 +177,40 @@ public sealed partial class Plugin
     // under the 50-LoC cap. EVERY banked archive ships the window (watermark, now]: there is no
     // ShouldFinalizeReplay gate (retired — the recorder never stops, so no run-terminal concept) and
     // no sub-3s fragment gate (retired — contiguous windows stitch on the site, short tails are safe).
-    // PrepareReplayDoc returns null for an off / no-level / EMPTY window, in which case nothing uploads
-    // and the watermark holds. On a successful hand-off to the upload queue the watermark advances and
-    // the window's samples are freed; a failed hand-off keeps them so they merge into the next window
-    // (at-least-once, owner default 2). Returns whether a SUMMARY upload fired.
+    // PrepareReplayDoc returns null for an off / no-level / EMPTY window, in which case the watermark
+    // holds. On a successful hand-off to the upload queue the watermark advances and the window's
+    // samples are freed; a failed hand-off (or no doc at all) keeps them so they merge into the next
+    // window (at-least-once, owner default 2). Returns whether a SUMMARY upload fired.
     private bool FinalizeAndMaybeUploadReplay(EncounterHistoryEntry entry,
                                               long replayUpperCapServerMs = ReplayUpperCapUnset)
     {
         var replayDoc = PrepareReplayDoc(entry, replayUpperCapServerMs);
-        if (replayDoc is null) return false;   // empty/off/no-level window — watermark unchanged
+        // D1 (2026-07-28): the summary upload is INDEPENDENT of the replay doc. 9d03cfe returned early
+        // here when replayDoc was null, which silently suppressed the run-stats upload whenever replay
+        // upload was off / the run had no level id / the window was empty. MaybeUploadLog already
+        // accepts a null doc (its replayDoc parameter defaults to null and both callback legs
+        // null-check it), so pass it straight through.
         var summaryFired = MaybeUploadLog(entry, replayDoc);
         // summaryFired → the summary callback OWNS + uploads the doc (synchronous hand-off complete);
-        // otherwise upload it directly here. A non-throwing hand-off (either path) advances the watermark.
-        var handedOff = summaryFired || UploadReplayDoc(replayDoc);
-        if (handedOff) AdvanceReplayWatermark();
+        // otherwise upload it directly here. Only a genuine hand-off advances the watermark — a null
+        // doc means nothing was serialized, so the samples must stay for the next window.
+        // Send vs store. `off` withholds the SEND only (owner ruling 2026-07-29) — the doc is already
+        // retained by the stats path (PersistReUpload / RetainWithoutUpload both carry it), so custody
+        // IS transferred and the watermark may advance exactly as on a successful upload. Advancing is
+        // what keeps windows non-overlapping; the samples are durable on disk either way.
+        var replaySendAllowed = ReplayAutoUploadAllowed(_contentKinds, _uploadPolicy, entry);
+        var directHandedOff = replayDoc is not null && !summaryFired
+            && (replaySendAllowed ? UploadReplayDoc(replayDoc) : true);
+        if (ShouldAdvanceWatermark(replayDoc is not null, summaryFired, directHandedOff)) AdvanceReplayWatermark();
         return summaryFired;
     }
+
+    /// <summary>Pure decision seam for the delta-window watermark (P0: replay must cover dungeon entry →
+    /// run end). The watermark advances ONLY when a serialized window was genuinely handed off to an
+    /// uploader — never when no doc existed (nothing to hand off) and never on a failed hand-off, so
+    /// unshipped samples merge into the next window (at-least-once).</summary>
+    internal static bool ShouldAdvanceWatermark(bool replayDocPresent, bool summaryFired, bool directUploadHandedOff)
+        => replayDocPresent && (summaryFired || directUploadHandedOff);
 
     // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
     // snapshot rationale (sticky LastSettlement vs fresh-kill baseline) is documented on
@@ -182,7 +219,7 @@ public sealed partial class Plugin
     {
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
-        return new EncounterHistoryEntry
+        var entry = new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
             EnteredAtMs      = _combatStartMs,
@@ -193,6 +230,7 @@ public sealed partial class Plugin
             DeathLog         = new List<DeathEntry>(_deaths),
             ImagineCasts     = new List<ImagineCastEntry>(_imagineCasts),
             Entities         = SnapshotEntities(),
+            Loadouts         = LoadoutSnapshot(),
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
@@ -203,8 +241,11 @@ public sealed partial class Plugin
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
             Defeated         = _services.Dungeon.LastDefeatedCount,
-            Trigger          = ArchiveReasonTag(reason),
+            Trigger          = ResolveTriggerTag(reason),
         };
+        ApplyAttrRanges(entry);
+        ApplyClassSpans(entry);
+        return entry;
     }
 
     internal static string ArchiveReasonTag(AutoArchive.ArchiveReason r) => r switch
@@ -214,8 +255,30 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.BossPhase   => "boss",
         AutoArchive.ArchiveReason.Idle        => "idle",
         AutoArchive.ArchiveReason.StageChange => "stage",
+        AutoArchive.ArchiveReason.BossKill    => "bosskill",
         _                                     => "manual",
     };
+
+    /// <summary>The stored <c>Trigger</c> tag for an archive. Identical to <see cref="ArchiveReasonTag"/>
+    /// for every reason EXCEPT <see cref="AutoArchive.ArchiveReason.BossPhase"/>: that reason banks the
+    /// pre-boss segment cut at the FIRST boss hit, so the banked archive is everything BEFORE boss
+    /// combat (the first boss hit lands in the NEXT segment) — it contains no boss damage and must not
+    /// read "boss" (owner 2026-08-03). Name it for its CONTENT via <see cref="PreBossPhaseTag"/>:
+    /// "clear" when the party fought (dealt damage), "prepare" when only healing happened.</summary>
+    private string ResolveTriggerTag(AutoArchive.ArchiveReason reason)
+    {
+        if (reason != AutoArchive.ArchiveReason.BossPhase) return ArchiveReasonTag(reason);
+        long dmg = 0, heal = 0;
+        foreach (var s in _stats.Values) { dmg += s.TotalDamage; heal += s.TotalHealing; }
+        return PreBossPhaseTag(dmg, heal);
+    }
+
+    /// <summary>Content-based tag for the pre-boss archive: "clear" when any damage was dealt (a trash
+    /// fight), "prepare" when no damage but healing happened (a heal-up before the pull), "clear" as
+    /// the defensive fallback (all-zero archives never reach here — they are suppressed upstream).
+    /// Pure so it pins headless (<c>HistoryTriggerFieldTests</c>).</summary>
+    internal static string PreBossPhaseTag(long totalDamage, long totalHealing)
+        => totalDamage > 0 ? "clear" : (totalHealing > 0 ? "prepare" : "clear");
 
     /// <summary>True when an AUTO-triggered archive is junk and should be skipped. Suppressed iff it
     /// is NOT a <see cref="AutoArchive.ArchiveReason.Manual"/> archive (manual is always kept),

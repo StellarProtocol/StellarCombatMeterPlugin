@@ -40,11 +40,21 @@ public sealed partial class Plugin
 
     private readonly struct SessionEntry
     {
-        public SessionEntry(int idx, string clock, string meta)
-        { Index = idx; Clock = clock; Meta = meta; }
+        public SessionEntry(int idx, string clock, string meta, int[] segments)
+        { Index = idx; Clock = clock; Meta = meta; Segments = segments; }
         // Clock = compact "⏱ 2:14p" emphasis line; Meta = pre-joined "{dur} · {n}p · {scene}" muted line.
-        public readonly int Index; public readonly string Clock, Meta;
+        // Segments = every archive of the SAME run (levelUuid), OLDEST FIRST so chip 1 is the run's first
+        // archive; Index is the one this row opens (the run's main fight).
+        public readonly int Index; public readonly string Clock, Meta; public readonly int[] Segments;
     }
+
+    // Segments of the currently selected run, oldest first. Drives the detail pane's segment chips.
+    private int[] _selectedSegments = System.Array.Empty<int>();
+
+    // Chip slots for the segment picker. The element tree is built ONCE and polled, so the count is fixed
+    // and surplus slots hide via ConditionalElement. 8 covers a fight + a tail per run-end stage + the
+    // scene tail several times over; a run with more than 8 archives shows the first 8 and is logged below.
+    private const int MaxSegmentChips = 8;
 
     // Field struct (no constructor) — keeps clear of the analyzer's ctor-dependency cap.
     private struct SourceRow
@@ -118,6 +128,7 @@ public sealed partial class Plugin
         var table = new ColumnElement(new HudElement[]
         {
             BuildUploadRow(),
+            BuildSegmentPicker(),
             BuildHistoryMetricRow(),
             BuildSessionSummaryRow(),
             BuildHistoryChart(),
@@ -146,22 +157,28 @@ public sealed partial class Plugin
     {
         new ButtonElement(UploadButtonLabel, UploadSelectedClicked,
             Active: () => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.InFlight),
-        new TextElement(UploadStatusText, MutedCol, NoWrap: true),
-        new SpacerElement(),
+        BuildUploadRunButton(),
+        // Weighted cell, not a bare NoWrap text + Spacer: the status is often a full run URL, and NoWrap text
+        // in an unweighted cell forces the ROW wider instead of clipping. Adding "Upload all" pushed the row
+        // 39px past the pane at the default 780f width, clipping Copy link (MEASURED, history sandbox story).
+        // A weighted cell absorbs the leftover and lets the URL truncate, so Copy link keeps its place.
+        new CellElement(new TextElement(UploadStatusText, MutedCol, NoWrap: true), Weight: 1f),
         new ConditionalElement(() => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done,
             new ButtonElement(() => "Copy link", CopyUploadLink)),
     }, Gap: 8f);
 
     private string UploadButtonLabel()
     {
-        if (_selectedSession is not { } s) return "⤓ Upload this run";
+        if (_selectedSession is not { } s) return SegmentUploadVerb();
         if (s.LevelUuid == 0) return "⚠ No run id";   // pre-update archive: identity wasn't persisted
         return UploadStateFor(s) switch
         {
             UploadPhase.InFlight => "Uploading…",
             UploadPhase.Done     => "✓ Uploaded",
             UploadPhase.Failed   => "✗ Failed — Retry",
-            _                    => "⤓ Upload this run",
+            // Not a failure and not retryable: the send was withheld by this content's upload cell.
+            UploadPhase.Skipped  => "⃠ Uploads off for this content",
+            _                    => SegmentUploadVerb(),
         };
     }
 
@@ -169,7 +186,9 @@ public sealed partial class Plugin
     {
         if (_selectedSession is not { } s) return "";
         if (s.LevelUuid == 0) return "Archived before run-id was saved — re-run the fight to upload it.";
-        return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? u : "";
+        if (UploadStateFor(s) == UploadPhase.Skipped)
+            return "This content's upload is set to off — the run is still recorded locally. Turn its cell on in Settings to send it.";
+        return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? ShortRunLabel(u) : "";
     }
 
     private void UploadSelectedClicked()
@@ -291,7 +310,7 @@ public sealed partial class Plugin
         if (_selectedSession is not { } h) return "";
         return $"Map: {ResolveSceneName(h.SceneName)}   ·   "
              + $"Time: {FormatSessionTimestampLong(h.ArchivedAtMs)}   ·   "
-             + $"Duration: {FormatSessionDurationShort(h.CombatDurationMs)}   ·   "
+             + $"Duration: {FormatRowDuration(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs)}   ·   "
              + $"Players: {h.MemberCount}   ·   "
              + $"Scene: {h.SceneName ?? "—"}";
     }
@@ -314,7 +333,11 @@ public sealed partial class Plugin
         // A new session => no carried-over chart lines, and the visible (zoom) window resets to the full span.
         _chartedSources.Clear();
         _chartSourcesVersion++;   // mark the cached chart series stale
-        var durationSeconds = _selectedSession is { } h ? h.CombatDurationMs / 1000f : 0f;
+        // Full span = REAL elapsed duration (see ChartExtentSeconds): the series run to the archive
+        // moment, so anchoring the window on the damage span clipped the chart short of its own data.
+        var durationSeconds = _selectedSession is { } h
+            ? ChartExtentSeconds(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs)
+            : 0f;
         _chartVisibleRange = (0f, durationSeconds);
         RebuildSessionRows();
     }
@@ -387,30 +410,14 @@ public sealed partial class Plugin
         OnInspectRequested?.Invoke(_sessionRows[idx].Id, h);
     }
 
-    // ----- snapshots -----
-
-    private void RebuildHistorySnapshots()
-    {
-        _historyView.Clear();
-        for (int i = _history.Count - 1; i >= 0; i--)   // newest first
-        {
-            var h = _history[i];
-            var dur = FormatSessionDurationShort(h.CombatDurationMs);
-            var map = ResolveSceneName(h.SceneName);
-            _historyView.Add(new SessionEntry(
-                i,
-                FormatSessionClock(h.ArchivedAtMs),
-                $"{map} · {dur} · {h.MemberCount}p{TriggerSuffix(h.Trigger)}"));
-        }
-        // Keep the selected session in sync (it may have been evicted).
-        if (_historyIndex >= 0 && _historyIndex < _history.Count) _selectedSession = _history[_historyIndex];
-        else { _selectedSession = null; _historyIndex = -1; _chartedSources.Clear(); _chartSourcesVersion++; }
-        RebuildSessionRows();
-    }
 
     // Auto-archive segments show WHY they ended; manual/scene stay untagged (pre-v10 default).
-    private static string TriggerSuffix(string trigger)
-        => trigger is "wipe" or "boss" or "idle" or "stage" ? $" · {trigger}" : "";
+    // Finding 5 (review round 2026-07-27): this is a SEPARATE allow-list from ArchiveReasonTag's
+    // switch — a reason can be mapped there and still render with no suffix here if forgotten (as
+    // "bosskill" was), indistinguishable from a manual archive. internal (not private) so
+    // TriggerSuffix_covers_every_auto_reason can pin completeness against every ArchiveReason value.
+    internal static string TriggerSuffix(string trigger)
+        => trigger is "wipe" or "boss" or "idle" or "stage" or "bosskill" or "clear" or "prepare" ? $" · {trigger}" : "";
 
     private void RebuildSessionRows()
     {
@@ -440,7 +447,7 @@ public sealed partial class Plugin
                 Name = !string.IsNullOrEmpty(frozen?.Name)
                     ? frozen!.Name!
                     : EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
-                Class = frozen != null && ResolveSnapProfession(frozen) is { Length: > 0 } fc ? fc : GetClassLine(id),
+                Class = ResolveArchivedClassLine(frozen, h.EnteredAtMs, h.ArchivedAtMs, id),
                 Dmg = FormatAmount(value),                                              // primary = metric value
                 Dps = FormatAmount(ComputeArchivedDps(value, h.CombatDurationMs)),       // rate = metric / sec
                 Pct = FormatPercent(pct),
@@ -448,6 +455,36 @@ public sealed partial class Plugin
                 Role = RoleColorFor(id),
             });
         }
+    }
+
+    // Class label for an ARCHIVED row: EVERY class the player actually played in THIS archive, from
+    // the frozen classSpans clamped to the archive's own [EnteredAtMs, ArchivedAtMs] window, joined in
+    // play order (e.g. "Verdant Oracle · Frost Mage"). The single frozen professionId (attr 220 at
+    // bank time) can't express "was Oracle, ended as Frost Mage", so a clear-phase archive banked
+    // after a swap mislabelled the player as the boss class (the LUz6opkvNX bug). A single-class
+    // archive bakes no spans → falls back to the frozen professionId (unchanged for the common case);
+    // an unfrozen/legacy row falls back to the live class line.
+    private string ResolveArchivedClassLine(EntitySnapshot? frozen, long startMs, long endMs, EntityId id)
+    {
+        if (frozen != null)
+        {
+            var profs = ClassesPlayedInWindow(frozen, startMs, endMs);
+            if (profs.Count > 0)
+            {
+                var line = ProfessionDisplayName(profs[0]);
+                for (var i = 1; i < profs.Count; i++) line += " · " + ProfessionDisplayName(profs[i]);
+                return line;
+            }
+            if (ResolveSnapProfession(frozen) is { Length: > 0 } fc) return fc;
+        }
+        return GetClassLine(id);
+    }
+
+    // ProfessionId → display name (mirrors ResolveSnapProfession's resolution for a single id).
+    private string ProfessionDisplayName(int profId)
+    {
+        var prof = _services.GameData.Combat.GetProfession(profId);
+        return prof is { Name: { Length: > 0 } n } ? n : $"Class {profId}";
     }
 
     // ----- pure formatting helpers (carried over from the IMGUI build) -----
@@ -475,6 +512,74 @@ public sealed partial class Plugin
         long secs = durationMs / 1000; if (secs < 0) secs = 0;
         long m = secs / 60, s = secs % 60;
         return m > 0 ? $"{m}m {s}s" : $"{s}s";
+    }
+
+    /// <summary>
+    /// Real elapsed span of an archived segment: archive time minus combat start. Both fields are
+    /// already persisted on every entry, so this is derivable retroactively — no schema change.
+    ///
+    /// This exists because <c>CombatDurationMs</c> is the DAMAGE-HIT SPAN, not elapsed time:
+    /// <c>FirstHitMs</c>/<c>LastHitMs</c> are written only in the damage handler
+    /// (<c>Plugin.Capture.cs</c>), so healing and damage-taken never move them. A heal-only tail has a
+    /// legitimate span of 0 while seconds of wall-clock pass — which is why the owner saw `0s` rows on
+    /// archives that plainly covered real time (report 2026-07-28, run 890357114281656320).
+    ///
+    /// Returns 0 when no combat start was recorded (otherwise <c>arch - 0</c> would report ~56 years)
+    /// and clamps a backwards server clock.
+    /// </summary>
+    internal static long RealDurationMs(long enteredAtMs, long archivedAtMs)
+    {
+        if (enteredAtMs <= 0) return 0;
+        var span = archivedAtMs - enteredAtMs;
+        return span > 0 ? span : 0;
+    }
+
+    /// <summary>
+    /// History-row duration label: real elapsed span, with the combat span in parentheses when the two
+    /// differ — `8.3s (0s combat)`. Format chosen by the owner 2026-07-28. Under a minute it carries one
+    /// decimal (their example was `8.3s`); at a minute and above it uses the existing m/s style. The
+    /// parenthetical is omitted when both render identically, so ordinary fights stay uncluttered.
+    ///
+    /// Display only — <c>CombatDurationMs</c> is reported verbatim and never adjusted, because DPS
+    /// divides by it.
+    /// </summary>
+    internal static string FormatRowDuration(long realMs, long combatMs)
+    {
+        if (realMs < 0) realMs = 0;
+        if (combatMs < 0) combatMs = 0;
+        // Suffix suppressed when both land on the same whole second — otherwise every ordinary fight
+        // would repeat its own number. Compared on the VALUES, not the rendered strings, so the two
+        // formats (tenths vs m/s) can't disagree about equality.
+        if (realMs / 1000 == combatMs / 1000) return FormatDurationWithTenths(realMs);
+        // Combat span uses the same whole-second formatter as the rest of the UI, so a 0 span reads
+        // "0s combat" exactly as the owner specified — not "0.0s".
+        return $"{FormatDurationWithTenths(realMs)} ({FormatSessionDurationShort(combatMs)} combat)";
+    }
+
+    /// <summary>
+    /// Full x-extent for the session chart, in seconds. Uses the REAL elapsed span, not the damage
+    /// span: the timeline series are bucketed relative to <c>_combatStartMs</c> (= <c>EnteredAtMs</c>,
+    /// see <c>Plugin.Capture.cs</c>'s <c>TimelineFor(...).Add(..., _combatStartMs, ...)</c>), so the
+    /// series domain genuinely runs to the archive moment. Showing only the damage span cut the chart
+    /// short of the data it holds — owner ruling 2026-07-28: if the row reports real duration, the
+    /// graph must cover the whole duration too.
+    ///
+    /// Falls back to the combat span when no combat start was recorded, so the chart is never 0-wide.
+    /// DPS/HPS rates are NOT affected — those divide by <c>CombatDurationMs</c> and are untouched.
+    /// </summary>
+    internal static float ChartExtentSeconds(long realMs, long combatMs)
+    {
+        var ms = realMs > 0 ? realMs : combatMs;
+        return ms > 0 ? ms / 1000f : 0f;
+    }
+
+    // One decimal below a minute, whole seconds in m/s form above it.
+    private static string FormatDurationWithTenths(long ms)
+    {
+        if (ms < 0) ms = 0;
+        if (ms < 60_000) return $"{ms / 1000f:0.0}s";
+        long secs = ms / 1000, m = secs / 60, s = secs % 60;
+        return $"{m}m {s}s";
     }
 
     private static long ComputeSessionMetricTotal(EncounterHistoryEntry h, Metric m)
