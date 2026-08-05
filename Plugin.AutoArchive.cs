@@ -286,6 +286,11 @@ public sealed partial class Plugin
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
         var (bossPresent, bossGone, bossDead) = BossStatus();
+        // A fresh CLEAR is present when this encounter's settlement newly resolves to "kill" — the SAME
+        // gate ManualArchive uses to bank the clear marker (IsFreshKill + ResolveVerdict). Lets the engine
+        // fire the run-end stage archive through the HasStats + cooldown gates on a fast kill (see Evaluate).
+        var freshSettlement = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart)
+            ? _services.Dungeon.LastSettlement : null;
         var inputs = new AutoArchiveInputs
         {
             NowMs            = _services.CombatSnapshot.ServerNowMs,
@@ -293,6 +298,7 @@ public sealed partial class Plugin
             CombatStartMs    = _combatStartMs,
             LastDamageMs     = _lastDamageMs,
             HasStats         = _stats.Count > 0,
+            HasFreshClear    = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill",
             RosterSize       = rosterSize,
             DeadCount        = dead,
             UnknownCount     = unknown,

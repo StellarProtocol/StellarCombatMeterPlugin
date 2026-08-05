@@ -157,6 +157,7 @@ internal static class CombatLogWriter
         if (e.DifficultyLevel != 0) w.Name("difficultyLevel").Number(e.DifficultyLevel);
         if (e.DungeonStartMs != 0) w.Name("dungeonStartMs").Number(e.DungeonStartMs);
         if (e.DefeatedCount != 0) w.Name("defeated").Number(e.DefeatedCount);
+        if (e.PartyId != 0) w.Name("partyId").Str(e.PartyId.ToString(CultureInfo.InvariantCulture));
         w.EndObject();
     }
 
@@ -243,6 +244,7 @@ internal static class CombatLogWriter
             w.BeginObject();
             w.Name("professionId").Number(l.ProfessionId);
             if (l.ProjectName != null) w.Name("projectName").Str(l.ProjectName);
+            if (l.AbilityScore > 0) w.Name("abilityScore").Number(l.AbilityScore);
             w.Name("gear"); WriteIntArrays(w, l.Gear);
             if (l.GearDetail is { Count: > 0 } gd) { w.Name("gearDetail"); WriteGearDetail(w, gd); }
             w.Name("skills"); WriteIntArrays(w, l.Skills);

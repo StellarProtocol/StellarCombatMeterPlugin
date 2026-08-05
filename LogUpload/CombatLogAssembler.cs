@@ -190,7 +190,8 @@ internal sealed class CombatLogAssembler
             PassTime:        entry.PassTime,
             DifficultyLevel: entry.DifficultyLevel,
             DungeonStartMs:  entry.DungeonStartMs,
-            DefeatedCount:   entry.Defeated);
+            DefeatedCount:   entry.Defeated,
+            PartyId:         entry.PartyId);
     }
 
     /// <summary>
@@ -392,7 +393,8 @@ internal sealed class CombatLogAssembler
                 TalentStageId: l.TalentStageId,
                 TalentNodes:   l.TalentNodes,
                 Attributes:    l.Attributes,
-                AttrPeaks:     l.AttrPeaks));
+                AttrPeaks:     l.AttrPeaks,
+                AbilityScore:  l.AbilityScore));
         return list;
     }
 
