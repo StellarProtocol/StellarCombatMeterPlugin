@@ -30,7 +30,9 @@ internal sealed record CapturedLoadout(
     IReadOnlyList<CapturedModule> Modules,
     IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
     IReadOnlyList<long[]>? Attributes = null,    // [attrId, value] self attribute sheet (BASE) at capture (self-only)
-    IReadOnlyList<long[]>? AttrPeaks  = null);   // [attrId, peakValue] sparse combat peaks (self-only)
+    IReadOnlyList<long[]>? AttrPeaks  = null,    // [attrId, peakValue] sparse combat peaks (self-only)
+    long AbilityScore = 0);                       // this class's combat power (FightPoint) read while it was ACTIVE;
+                                                  // gear-dependent, so per-class. 0 when unread. (self-only)
 
 /// <summary>
 /// Pure per-class loadout accumulator — a plain latest-wins upsert keyed by professionId. Holds NO
@@ -163,7 +165,11 @@ public sealed partial class Plugin
         var (projectName, talentStageId, talentNodes) = ResolveActiveProject(professionId);
         // Gear/modules are filled at ARCHIVE from the matching LoadoutSlot (saved-loadout base, per class,
         // + the live overlay for the current class) — see ApplyPerClassGear. Here we only capture the
-        // active-class skills/fashion/attrs/talents (the data LoadoutSlot doesn't carry).
+        // active-class skills/fashion/attrs/talents/abilityScore (the data LoadoutSlot doesn't carry).
+        // AbilityScore (FightPoint) is gear-dependent, so we read it HERE while this class is the active
+        // one — the broadcast per-entity value reflects only whatever class the player is on now. A class
+        // swap re-syncs gear a moment later (TickGearRecapture re-fires this), and latest-wins overwrites
+        // the stale read with the settled per-class value (same lifecycle as the gear re-capture).
         _loadoutCapture.Capture(new CapturedLoadout(
             ProfessionId:  professionId,
             ProjectName:   projectName,
@@ -174,7 +180,8 @@ public sealed partial class Plugin
             Fashion:       BuildLoadoutFashion(self),
             Modules:       System.Array.Empty<CapturedModule>(),
             TalentNodes:   talentNodes,
-            Attributes:    BuildLoadoutAttributes(self)));
+            Attributes:    BuildLoadoutAttributes(self),
+            AbilityScore:  _services.CombatLookup.GetFightPoint(self)));
     }
 
     // Snapshot the local player's non-zero attribute sheet ([attrId, value]) at capture time so the

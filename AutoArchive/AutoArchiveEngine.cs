@@ -38,6 +38,12 @@ internal readonly record struct AutoArchiveInputs
     public int DeadCount { get; init; }
     public int UnknownCount { get; init; }       // members with NO usable HP observation — block wipe
     public bool OutcomeFailed { get; init; }     // IDungeonState.LastOutcome == Failed
+    /// <summary>A fresh dungeon CLEAR is present — the run's settlement/outcome now resolves to a "kill"
+    /// (Plugin computes it from IsFreshKill + ResolveVerdict). Lets a run-END stage transition cut its
+    /// clear archive even with no live stats (the fight was already banked + cleared ~1s earlier) and
+    /// even inside the Min-gap — a fast kill otherwise loses the archive that carries its verdict
+    /// (measured: run sea/xHC0xrYY8r). Read ONLY by the run-end-clear branch in <see cref="Evaluate"/>.</summary>
+    public bool HasFreshClear { get; init; }
     /// <summary>DIAGNOSTIC-ONLY (Minor F, review round 2026-07-27): a boss-tagged entity is currently
     /// resolved + alive. No engine decision reads this — <see cref="Evaluate"/> and
     /// <see cref="UpdateLatches"/> consult only <see cref="BossDead"/>. Kept on the snapshot as an
@@ -265,6 +271,23 @@ internal sealed partial class AutoArchiveEngine
         UpdateLatches(in s);
 
         if (!Enabled) return null;      // master gate — bookkeeping above already ran; only firing is suppressed
+
+        // Run-END CLEAR marker (measured root cause, run sea/xHC0xrYY8r): on a fast kill the boss-kill
+        // archive banks + Clear()s the fight ~1s BEFORE the game's clear/settlement packet lands, so the
+        // run-end (End/Settlement/Vote) stage transition that carries the clear arrives with NO live stats
+        // AND inside the Min-gap cooldown — and is dropped by BOTH gates below, leaving only the
+        // context-less scene archive (fires after the run id is torn down). When a fresh CLEAR is present
+        // AND the fight has already been banked (NO live stats), fire the pending run-end stage transition
+        // THROUGH both gates: it lands at End with the run still live (valid levelUuid), and ManualArchive
+        // banks it as the clear marker. The `!HasStats` guard is LOAD-BEARING: with stats still live the
+        // fight has NOT been banked yet (a very fast clear whose settlement beat the boss-kill settle), so
+        // this must NOT fire — it would PREEMPT the boss-kill archive and bank the fight itself as a
+        // `stage` segment (regression run sea/gqBa7Nha78: the bosskill segment vanished). With stats live
+        // the boss-kill want below fires instead and banks the fight (as a kill, since the settlement is
+        // already present). Targeted: only an empty, fresh-clear run-end transition overrides the gates;
+        // every other stage archive keeps the deterministic HasStats + cooldown behaviour (2026-07-30).
+        if (StageEnabled && _stagePending && s.HasFreshClear && !s.HasStats) { _stagePending = false; return ArchiveReason.StageChange; }
+
         if (!s.HasStats) return null;   // ManualArchive would no-op anyway — don't consume the cooldown
         if (_lastArchiveMs != 0 && s.NowMs - _lastArchiveMs < CooldownMs) return null;
 

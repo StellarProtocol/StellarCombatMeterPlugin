@@ -44,6 +44,7 @@ public sealed partial class Plugin
         public PartyType PartyType;
         public int       MemberCount;
         public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
+        public long      PartyId;          // party id (GrpcTeam team_id) latched at run-start; 0 = solo/unformed
         public int       PassTime;         // settlement clear-time seconds at archive
         public int       MasterModeScore;  // settlement master-mode MAX/PAR score (master_mode_score) at archive
         public int       TotalScore;       // achieved DungeonScore.total_score at archive (numerator of "686/700")
@@ -133,7 +134,32 @@ public sealed partial class Plugin
         // stats afterward. The deferred fire calls ManualArchive too, so it self-clears the slot.
         _pendingArchiveReason = null;
 
-        if (_stats.Count == 0) { LogArchiveOutcome(reason, "skip-empty", 0, 0); return; }
+        // A run-end (scene/stage) auto-archive can legitimately carry ZERO stat rows: the boss-kill
+        // archive already banked + Clear()ed the fight, and the game's clear/settlement packet only
+        // lands ~1 s LATER — after that Clear() (measured: run sea/xHC0xrYY8r, settlement arrived
+        // ~953 ms after the bosskill archive committed). Such an archive still carries the FRESH clear
+        // result, and dropping it as skip-empty is what left a quick single-boss run reading "partial"
+        // though the boss died. Owner ruling 2026-08-05 (Option B): bank it as a small CLEAR marker so
+        // the run reads as a kill. A genuinely empty archive with NO fresh result is still dropped.
+        if (_stats.Count == 0)
+        {
+            var late = _services.Dungeon.LastSettlement;
+            var fresh = IsFreshKill(late, _settlementAtCombatStart) ? late : null;
+            var verdict = ResolveVerdict(fresh, _services.Dungeon.LastOutcome);
+            if (!ShouldBankEmptyClearMarker(reason, verdict, _clearMarkerBanked))
+            {
+                LogArchiveOutcome(reason, "skip-empty", 0, 0);
+                return;
+            }
+            // The fight's Clear() reset _combatStartMs to 0; anchor the marker at "now" so its OWN
+            // elapsed span is 0 and the merged run stays fight-start -> clear (the site's mergeSegments
+            // takes the terminal segment's endMs as the run end). BuildHistoryEntry below injects the
+            // roster 0/0/0 rows + stamps the kill verdict + passTime; the junk-suppression check is a
+            // no-op here (a fresh clear always saves). _clearMarkerBanked is set once the entry banks
+            // below (gated on the kill verdict), guarding a dungeon exit's several run-end archives.
+            _combatStartMs = _services.CombatSnapshot.ServerNowMs;
+            LogArchiveOutcome(reason, "clear-marker", 0, 0);
+        }
 
         // Content-based junk suppression (owner ruling 2026-07-19, verbatim: "junk = when nothing
         // happen DPS=0, HPS=0, TAKEN=0. and even I do nothing and all other player keep having
@@ -160,6 +186,11 @@ public sealed partial class Plugin
         }
 
         var entry = BuildHistoryEntry(reason);
+        // Bank at most ONE clear per run: whichever archive first carries the kill (the run-end stage
+        // archive at End, or the empty clear marker) latches this, so a dungeon exit's later run-end
+        // archives (Settlement/Vote → scene → loading → town) — which still see the sticky clear
+        // settlement — don't re-bank a duplicate. Reset on the next encounter's combat start.
+        if (entry.Result == "kill") _clearMarkerBanked = true;
         _history.Add(entry);
         foreach (var evicted in TrimToCapacity(_history)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
@@ -212,11 +243,56 @@ public sealed partial class Plugin
     internal static bool ShouldAdvanceWatermark(bool replayDocPresent, bool summaryFired, bool directUploadHandedOff)
         => replayDocPresent && (summaryFired || directUploadHandedOff);
 
+    /// <summary>Resolves the party id (GrpcTeam team_id) an archived entry carries: the value LATCHED
+    /// at combat start (<paramref name="latched"/>, Plugin.Capture.cs's <c>_lastTeamId</c>) wins
+    /// outright when non-zero, so a mid-run/post-run party change (member leaves, party disbands,
+    /// re-forms) never retroactively relabels an already-in-progress or already-archived encounter —
+    /// the server keys a run's identity on the party (docs/superpowers/specs/
+    /// 2026-08-04-run-identity-party-teamkey-design.md), so this id must stay stable for the whole
+    /// run. <paramref name="live"/> (a fresh <c>PartySnapshot.PartyId</c> read) is only a fallback for
+    /// the solo-at-combat-start edge case (latch == 0). Deliberately the OPPOSITE preference order
+    /// from <c>LevelUuid</c>'s <c>CurrentRunId != 0 ? CurrentRunId : _lastRunId</c> (live preferred
+    /// there, latched here) — different fields, different failure mode each guards against. 0 =
+    /// solo/unformed at both.</summary>
+    internal static long LatchTeamId(long latched, long live) => latched != 0 ? latched : live;
+
+    /// <summary>Owner request 2026-08-05: the run page / meter must list EVERY party member IN THIS RUN,
+    /// not only those who dealt or took damage in the archived window — a short archive can miss members
+    /// who simply hadn't acted yet, so the roster looked incomplete. Ensures each in-instance party
+    /// member has a stats row so an otherwise-silent member still archives as a 0/0/0 actor (its name +
+    /// class are resolved live at snapshot from the roster/AOI). Never OVERWRITES an active row (kept via
+    /// ContainsKey).
+    ///
+    /// SCOPED to the local player's scene: a member whose fast-sync <see cref="PartyMember.SceneId"/>
+    /// differs from self's is out-of-instance (another floor / town / loading — see the SceneId doc) and
+    /// must NOT be injected, or it would pollute this run's roster and the site's per-dungeon
+    /// distinct-player counts. Self is sorted first (<see cref="IPartyRoster.Members"/>); we prefer the
+    /// IsSelf member and fall back to members[0]. An empty roster — a true solo run with no party or bots
+    /// — adds nothing, so solo runs stay byte-identical. Pure seam over (members, stats); the caller
+    /// feeds the live roster and <c>_stats</c>. Run at archive time only, never on the per-frame hot
+    /// path.</summary>
+    internal static void EnsurePartyMembersTracked(
+        IReadOnlyList<PartyMember> members, IDictionary<EntityId, SourceStats> stats)
+    {
+        if (members.Count == 0) return;                       // solo: no-op (byte-identical)
+        var localScene = members[0].SceneId;                 // roster is self-first…
+        foreach (var m in members) if (m.IsSelf) { localScene = m.SceneId; break; }   // …but be explicit
+        foreach (var m in members)
+            if (m.CharId > 0 && m.SceneId == localScene && !stats.ContainsKey(m.EntityId))
+                stats[m.EntityId] = new SourceStats();
+    }
+
     // Entry assembly, extracted so ManualArchive stays under the 50-LoC cap. The run-identity
     // snapshot rationale (sticky LastSettlement vs fresh-kill baseline) is documented on
     // IsFreshKill below and _settlementAtCombatStart's declaration.
     private EncounterHistoryEntry BuildHistoryEntry(AutoArchive.ArchiveReason reason)
     {
+        // Owner 2026-08-05: list EVERY party member (0/0/0 rows for the silent ones), not just those
+        // active in this — possibly brief — archived window. Runs after the junk-suppression check
+        // (ManualArchive) so injected zeros can't un-suppress an all-zero junk archive, and before the
+        // DeepCopyStats/SnapshotEntities capture below so both the stats copy and the entity snapshot
+        // include them. The post-archive Clear() drops these rows, so live meter state stays clean.
+        EnsurePartyMembersTracked(_services.PartyRoster.Members, _stats);
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
         var entry = new EncounterHistoryEntry
@@ -234,6 +310,7 @@ public sealed partial class Plugin
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
+            PartyId          = LatchTeamId(_lastTeamId, _services.PartySnapshot.PartyId),
             PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
             TotalScore       = freshSettlement?.TotalScore ?? 0,
@@ -296,6 +373,22 @@ public sealed partial class Plugin
         => reason != AutoArchive.ArchiveReason.Manual
         && !carriesFreshResult
         && allRowsZero;
+
+    /// <summary>Whether an auto-archive with NO stat rows (<c>_stats.Count == 0</c>) should be banked as
+    /// a small CLEAR marker rather than dropped as "skip-empty". True only for a NON-manual archive that
+    /// resolves to a genuine <c>kill</c> and hasn't been banked yet this run. This is the run-end
+    /// (scene/stage) archive that fires ~1 s AFTER the boss-kill archive already banked + <c>Clear()</c>ed
+    /// the fight, once the game's late settlement/clear packet lands — banking it as its own terminal
+    /// marker is what makes a quick single-boss clear read as a <c>kill</c> instead of <c>partial</c>
+    /// (owner ruling 2026-08-05, "Option B"). Restricting to <c>kill</c> keeps a bare <c>pass=0</c>
+    /// re-delivery on exit (verdict <c>partial</c>) from banking a junk marker; the one-per-run flag keeps
+    /// the several run-end archives of a single exit from each re-marking. A genuinely empty archive with
+    /// no clear, and any manual click with nothing to save, still skip-empty. Pure so it pins headless.</summary>
+    internal static bool ShouldBankEmptyClearMarker(
+        AutoArchive.ArchiveReason reason, string verdict, bool alreadyBankedThisRun)
+        => reason != AutoArchive.ArchiveReason.Manual
+        && verdict == "kill"
+        && !alreadyBankedThisRun;
 
     // True when every archived stat row is empty — no damage dealt, no healing, no damage taken —
     // i.e. a genuinely empty encounter that must not be saved (owner: "shouldn't save empty into

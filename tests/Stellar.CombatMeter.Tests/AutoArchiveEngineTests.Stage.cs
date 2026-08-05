@@ -45,6 +45,62 @@ public partial class AutoArchiveEngineTests
         Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in s));
     }
 
+    // ---- fast-kill clear override (measured root cause, run sea/xHC0xrYY8r) ----
+
+    [Fact]
+    public void Stage_clear_fires_through_no_stats_and_cooldown_gates()
+    {
+        // On a fast kill the boss-kill archive banks + Clear()s the fight ~1s before the clear/settlement
+        // packet, so the run-end (End) transition that carries the clear arrives with NO stats AND inside
+        // the Min-gap cooldown — dropped by BOTH gates today. A fresh CLEAR must fire it through both so
+        // the clear archive lands at End (run still live) instead of being lost to the late scene archive.
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));                         // adopt flow version 1
+        e.OnArchived(200_000, ArchiveReason.BossKill);           // the fight just banked -> arms the cooldown
+        var end = Live() with
+        {
+            NowMs = 201_000,                                     // 1s later — well inside DefaultCooldownMs
+            FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End,
+            HasStats = false, HasFreshClear = true,
+        };
+        Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in end));
+    }
+
+    [Fact]
+    public void Stage_without_a_fresh_clear_stays_gated_by_stats_and_cooldown()
+    {
+        // The override is TARGETED: a run-end transition with NO fresh clear keeps the normal HasStats +
+        // cooldown gates (the 2026-07-30 deterministic stage-count behaviour). No stats -> no fire.
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));
+        e.OnArchived(200_000, ArchiveReason.BossKill);
+        var end = Live() with
+        {
+            NowMs = 201_000, FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End,
+            HasStats = false, HasFreshClear = false,
+        };
+        Assert.Null(e.Evaluate(in end));
+    }
+
+    [Fact]
+    public void Stage_clear_override_does_not_fire_while_stats_are_still_live()
+    {
+        // LOAD-BEARING guard (regression run sea/gqBa7Nha78): a fast clear whose settlement beat the
+        // boss-kill settle reaches End with the fight stats STILL LIVE. The clear override must NOT fire
+        // here — doing so would preempt the boss-kill archive and bank the fight itself as a `stage`
+        // segment (the bosskill segment vanished). With stats live + inside the cooldown, Evaluate returns
+        // null via the normal gate, leaving the boss-kill want to bank the fight.
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));
+        e.OnArchived(200_000, ArchiveReason.BossKill);           // recent archive -> inside the cooldown
+        var end = Live() with
+        {
+            NowMs = 201_000, FlowStateVersion = 2, CurrentFlowState = DungeonFlowState.End,
+            HasStats = true, HasFreshClear = true,               // fight NOT yet banked
+        };
+        Assert.Null(e.Evaluate(in end));                         // override skipped (HasStats); normal path cooldown-blocked
+    }
+
     [Fact]
     public void Stage_version_reset_is_adopted_silently()
     {

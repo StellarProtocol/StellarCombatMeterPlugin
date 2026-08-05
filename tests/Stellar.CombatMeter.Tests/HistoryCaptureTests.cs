@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter;
+using Stellar.CombatMeter.AutoArchive;
 using Xunit;
 
 namespace Stellar.CombatMeter.Tests;
@@ -164,5 +166,106 @@ public sealed class HistoryCaptureTests
         // master_mode_score) must NOT be promoted to "kill".
         var scoreOnly = new DungeonSettlementInfo(0, 0, 340);
         Assert.Equal("partial", Plugin.ResolveVerdict(scoreOnly, DungeonOutcome.None));
+    }
+
+    // -------------------------------------------------------------------------
+    // ShouldBankEmptyClearMarker — Option B (owner ruling 2026-08-05, run sea/xHC0xrYY8r): a quick
+    // single-boss clear had the boss-kill archive bank + Clear() the fight ~1s BEFORE the game's late
+    // settlement/clear packet arrived, so the run-end (scene) archive that carries the clear had zero
+    // stat rows and was dropped as "skip-empty" — the run read "partial" though the boss died. Fix: bank
+    // that empty archive as a small CLEAR marker so the run reads as a kill. Guards: only a genuine kill
+    // (a bare pass=0 re-delivery on exit is "partial" and must not mark), never a manual click, and at
+    // most once per run (a dungeon exit fires several run-end archives while the clear is still sticky).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_banks_a_fresh_kill_on_a_run_end_archive()
+    {
+        Assert.True(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "kill", alreadyBankedThisRun: false));
+        Assert.True(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.StageChange, "kill", alreadyBankedThisRun: false));
+    }
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_stays_skip_empty_without_a_clear()
+    {
+        // A bare pass=0 settlement re-delivery on exit resolves to "partial" — it must NOT bank a junk
+        // marker; a "fail" is not a clear either.
+        Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "partial", alreadyBankedThisRun: false));
+        Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "fail", alreadyBankedThisRun: false));
+    }
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_banks_at_most_once_per_run()
+    {
+        // A dungeon exit steps through several run-end archives while the clear settlement is still
+        // sticky; only the first marks.
+        Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "kill", alreadyBankedThisRun: true));
+    }
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_never_on_a_manual_click_with_nothing_to_save()
+        => Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.Manual, "kill", alreadyBankedThisRun: false));
+
+    // -------------------------------------------------------------------------
+    // LatchTeamId — run-identity fix (Task B1): the party id (GrpcTeam team_id) that BuildHistoryEntry
+    // stamps onto EncounterHistoryEntry.PartyId must be the value LATCHED at combat start
+    // (Plugin.Capture.cs's EnsureCombatStarted -> _lastTeamId), not a live re-read at archive time —
+    // otherwise a mid-run/post-run party change (member leaves, party disbands, re-forms) would
+    // retroactively relabel an already-in-progress or already-archived encounter with the WRONG party,
+    // defeating the server's per-party run-identity key (docs/superpowers/specs/
+    // 2026-08-04-run-identity-party-teamkey-design.md). Mirrors LevelUuid's latched-fallback shape,
+    // but with the opposite preference order: latched wins here; live is only a fallback for the
+    // solo-at-combat-start (latch == 0) edge case.
+    // -------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(500, 999, 500)]  // latched preferred over a DIFFERENT live value (party changed mid-run)
+    [InlineData(500, 0,   500)]  // latched preferred even after the live party has since disbanded (live -> 0)
+    [InlineData(0,   777, 777)]  // solo at combat start (no latch) -> falls back to a live read
+    [InlineData(0,   0,   0)]    // solo throughout (both unformed)
+    public void LatchTeamId_prefers_the_run_start_latch_over_a_live_read(long latched, long live, long expected)
+        => Assert.Equal(expected, Plugin.LatchTeamId(latched, live));
+
+    // -------------------------------------------------------------------------
+    // EnsurePartyMembersTracked — owner 2026-08-05: the run/meter must list EVERY party member,
+    // including ones who were silent (0 dmg / 0 heal / 0 taken) in a short archived window. Injects a
+    // zero-stat row per current party member WITHOUT overwriting an active one; an empty roster (a true
+    // solo run — no party or bots) is a no-op so solo runs stay byte-identical.
+    // -------------------------------------------------------------------------
+
+    private static PartyMember Member(long charId, int sceneId = 100, bool isSelf = false) => new(
+        CharId: charId, Name: "P" + charId, Profession: 5, Level: 1, Hp: 1, MaxHp: 1,
+        SceneId: sceneId, Position: default, IsOnline: true, IsSelf: isSelf, GroupId: 0);
+
+    [Fact]
+    public void EnsurePartyMembersTracked_injects_in_scene_silent_members_only()
+    {
+        var self       = Member(100, sceneId: 7, isSelf: true);   // self, in-instance, already active
+        var silentHere = Member(200, sceneId: 7);                 // in-instance, silent -> inject a 0 row
+        var elsewhere  = Member(300, sceneId: 9);                 // another floor / town -> MUST be skipped
+        var stats = new Dictionary<EntityId, SourceStats>
+        {
+            [self.EntityId] = new SourceStats { TotalDamage = 500 },   // already-active member
+        };
+
+        Plugin.EnsurePartyMembersTracked(new[] { self, silentHere, elsewhere }, stats);
+
+        Assert.Equal(2, stats.Count);
+        Assert.Equal(500, stats[self.EntityId].TotalDamage);       // active row NOT overwritten
+        Assert.True(stats.ContainsKey(silentHere.EntityId));       // in-instance silent member present …
+        Assert.Equal(0, stats[silentHere.EntityId].TotalDamage);   // … as a 0/0/0 actor
+        Assert.False(stats.ContainsKey(elsewhere.EntityId));       // out-of-instance member NOT injected
+    }
+
+    [Fact]
+    public void EnsurePartyMembersTracked_empty_roster_is_a_noop_for_solo()
+    {
+        var self  = Member(100).EntityId;
+        var stats = new Dictionary<EntityId, SourceStats> { [self] = new SourceStats { TotalDamage = 7 } };
+
+        Plugin.EnsurePartyMembersTracked(System.Array.Empty<PartyMember>(), stats);
+
+        Assert.Single(stats);
+        Assert.Equal(7, stats[self].TotalDamage);
     }
 }
