@@ -244,6 +244,7 @@ internal static class CombatLogWriter
             w.BeginObject();
             w.Name("professionId").Number(l.ProfessionId);
             if (l.ProjectName != null) w.Name("projectName").Str(l.ProjectName);
+            if (l.AbilityScore > 0) w.Name("abilityScore").Number(l.AbilityScore);
             w.Name("gear"); WriteIntArrays(w, l.Gear);
             if (l.GearDetail is { Count: > 0 } gd) { w.Name("gearDetail"); WriteGearDetail(w, gd); }
             w.Name("skills"); WriteIntArrays(w, l.Skills);

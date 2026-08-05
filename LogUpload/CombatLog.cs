@@ -146,4 +146,5 @@ internal sealed record LoadoutEntry(
     int TalentStageId,
     IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
     IReadOnlyList<long[]>? Attributes = null, // [attrId, value] attribute sheet for THIS class (self-only)
-    IReadOnlyList<long[]>? AttrPeaks = null); // [attrId, peakValue] sparse per-class combat peaks (self-only)
+    IReadOnlyList<long[]>? AttrPeaks = null,  // [attrId, peakValue] sparse per-class combat peaks (self-only)
+    long AbilityScore = 0);                    // this class's combat power (FightPoint), read while active; 0 when unread

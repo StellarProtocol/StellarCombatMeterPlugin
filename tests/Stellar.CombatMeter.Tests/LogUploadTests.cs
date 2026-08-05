@@ -704,18 +704,20 @@ public sealed class LogUploadTests
     private static ModuleEntry MakeModuleEntry(int slot = 0, int configId = 5500102, int quality = 5) =>
         new(slot, configId, quality, new List<int[]> { new[] { 1110, 5 } });
 
-    private static LoadoutEntry MakeLoadoutEntry(int professionId = 2, int talentStageId = 0) =>
+    private static LoadoutEntry MakeLoadoutEntry(int professionId = 2, int talentStageId = 0, long abilityScore = 0) =>
         new(ProfessionId: professionId, ProjectName: null,
             Gear: new List<int[]> { new[] { 200, 2011227 } },
             GearDetail: null,
             Skills: new List<int[]> { new[] { 1241, 30, 6 } },
             Fashion: new List<Fashion>(),
             Modules: null,
-            TalentStageId: talentStageId);
+            TalentStageId: talentStageId,
+            AbilityScore: abilityScore);
 
     private static CapturedLoadout MakeCapturedLoadout(int professionId, string? projectName = null,
         int talentStageId = 0, IReadOnlyList<GearDetail>? gearDetail = null,
-        IReadOnlyList<CapturedModule>? modules = null, IReadOnlyList<int>? talentNodes = null) => new(
+        IReadOnlyList<CapturedModule>? modules = null, IReadOnlyList<int>? talentNodes = null,
+        long abilityScore = 0) => new(
         ProfessionId:  professionId,
         ProjectName:   projectName,
         TalentStageId: talentStageId,
@@ -724,7 +726,8 @@ public sealed class LogUploadTests
         Skills:        new List<int[]> { new[] { 1241, 30, 6 } },
         Fashion:       new List<Fashion>(),
         Modules:       modules ?? new List<CapturedModule>(),
-        TalentNodes:   talentNodes);
+        TalentNodes:   talentNodes,
+        AbilityScore:  abilityScore);
 
     private static CombatLog MakeLoadoutLog(Actor actor, string key = "1248014") =>
         new(1,
@@ -877,6 +880,44 @@ public sealed class LogUploadTests
         Assert.Single(l.Modules!);
 
         Assert.Null(CombatLogAssembler.BuildLoadoutEntries(new List<CapturedLoadout>()));
+    }
+
+    [Fact]
+    public void BuildLoadoutEntries_carries_per_class_abilityScore()
+    {
+        var captured = new List<CapturedLoadout>
+        {
+            MakeCapturedLoadout(5, abilityScore: 171050),
+            MakeCapturedLoadout(2, abilityScore: 184230),
+        };
+
+        var mapped = CombatLogAssembler.BuildLoadoutEntries(captured)!;
+
+        Assert.Equal(171050, mapped.Single(l => l.ProfessionId == 5).AbilityScore);
+        Assert.Equal(184230, mapped.Single(l => l.ProfessionId == 2).AbilityScore);
+    }
+
+    [Fact]
+    public void WriteActor_loadout_emits_abilityScore_when_positive_and_omits_when_zero()
+    {
+        var actor = new Actor(
+            Name: "Aria", Kind: "player", TeamId: 1, IsLocal: true, Uid: 1248014,
+            ProfessionId: 12, Level: 60, AbilityScore: 184230, MaxHp: 1850000,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>(),
+            Loadouts: new List<LoadoutEntry>
+            {
+                MakeLoadoutEntry(professionId: 2, abilityScore: 184230),  // played class — has a score
+                MakeLoadoutEntry(professionId: 5, abilityScore: 0),        // alt class, score unread
+            });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor));
+
+        // profession 2 carries its own per-class abilityScore …
+        Assert.Contains("\"professionId\":2,\"abilityScore\":184230,", json);
+        // … while profession 5 (score 0) omits the key entirely (no "abilityScore":0 noise).
+        Assert.Contains("\"professionId\":5,\"gear\":", json);
+        Assert.DoesNotContain("\"abilityScore\":0", json);
     }
 
     // ResolveLoadoutFields is the self-only GATE: non-local always null/null/0 regardless of what
