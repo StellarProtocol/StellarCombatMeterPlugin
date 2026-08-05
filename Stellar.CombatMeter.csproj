@@ -25,7 +25,7 @@
     <ProjectReference Include="$(StellarAbstractionsSrc)" />
   </ItemGroup>
   <ItemGroup Condition="'$(UseLocalStellarAbstractions)' != 'true'">
-    <PackageReference Include="Stellar.Abstractions" Version="1.15.0" />
+    <PackageReference Include="Stellar.Abstractions" Version="1.17.0" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Stellar.PluginContracts" Version="1.9.0" />
