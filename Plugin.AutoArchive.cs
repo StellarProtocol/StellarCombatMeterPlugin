@@ -299,6 +299,7 @@ public sealed partial class Plugin
             LastDamageMs     = _lastDamageMs,
             HasStats         = _stats.Count > 0,
             HasFreshClear    = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill",
+            ClearMarkerBanked = _clearMarkerBanked,
             RosterSize       = rosterSize,
             DeadCount        = dead,
             UnknownCount     = unknown,

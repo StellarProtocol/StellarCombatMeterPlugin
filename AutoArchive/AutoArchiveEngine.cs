@@ -44,6 +44,15 @@ internal readonly record struct AutoArchiveInputs
     /// even inside the Min-gap — a fast kill otherwise loses the archive that carries its verdict
     /// (measured: run sea/xHC0xrYY8r). Read ONLY by the run-end-clear branch in <see cref="Evaluate"/>.</summary>
     public bool HasFreshClear { get; init; }
+    /// <summary>A CLEAR ("kill") archive has already been banked for THIS run (Plugin._clearMarkerBanked,
+    /// set when any archive banks with a "kill" verdict, reset on the next encounter's combat start).
+    /// Guards the run-end clear-marker so it banks EXACTLY once per run — and lets that marker fire on the
+    /// settlement's own arrival, not just on a pending stage transition: a NO-BOSS clear (Stimen Vault
+    /// floor, measured sea/NMjjTgpx3O) banks its run-end archive as "partial" ~1s BEFORE the game's clear
+    /// settlement (pass_time) lands, with the End stage already consumed, so the marker must fire when the
+    /// settlement arrives regardless of a pending transition. False for a boss run that already banked its
+    /// kill (its boss-kill archive set this), so the marker never double-fires there.</summary>
+    public bool ClearMarkerBanked { get; init; }
     /// <summary>DIAGNOSTIC-ONLY (Minor F, review round 2026-07-27): a boss-tagged entity is currently
     /// resolved + alive. No engine decision reads this — <see cref="Evaluate"/> and
     /// <see cref="UpdateLatches"/> consult only <see cref="BossDead"/>. Kept on the snapshot as an
@@ -286,7 +295,19 @@ internal sealed partial class AutoArchiveEngine
         // the boss-kill want below fires instead and banks the fight (as a kill, since the settlement is
         // already present). Targeted: only an empty, fresh-clear run-end transition overrides the gates;
         // every other stage archive keeps the deterministic HasStats + cooldown behaviour (2026-07-30).
-        if (StageEnabled && _stagePending && s.HasFreshClear && !s.HasStats) { _stagePending = false; return ArchiveReason.StageChange; }
+        // Generalised from "pending stage transition + fresh clear" to "fresh clear present, fight banked,
+        // no kill marked yet" so it ALSO catches a NO-BOSS clear whose settlement lands AFTER the run-end
+        // archive already banked (Stimen Vault floor, measured sea/NMjjTgpx3O: the floor archive banks
+        // "partial" ~1s before the clear settlement's pass_time arrives, and the End stage transition is
+        // already consumed — so requiring `_stagePending` here missed it and the run read "partial"). The
+        // guards preserve every prior invariant: `!HasStats` is load-bearing (a fast clear whose settlement
+        // beat the boss-kill settle reaches End with stats STILL live — firing here would preempt the
+        // boss-kill archive and bank the fight as a `stage` segment, regression sea/gqBa7Nha78);
+        // `!ClearMarkerBanked` banks the marker exactly once and stops a boss run (which already banked its
+        // kill) from ever entering this branch; `InstancedRun` keeps it inside a real run; `HasFreshClear`
+        // still requires a genuine settlement. Consumes any pending transition (`_stagePending = false`).
+        if (StageEnabled && s.InstancedRun && s.HasFreshClear && !s.HasStats && !s.ClearMarkerBanked)
+            { _stagePending = false; return ArchiveReason.StageChange; }
 
         if (!s.HasStats) return null;   // ManualArchive would no-op anyway — don't consume the cooldown
         if (_lastArchiveMs != 0 && s.NowMs - _lastArchiveMs < CooldownMs) return null;

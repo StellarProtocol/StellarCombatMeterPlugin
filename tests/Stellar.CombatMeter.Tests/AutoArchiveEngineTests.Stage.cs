@@ -102,6 +102,41 @@ public partial class AutoArchiveEngineTests
     }
 
     [Fact]
+    public void Clear_marker_fires_on_settlement_arrival_with_no_pending_stage_transition()
+    {
+        // NO-BOSS clear (Stimen Vault floor, measured sea/NMjjTgpx3O): the run-end archive banks the floor
+        // combat as "partial" ~1s BEFORE the game's clear settlement (pass_time) arrives, and the End stage
+        // transition is already consumed. When the settlement THEN lands (HasFreshClear) with the fight
+        // banked (no stats) and no kill marked yet, the clear-marker must STILL fire — it must not depend
+        // on a pending stage transition — so the run reads "kill" instead of "partial".
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));                             // adopt flow v1
+        e.OnArchived(200_000, ArchiveReason.StageChange);            // floor archive banked (partial) + armed cooldown
+        var settled = Live() with
+        {
+            NowMs = 201_000, FlowStateVersion = 1,                   // NO new stage transition (End already consumed)
+            HasStats = false, HasFreshClear = true, ClearMarkerBanked = false,
+        };
+        Assert.Equal(ArchiveReason.StageChange, e.Evaluate(in settled));
+    }
+
+    [Fact]
+    public void Clear_marker_does_not_refire_once_banked()
+    {
+        // Once the marker banks (a "kill" entry sets Plugin._clearMarkerBanked), the ClearMarkerBanked
+        // guard stops it re-firing every tick while the sticky settlement stays present.
+        var e = new AutoArchiveEngine();
+        Assert.Null(e.Evaluate(Live()));
+        e.OnArchived(200_000, ArchiveReason.StageChange);
+        var banked = Live() with
+        {
+            NowMs = 201_000, FlowStateVersion = 1,
+            HasStats = false, HasFreshClear = true, ClearMarkerBanked = true,
+        };
+        Assert.Null(e.Evaluate(in banked));
+    }
+
+    [Fact]
     public void Stage_version_reset_is_adopted_silently()
     {
         var e = new AutoArchiveEngine();
