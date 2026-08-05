@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter;
+using Stellar.CombatMeter.AutoArchive;
 using Xunit;
 
 namespace Stellar.CombatMeter.Tests;
@@ -166,6 +167,44 @@ public sealed class HistoryCaptureTests
         var scoreOnly = new DungeonSettlementInfo(0, 0, 340);
         Assert.Equal("partial", Plugin.ResolveVerdict(scoreOnly, DungeonOutcome.None));
     }
+
+    // -------------------------------------------------------------------------
+    // ShouldBankEmptyClearMarker — Option B (owner ruling 2026-08-05, run sea/xHC0xrYY8r): a quick
+    // single-boss clear had the boss-kill archive bank + Clear() the fight ~1s BEFORE the game's late
+    // settlement/clear packet arrived, so the run-end (scene) archive that carries the clear had zero
+    // stat rows and was dropped as "skip-empty" — the run read "partial" though the boss died. Fix: bank
+    // that empty archive as a small CLEAR marker so the run reads as a kill. Guards: only a genuine kill
+    // (a bare pass=0 re-delivery on exit is "partial" and must not mark), never a manual click, and at
+    // most once per run (a dungeon exit fires several run-end archives while the clear is still sticky).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_banks_a_fresh_kill_on_a_run_end_archive()
+    {
+        Assert.True(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "kill", alreadyBankedThisRun: false));
+        Assert.True(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.StageChange, "kill", alreadyBankedThisRun: false));
+    }
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_stays_skip_empty_without_a_clear()
+    {
+        // A bare pass=0 settlement re-delivery on exit resolves to "partial" — it must NOT bank a junk
+        // marker; a "fail" is not a clear either.
+        Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "partial", alreadyBankedThisRun: false));
+        Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "fail", alreadyBankedThisRun: false));
+    }
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_banks_at_most_once_per_run()
+    {
+        // A dungeon exit steps through several run-end archives while the clear settlement is still
+        // sticky; only the first marks.
+        Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.SceneChange, "kill", alreadyBankedThisRun: true));
+    }
+
+    [Fact]
+    public void ShouldBankEmptyClearMarker_never_on_a_manual_click_with_nothing_to_save()
+        => Assert.False(Plugin.ShouldBankEmptyClearMarker(ArchiveReason.Manual, "kill", alreadyBankedThisRun: false));
 
     // -------------------------------------------------------------------------
     // LatchTeamId — run-identity fix (Task B1): the party id (GrpcTeam team_id) that BuildHistoryEntry

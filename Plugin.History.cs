@@ -134,7 +134,32 @@ public sealed partial class Plugin
         // stats afterward. The deferred fire calls ManualArchive too, so it self-clears the slot.
         _pendingArchiveReason = null;
 
-        if (_stats.Count == 0) { LogArchiveOutcome(reason, "skip-empty", 0, 0); return; }
+        // A run-end (scene/stage) auto-archive can legitimately carry ZERO stat rows: the boss-kill
+        // archive already banked + Clear()ed the fight, and the game's clear/settlement packet only
+        // lands ~1 s LATER — after that Clear() (measured: run sea/xHC0xrYY8r, settlement arrived
+        // ~953 ms after the bosskill archive committed). Such an archive still carries the FRESH clear
+        // result, and dropping it as skip-empty is what left a quick single-boss run reading "partial"
+        // though the boss died. Owner ruling 2026-08-05 (Option B): bank it as a small CLEAR marker so
+        // the run reads as a kill. A genuinely empty archive with NO fresh result is still dropped.
+        if (_stats.Count == 0)
+        {
+            var late = _services.Dungeon.LastSettlement;
+            var fresh = IsFreshKill(late, _settlementAtCombatStart) ? late : null;
+            var verdict = ResolveVerdict(fresh, _services.Dungeon.LastOutcome);
+            if (!ShouldBankEmptyClearMarker(reason, verdict, _clearMarkerBanked))
+            {
+                LogArchiveOutcome(reason, "skip-empty", 0, 0);
+                return;
+            }
+            // The fight's Clear() reset _combatStartMs to 0; anchor the marker at "now" so its OWN
+            // elapsed span is 0 and the merged run stays fight-start -> clear (the site's mergeSegments
+            // takes the terminal segment's endMs as the run end). BuildHistoryEntry below injects the
+            // roster 0/0/0 rows + stamps the kill verdict + passTime; the junk-suppression check is a
+            // no-op here (a fresh clear always saves). _clearMarkerBanked is set once the entry banks
+            // below (gated on the kill verdict), guarding a dungeon exit's several run-end archives.
+            _combatStartMs = _services.CombatSnapshot.ServerNowMs;
+            LogArchiveOutcome(reason, "clear-marker", 0, 0);
+        }
 
         // Content-based junk suppression (owner ruling 2026-07-19, verbatim: "junk = when nothing
         // happen DPS=0, HPS=0, TAKEN=0. and even I do nothing and all other player keep having
@@ -161,6 +186,11 @@ public sealed partial class Plugin
         }
 
         var entry = BuildHistoryEntry(reason);
+        // Bank at most ONE clear per run: whichever archive first carries the kill (the run-end stage
+        // archive at End, or the empty clear marker) latches this, so a dungeon exit's later run-end
+        // archives (Settlement/Vote → scene → loading → town) — which still see the sticky clear
+        // settlement — don't re-bank a duplicate. Reset on the next encounter's combat start.
+        if (entry.Result == "kill") _clearMarkerBanked = true;
         _history.Add(entry);
         foreach (var evicted in TrimToCapacity(_history)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }   // unroot evicted runs
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
@@ -343,6 +373,22 @@ public sealed partial class Plugin
         => reason != AutoArchive.ArchiveReason.Manual
         && !carriesFreshResult
         && allRowsZero;
+
+    /// <summary>Whether an auto-archive with NO stat rows (<c>_stats.Count == 0</c>) should be banked as
+    /// a small CLEAR marker rather than dropped as "skip-empty". True only for a NON-manual archive that
+    /// resolves to a genuine <c>kill</c> and hasn't been banked yet this run. This is the run-end
+    /// (scene/stage) archive that fires ~1 s AFTER the boss-kill archive already banked + <c>Clear()</c>ed
+    /// the fight, once the game's late settlement/clear packet lands — banking it as its own terminal
+    /// marker is what makes a quick single-boss clear read as a <c>kill</c> instead of <c>partial</c>
+    /// (owner ruling 2026-08-05, "Option B"). Restricting to <c>kill</c> keeps a bare <c>pass=0</c>
+    /// re-delivery on exit (verdict <c>partial</c>) from banking a junk marker; the one-per-run flag keeps
+    /// the several run-end archives of a single exit from each re-marking. A genuinely empty archive with
+    /// no clear, and any manual click with nothing to save, still skip-empty. Pure so it pins headless.</summary>
+    internal static bool ShouldBankEmptyClearMarker(
+        AutoArchive.ArchiveReason reason, string verdict, bool alreadyBankedThisRun)
+        => reason != AutoArchive.ArchiveReason.Manual
+        && verdict == "kill"
+        && !alreadyBankedThisRun;
 
     // True when every archived stat row is empty — no damage dealt, no healing, no damage taken —
     // i.e. a genuinely empty encounter that must not be saved (owner: "shouldn't save empty into

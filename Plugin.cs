@@ -115,6 +115,11 @@ public sealed partial class Plugin : IStellarPlugin
     // Snapshotting it here at combat start lets ManualArchive tell "settlement changed during this
     // encounter" (genuine fresh kill) apart from "settlement was already sitting there" (stale/false).
     private DungeonSettlementInfo? _settlementAtCombatStart;
+    // One CLEAR marker per run: set when ManualArchive banks the late-settlement clear marker (an empty
+    // run-end archive whose fight was already banked + cleared), reset when the next encounter's combat
+    // starts. Guards against a dungeon exit — which steps through several run-end archives while the clear
+    // settlement is still sticky — banking duplicate markers. See ShouldBankEmptyClearMarker.
+    private bool _clearMarkerBanked;
 
     // Persisted UI state.
     private Metric     _metric = Metric.Dps;

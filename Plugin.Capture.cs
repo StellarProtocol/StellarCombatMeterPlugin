@@ -67,6 +67,9 @@ public sealed partial class Plugin
         if (_combatActive) return;
         _combatActive  = true;
         _combatStartMs = timestampMs;
+        // A new encounter's combat re-arms the once-per-run clear-marker guard (ShouldBankEmptyClearMarker),
+        // so the NEXT run's late clear can bank its own marker.
+        _clearMarkerBanked = false;
         // Latch the dungeon run-id mid-run (valid here) as a fallback: IDungeonState.CurrentRunId can reset
         // to 0 on scene-leave, which may be exactly when the archive fires. ManualArchive uses this if the
         // live id is already 0 at archive time.
