@@ -323,6 +323,7 @@ public sealed partial class Plugin : IStellarPlugin
         PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
         DrainContentKindsNotice();     // surface a manual content-list refresh result (Notifications is main-thread only)
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
+        TrackClearLatch();           // ~10 Hz: run-scoped clear latch — UNCONDITIONAL (independent of the auto-archive toggle/pending)
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
         TickLoadoutCapture();        // ~10 Hz: per-class loadout accumulator (poll profession + run-boundary reset)

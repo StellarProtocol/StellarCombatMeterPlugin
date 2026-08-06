@@ -77,6 +77,23 @@ public sealed class VaultClearLatchTests
         Assert.Equal(123, latched!.Value.PassTimeSeconds);
     }
 
+    [Fact]
+    public void A_manual_archive_of_a_latched_clear_reads_kill_in_manual_only_mode()
+    {
+        // Owner design: the latch ALWAYS tracks. TrackClearLatch runs unconditionally every tick
+        // (OnUpdate's throttled region), OUTSIDE the master auto-archive gate and the pending-archive
+        // gate — so a fresh clear is latched even with auto-archive OFF (manual-only). Then a MANUAL
+        // archive (button/hotkey), fired AFTER the framework wiped the live outcome/settlement, resolves
+        // "kill": manual archives are never suppressed, and ResolveVerdict honours the latch for every
+        // reason. (The unconditional CALL SITE is verified by reading OnUpdate — the pure seams below pin
+        // the resulting verdict.)
+        var (cleared, _) = Plugin.UpdateClearLatch(
+            wasCleared: false, latchedSettlement: null, hasFreshClear: true, liveSettlement: Clear(59));
+        Assert.True(cleared);
+        Assert.Equal("kill",
+            Plugin.ResolveVerdict(freshSettlement: null, DungeonOutcome.None, clearedThisRun: cleared));
+    }
+
     // -------------------------------------------------------------------------
     // P0 — no bleed to the next run. After the encounter reset (EnsureCombatStarted sets
     // _clearedThisRun=false, _clearedSettlement=null), a run that never clears reads "partial".

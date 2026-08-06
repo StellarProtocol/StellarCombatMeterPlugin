@@ -282,6 +282,26 @@ public sealed partial class Plugin
         _                                     => false,   // Manual + SceneChange + BossPhase stay immediate
     };
 
+    // Run-scoped CLEAR latch tracker — called UNCONDITIONALLY every ~10 Hz tick (OnUpdate's throttled
+    // region), OUTSIDE the master auto-archive gate AND the pending-archive gate. Owner design: the latch
+    // "always tracks", so a clear is latched the moment it is observed even in manual-only mode (auto-
+    // archive off) — a manual/scene archive of that run then reads "kill" (vault-floor P0, run
+    // sea/qyvCSXteqC). Cheap: two sticky dungeon-state reads + the pure live verdict + the pure
+    // UpdateClearLatch seam; no allocation. It is safe to run out of a dungeon: the clear signal only
+    // exists inside a genuine run (the framework WIPES LastOutcome/LastSettlement on every new run-id, and
+    // IsFreshKill's baseline rejects a stale carry-over on a same-uuid re-entry), and the flag resets at
+    // the next encounter's combat start — so an out-of-run tick never mislatches. Deliberately NOT gated
+    // on IsInstancedRun(): the clear settlement can land as CurrentRunId drops to 0 on leave-scene, and
+    // gating there would drop the very clear we must capture.
+    private void TrackClearLatch()
+    {
+        var freshSettlement = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart)
+            ? _services.Dungeon.LastSettlement : null;
+        var hasFreshClear = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill";
+        (_clearedThisRun, _clearedSettlement) = UpdateClearLatch(
+            _clearedThisRun, _clearedSettlement, hasFreshClear, _services.Dungeon.LastSettlement);
+    }
+
     private AutoArchiveInputs BuildAutoArchiveInputs()
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
@@ -291,15 +311,11 @@ public sealed partial class Plugin
         // fire the run-end stage archive through the HasStats + cooldown gates on a fast kill (see Evaluate).
         var freshSettlement = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart)
             ? _services.Dungeon.LastSettlement : null;
-        // LIVE verdict (2-arg, no latch — this is what FEEDS the latch; passing the latch here would make
-        // HasFreshClear self-sustaining and re-fire the engine forever).
-        var hasFreshClear = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill";
-        // Latch the clear fact run-scoped WHILE the framework's LastOutcome/LastSettlement are still fresh
-        // — before the next floor's run-id wipes them — so the outgoing floor's run-end archive still reads
-        // "kill" (vault-floor P0, run sea/qyvCSXteqC). Config-independent of the auto-archive SUB-toggles
-        // (wipe/boss/idle/stage): those gate only the engine's Evaluate below, not this input build.
-        (_clearedThisRun, _clearedSettlement) = UpdateClearLatch(
-            _clearedThisRun, _clearedSettlement, hasFreshClear, _services.Dungeon.LastSettlement);
+        // The run-scoped clear latch is now tracked UNCONDITIONALLY in TrackClearLatch (OnUpdate),
+        // independent of this master-gated / pending-gated engine path — so a manual-only-mode clear still
+        // latches (owner design: "the latch always tracks"). This is the LIVE verdict (2-arg, no latch)
+        // that drives the engine's HasFreshClear input only; reading the latch here would make it
+        // self-sustaining and re-fire the engine forever.
         var inputs = new AutoArchiveInputs
         {
             NowMs            = _services.CombatSnapshot.ServerNowMs,
@@ -307,7 +323,7 @@ public sealed partial class Plugin
             CombatStartMs    = _combatStartMs,
             LastDamageMs     = _lastDamageMs,
             HasStats         = _stats.Count > 0,
-            HasFreshClear    = hasFreshClear,
+            HasFreshClear    = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill",
             RosterSize       = rosterSize,
             DeadCount        = dead,
             UnknownCount     = unknown,
