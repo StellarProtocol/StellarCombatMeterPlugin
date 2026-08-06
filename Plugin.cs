@@ -104,7 +104,7 @@ public sealed partial class Plugin : IStellarPlugin
     // the FOLLOWING archive (owner: "there's mini dps that left to early of 2,4,6").
     private long _combatStartMs;
     private long _lastDamageMs;
-    private long _lastRunId;   // dungeon run-id latched at combat start (fallback if CurrentRunId reset by archive time)
+    private long _lastRunId;   // THIS run's id, latched at combat start; the archive stamps it (LevelUuid). Reset ONLY on scene change (run end, OnSceneChanged) — NOT by Clear() — so mid-run archives keep the run's own id
     private long _lastTeamId;  // party id (GrpcTeam team_id) latched at combat start; 0 = solo/unformed
     private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
                                             // run-id change (e.g. a fail-out to a new scene) that can precede archive.
@@ -378,7 +378,11 @@ public sealed partial class Plugin : IStellarPlugin
         _combatActive  = false;
         _combatStartMs = 0;
         _lastDamageMs  = 0;
-        _lastRunId     = 0;
+        // _lastRunId is deliberately NOT reset here: it is THIS run's id and must survive every mid-run
+        // archive (manual/boss/idle/stage all call Clear) so each one stamps the run's OWN id. It is
+        // cleared ONLY when the run ends at a scene change (OnSceneChanged), then re-latched at the next
+        // run's combat start (EnsureCombatStarted). Resetting it here would zero the run mid-way and let a
+        // later archive fall back to the live CurrentRunId already advanced to the next floor (the merge).
         _difficultyAtCombatStart = 0;
         _settlementAtCombatStart = null;
         // NOTE: Clear() no longer resets the replay (delta-window decouple, owner design 2026-07-19).
