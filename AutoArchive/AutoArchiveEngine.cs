@@ -44,16 +44,6 @@ internal readonly record struct AutoArchiveInputs
     /// even inside the Min-gap — a fast kill otherwise loses the archive that carries its verdict
     /// (measured: run sea/xHC0xrYY8r). Read ONLY by the run-end-clear branch in <see cref="Evaluate"/>.</summary>
     public bool HasFreshClear { get; init; }
-    /// <summary>The PLUGIN's run-scoped clear LATCH (Plugin._clearedThisRun) — set the tick a clear is
-    /// first observed and held across the framework's next-floor LastOutcome/LastSettlement wipe, unlike
-    /// the momentary <see cref="HasFreshClear"/> (which the wipe flips back to false). Read ONLY by
-    /// <see cref="UpdateLatches"/>'s stage arming: a real transition INTO a run-END stage arms
-    /// <c>_stagePending</c> whenever this is set, REGARDLESS of which stage is user-selected — so a
-    /// multi-floor floor whose run-end transition the ~10 Hz sample catches at Settlement (not the
-    /// default-selected End) still banks AT ITS CLEAR, under its own run id, before the next floor's run
-    /// id latches (vault-floor merge, run sea/ROjEKYLn01). The stage checkboxes then only gate NON-clear
-    /// stage cuts. A partial/fail run leaves this false, so their arming is unchanged.</summary>
-    public bool ClearedThisRun { get; init; }
     /// <summary>DIAGNOSTIC-ONLY (Minor F, review round 2026-07-27): a boss-tagged entity is currently
     /// resolved + alive. No engine decision reads this — <see cref="Evaluate"/> and
     /// <see cref="UpdateLatches"/> consult only <see cref="BossDead"/>. Kept on the snapshot as an
@@ -488,24 +478,9 @@ internal sealed partial class AutoArchiveEngine
             // wrong. Combined with the carry rules, a pre-pull opener simply stays accumulated and
             // lands inside the next real segment.
             bool realTransition = _lastFlowVersion >= 0 && s.FlowStateVersion > _lastFlowVersion;
-            // Only the SELECTED run-end stages arm for a NON-clear run — all three occur every run, and
-            // arming on all of them is what produced the duplicate archives (2026-07-30 deterministic
-            // stage-count fix, preserved for partial/fail runs).
-            //
-            // BUT a LATCHED CLEAR (s.ClearedThisRun) arms on ANY run-end stage, regardless of selection
-            // (config-independent stage-at-clear, run sea/ROjEKYLn01). A multi-floor floor is its own run;
-            // its run-end transition is sampled at whichever run-END state the ~10 Hz poll happens to catch
-            // (a vault floor lands on Settlement — End is skipped), and Settlement isn't selected by
-            // default. Without this, the floor never banks a stage archive and falls back to the late scene
-            // archive, which fires AFTER the next floor's run id latches -> the two floors merge under one
-            // levelUuid. Arming here banks the floor at its clear, under its OWN run id, before the next
-            // latch. The stage checkboxes then only matter for non-clear stage cuts. Path B still requires
-            // HasStats + past Min-gap (Evaluate), the boss-kill path is unaffected (a real boss resets
-            // stats first, so this fires the empty override that the plugin's _clearMarkerBanked guard
-            // skip-empties -> exactly one entry), and the deferrable settle-wait still applies.
-            _stagePending = realTransition
-                && (IsStageSelected(s.CurrentFlowState)
-                    || (s.ClearedThisRun && IsRunEndState(s.CurrentFlowState)));
+            // Only the SELECTED run-end stages arm. All three still occur every run; arming on all of them
+            // is what produced the duplicate archives.
+            _stagePending = realTransition && IsStageSelected(s.CurrentFlowState);
             _lastFlowVersion = s.FlowStateVersion;
         }
         if (!s.InstancedRun || !StageEnabled) _stagePending = false;
