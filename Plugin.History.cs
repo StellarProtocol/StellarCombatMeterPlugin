@@ -43,7 +43,7 @@ public sealed partial class Plugin
         public IReadOnlyList<CapturedLoadout> Loadouts = Array.Empty<CapturedLoadout>();
         public PartyType PartyType;
         public int       MemberCount;
-        public long      LevelUuid;        // snapshotted at archive (IDungeonState.CurrentRunId) for deferred upload
+        public long      LevelUuid;        // run id latched at THIS run's combat start (_lastRunId); live CurrentRunId is a fallback only — a deferred run-end archive sees CurrentRunId already advanced to the NEXT floor
         public long      PartyId;          // party id (GrpcTeam team_id) latched at run-start; 0 = solo/unformed
         public int       PassTime;         // settlement clear-time seconds at archive
         public int       MasterModeScore;  // settlement master-mode MAX/PAR score (master_mode_score) at archive
@@ -259,9 +259,10 @@ public sealed partial class Plugin
     /// the server keys a run's identity on the party (docs/superpowers/specs/
     /// 2026-08-04-run-identity-party-teamkey-design.md), so this id must stay stable for the whole
     /// run. <paramref name="live"/> (a fresh <c>PartySnapshot.PartyId</c> read) is only a fallback for
-    /// the solo-at-combat-start edge case (latch == 0). Deliberately the OPPOSITE preference order
-    /// from <c>LevelUuid</c>'s <c>CurrentRunId != 0 ? CurrentRunId : _lastRunId</c> (live preferred
-    /// there, latched here) — different fields, different failure mode each guards against. 0 =
+    /// the solo-at-combat-start edge case (latch == 0). SAME preference order as <c>LevelUuid</c>
+    /// (both prefer the mid-run LATCHED value; live is only the latch==0 fallback): a DEFERRED
+    /// run-end archive sees live values that have already advanced to the NEXT floor's run id (or a
+    /// changed party), so the value latched during THIS run's combat is the correct one. 0 =
     /// solo/unformed at both.</summary>
     internal static long LatchTeamId(long latched, long live) => latched != 0 ? latched : live;
 
@@ -325,7 +326,7 @@ public sealed partial class Plugin
             Loadouts         = LoadoutSnapshot(),
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
-            LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
+            LevelUuid        = _lastRunId != 0 ? _lastRunId : _services.Dungeon.CurrentRunId,
             PartyId          = LatchTeamId(_lastTeamId, _services.PartySnapshot.PartyId),
             PassTime         = clearSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = clearSettlement?.MasterModeScore ?? 0,
