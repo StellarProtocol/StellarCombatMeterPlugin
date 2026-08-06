@@ -197,15 +197,16 @@ public sealed partial class Plugin
         _autoArchive.BossEnabled   = _prefs.Get(PrefAaBoss, true);
         _autoArchive.IdleEnabled   = _prefs.Get(PrefAaIdle, true);
         _autoArchive.StageEnabled  = _prefs.Get(PrefAaStage, true);
-        // End + Settlement ticked by default (owner 2026-08-06): a VAULT floor clear lands at the
-        // Settlement stage (the ~10 Hz flow sample skips End), so Settlement-on makes vault floors archive
-        // AT the clear out of the box. Still deterministic — normal dungeons fire at End and the Settlement
-        // transition then skip-empties (one entry per run-end; the _clearMarkerBanked once-per-run guard).
+        // Settlement-ONLY ticked by default (owner 2026-08-06, Image #14 — End=off, Settlement=on,
+        // Vote=off): a VAULT floor clear lands at the Settlement stage (the ~10 Hz flow sample skips End),
+        // so Settlement-on makes vault floors archive AT the clear out of the box, and a normal dungeon's
+        // End->Settlement transition archives there too (the always-on scene archive is the run-end
+        // fallback either way, invariant 4). A single armed stage keeps the archive count deterministic.
         // Per-stage prefs are opt-in: an existing install that already SAVED a stage choice keeps it; only
         // new / never-touched installs pick up this default.
         foreach (var stage in AutoArchive.AutoArchiveEngine.SelectableStages)
             _autoArchive.SetStageSelected(stage, _prefs.Get(PrefAaStageState(stage),
-                stage is DungeonFlowState.End or DungeonFlowState.Settlement));
+                stage == DungeonFlowState.Settlement));
         _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 300) * 1000L;   // ship default 300s (owner Image #25, 2026-07-21)
 
         _autoArchive.Enabled             = _prefs.Get(PrefAaEnabled, true);
