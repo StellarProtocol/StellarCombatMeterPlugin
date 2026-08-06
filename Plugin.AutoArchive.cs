@@ -324,6 +324,11 @@ public sealed partial class Plugin
             LastDamageMs     = _lastDamageMs,
             HasStats         = _stats.Count > 0,
             HasFreshClear    = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill",
+            // Run-scoped clear LATCH (survives the framework next-floor wipe, unlike HasFreshClear): lets
+            // the engine arm the run-end stage archive at the clear on ANY run-end transition regardless of
+            // which stage is selected, so a vault floor banks at its clear under its own run id (run
+            // sea/ROjEKYLn01). Tracked unconditionally in TrackClearLatch.
+            ClearedThisRun   = _clearedThisRun,
             RosterSize       = rosterSize,
             DeadCount        = dead,
             UnknownCount     = unknown,
