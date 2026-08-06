@@ -70,6 +70,14 @@ public sealed partial class Plugin
         // A new encounter's combat re-arms the once-per-run clear-marker guard (ShouldBankEmptyClearMarker),
         // so the NEXT run's late clear can bank its own marker.
         _clearMarkerBanked = false;
+        // Reset the run-scoped clear latch HERE too (vault-floor P0, run sea/qyvCSXteqC). This is the ONLY
+        // reset point, and it runs on the NEXT encounter's first combat event — which is strictly AFTER the
+        // outgoing floor's run-end (scene) archive banks (you leave the cleared floor, its OnSceneChanged
+        // archive fires, THEN the next floor's combat starts here). So a cleared floor's latch is still set
+        // when its own archive reads it, and cannot bleed into the next floor that never cleared. Not reset
+        // by Clear() (per-archive) — see the field doc in Plugin.cs.
+        _clearedThisRun = false;
+        _clearedSettlement = null;
         // Latch the dungeon run-id mid-run (valid here) as a fallback: IDungeonState.CurrentRunId can reset
         // to 0 on scene-leave, which may be exactly when the archive fires. ManualArchive uses this if the
         // live id is already 0 at archive time.

@@ -197,10 +197,16 @@ public sealed partial class Plugin
         _autoArchive.BossEnabled   = _prefs.Get(PrefAaBoss, true);
         _autoArchive.IdleEnabled   = _prefs.Get(PrefAaIdle, true);
         _autoArchive.StageEnabled  = _prefs.Get(PrefAaStage, true);
-        // End-only by default: it is the FIRST run-end state and the only one that fired in both measured
-        // runs (2026-07-30). Selecting one stage is what makes the archive count deterministic.
+        // Settlement-ONLY ticked by default (owner 2026-08-06, Image #14 — End=off, Settlement=on,
+        // Vote=off): a VAULT floor clear lands at the Settlement stage (the ~10 Hz flow sample skips End),
+        // so Settlement-on makes vault floors archive AT the clear out of the box, and a normal dungeon's
+        // End->Settlement transition archives there too (the always-on scene archive is the run-end
+        // fallback either way, invariant 4). A single armed stage keeps the archive count deterministic.
+        // Per-stage prefs are opt-in: an existing install that already SAVED a stage choice keeps it; only
+        // new / never-touched installs pick up this default.
         foreach (var stage in AutoArchive.AutoArchiveEngine.SelectableStages)
-            _autoArchive.SetStageSelected(stage, _prefs.Get(PrefAaStageState(stage), stage == DungeonFlowState.End));
+            _autoArchive.SetStageSelected(stage, _prefs.Get(PrefAaStageState(stage),
+                stage == DungeonFlowState.Settlement));
         _autoArchive.IdleTimeoutMs = _prefs.Get(PrefAaIdleTimeoutS, 300) * 1000L;   // ship default 300s (owner Image #25, 2026-07-21)
 
         _autoArchive.Enabled             = _prefs.Get(PrefAaEnabled, true);
@@ -282,6 +288,26 @@ public sealed partial class Plugin
         _                                     => false,   // Manual + SceneChange + BossPhase stay immediate
     };
 
+    // Run-scoped CLEAR latch tracker — called UNCONDITIONALLY every ~10 Hz tick (OnUpdate's throttled
+    // region), OUTSIDE the master auto-archive gate AND the pending-archive gate. Owner design: the latch
+    // "always tracks", so a clear is latched the moment it is observed even in manual-only mode (auto-
+    // archive off) — a manual/scene archive of that run then reads "kill" (vault-floor P0, run
+    // sea/qyvCSXteqC). Cheap: two sticky dungeon-state reads + the pure live verdict + the pure
+    // UpdateClearLatch seam; no allocation. It is safe to run out of a dungeon: the clear signal only
+    // exists inside a genuine run (the framework WIPES LastOutcome/LastSettlement on every new run-id, and
+    // IsFreshKill's baseline rejects a stale carry-over on a same-uuid re-entry), and the flag resets at
+    // the next encounter's combat start — so an out-of-run tick never mislatches. Deliberately NOT gated
+    // on IsInstancedRun(): the clear settlement can land as CurrentRunId drops to 0 on leave-scene, and
+    // gating there would drop the very clear we must capture.
+    private void TrackClearLatch()
+    {
+        var freshSettlement = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart)
+            ? _services.Dungeon.LastSettlement : null;
+        var hasFreshClear = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill";
+        (_clearedThisRun, _clearedSettlement) = UpdateClearLatch(
+            _clearedThisRun, _clearedSettlement, hasFreshClear, _services.Dungeon.LastSettlement);
+    }
+
     private AutoArchiveInputs BuildAutoArchiveInputs()
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
@@ -291,6 +317,11 @@ public sealed partial class Plugin
         // fire the run-end stage archive through the HasStats + cooldown gates on a fast kill (see Evaluate).
         var freshSettlement = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart)
             ? _services.Dungeon.LastSettlement : null;
+        // The run-scoped clear latch is now tracked UNCONDITIONALLY in TrackClearLatch (OnUpdate),
+        // independent of this master-gated / pending-gated engine path — so a manual-only-mode clear still
+        // latches (owner design: "the latch always tracks"). This is the LIVE verdict (2-arg, no latch)
+        // that drives the engine's HasFreshClear input only; reading the latch here would make it
+        // self-sustaining and re-fire the engine forever.
         var inputs = new AutoArchiveInputs
         {
             NowMs            = _services.CombatSnapshot.ServerNowMs,
