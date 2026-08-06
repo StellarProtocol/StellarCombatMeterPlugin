@@ -291,6 +291,15 @@ public sealed partial class Plugin
         // fire the run-end stage archive through the HasStats + cooldown gates on a fast kill (see Evaluate).
         var freshSettlement = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart)
             ? _services.Dungeon.LastSettlement : null;
+        // LIVE verdict (2-arg, no latch — this is what FEEDS the latch; passing the latch here would make
+        // HasFreshClear self-sustaining and re-fire the engine forever).
+        var hasFreshClear = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill";
+        // Latch the clear fact run-scoped WHILE the framework's LastOutcome/LastSettlement are still fresh
+        // — before the next floor's run-id wipes them — so the outgoing floor's run-end archive still reads
+        // "kill" (vault-floor P0, run sea/qyvCSXteqC). Config-independent of the auto-archive SUB-toggles
+        // (wipe/boss/idle/stage): those gate only the engine's Evaluate below, not this input build.
+        (_clearedThisRun, _clearedSettlement) = UpdateClearLatch(
+            _clearedThisRun, _clearedSettlement, hasFreshClear, _services.Dungeon.LastSettlement);
         var inputs = new AutoArchiveInputs
         {
             NowMs            = _services.CombatSnapshot.ServerNowMs,
@@ -298,7 +307,7 @@ public sealed partial class Plugin
             CombatStartMs    = _combatStartMs,
             LastDamageMs     = _lastDamageMs,
             HasStats         = _stats.Count > 0,
-            HasFreshClear    = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome) == "kill",
+            HasFreshClear    = hasFreshClear,
             RosterSize       = rosterSize,
             DeadCount        = dead,
             UnknownCount     = unknown,

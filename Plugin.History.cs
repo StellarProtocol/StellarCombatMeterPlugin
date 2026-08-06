@@ -145,7 +145,11 @@ public sealed partial class Plugin
         {
             var late = _services.Dungeon.LastSettlement;
             var fresh = IsFreshKill(late, _settlementAtCombatStart) ? late : null;
-            var verdict = ResolveVerdict(fresh, _services.Dungeon.LastOutcome);
+            // Drive the marker off the run-scoped clear LATCH (_clearedThisRun), not the momentary live
+            // settlement: a fast single-boss floor in a multi-floor dungeon can have the framework WIPE
+            // LastOutcome/LastSettlement before this empty run-end archive fires (vault-floor P0), which
+            // would otherwise leave the verdict blank and drop the clear as skip-empty.
+            var verdict = ResolveVerdict(fresh, _services.Dungeon.LastOutcome, _clearedThisRun);
             if (!ShouldBankEmptyClearMarker(reason, verdict, _clearMarkerBanked))
             {
                 LogArchiveOutcome(reason, "skip-empty", 0, 0);
@@ -169,7 +173,12 @@ public sealed partial class Plugin
         // fresh kill/settlement tail ALWAYS saves (the destroyed-kill-tail bug this guards). A MANUAL
         // (button/hotkey) archive is never suppressed. carriesFreshResult uses IsFreshKill (baseline-
         // relative — a stale run-level result from an earlier segment does NOT count).
-        var carriesFreshResult = IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart);
+        // The run-scoped clear latch (_clearedThisRun) counts as a fresh result too: after the framework
+        // wipes LastOutcome/LastSettlement (next-floor run-id), IsFreshKill reads false, but a floor that
+        // genuinely cleared this run must NOT have its late clear-marker suppressed as all-zero junk
+        // (vault-floor P0). A run that never cleared leaves the latch false, so junk is unaffected.
+        var carriesFreshResult = _clearedThisRun
+            || IsFreshKill(_services.Dungeon.LastSettlement, _settlementAtCombatStart);
         if (ShouldSuppressAutoArchive(reason, carriesFreshResult, AllRowsZero()))
         {
             // Suppression BINS the entry but is now a total no-op on state (owner ruling 2026-07-19,
@@ -295,6 +304,13 @@ public sealed partial class Plugin
         EnsurePartyMembersTracked(_services.PartyRoster.Members, _stats);
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
+        // Run-scoped clear latch (vault-floor P0, run sea/qyvCSXteqC): the framework can WIPE
+        // LastOutcome/LastSettlement (next floor's run-id) before this always-firing run-end archive banks
+        // the outgoing floor. Prefer the LIVE fresh settlement; fall back to the latched one so the clear's
+        // pass-time/score still ship, and let the latch drive the verdict (freshSettlement stays live so a
+        // never-cleared run is unaffected). _clearedSettlement is only ever set together with
+        // _clearedThisRun, so the fallback can never invent a clear for a partial run.
+        var clearSettlement = freshSettlement ?? _clearedSettlement;
         var entry = new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
@@ -311,12 +327,12 @@ public sealed partial class Plugin
             MemberCount      = _stats.Count,
             LevelUuid        = _services.Dungeon.CurrentRunId != 0 ? _services.Dungeon.CurrentRunId : _lastRunId,
             PartyId          = LatchTeamId(_lastTeamId, _services.PartySnapshot.PartyId),
-            PassTime         = freshSettlement?.PassTimeSeconds ?? 0,
-            MasterModeScore  = freshSettlement?.MasterModeScore ?? 0,
-            TotalScore       = freshSettlement?.TotalScore ?? 0,
+            PassTime         = clearSettlement?.PassTimeSeconds ?? 0,
+            MasterModeScore  = clearSettlement?.MasterModeScore ?? 0,
+            TotalScore       = clearSettlement?.TotalScore ?? 0,
             DifficultyLevel  = Math.Max(_difficultyAtCombatStart, _services.Dungeon.CurrentDifficulty),
             DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
-            Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome),
+            Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome, _clearedThisRun),
             Defeated         = _services.Dungeon.LastDefeatedCount,
             Trigger          = ResolveTriggerTag(reason),
         };
@@ -416,13 +432,39 @@ public sealed partial class Plugin
     // time) or master_mode_score (the max/par, set on clear). A bare total_score does NOT: it is a
     // LIVE progress score the game sends mid-run and on partials too, so treating its mere presence
     // as "kill" false-promoted partial runs (regression from the 686/700 total_score capture).
-    internal static string ResolveVerdict(DungeonSettlementInfo? freshSettlement, DungeonOutcome outcome)
+    //
+    // clearedThisRun is the PLUGIN's run-scoped clear latch (vault-floor P0, run sea/qyvCSXteqC): a
+    // multi-floor floor's clear is observed while IDungeonState.LastOutcome/LastSettlement are still
+    // fresh, but the framework WIPES both when the next floor's run-id latches — BEFORE the outgoing
+    // floor's always-firing run-end (scene) archive banks. When set, the run genuinely cleared earlier
+    // this run, so the verdict is "kill" even though the live outcome/settlement now read blank. It is
+    // reset at the next encounter's combat start, so it never promotes a run that never cleared (default
+    // false keeps the 2-arg live-verdict callers, e.g. HasFreshClear, unchanged). Fail precedence still
+    // wins above it. See UpdateClearLatch + the _clearedThisRun field doc.
+    internal static string ResolveVerdict(
+        DungeonSettlementInfo? freshSettlement, DungeonOutcome outcome, bool clearedThisRun = false)
     {
         if (outcome == DungeonOutcome.Failed) return "fail";
         if (outcome == DungeonOutcome.Success) return "kill";
         if (freshSettlement is { PassTimeSeconds: > 0 } or { MasterModeScore: > 0 }) return "kill";
+        if (clearedThisRun) return "kill";
         return "partial";
     }
+
+    /// <summary>Pure per-tick update of the run-scoped CLEAR latch (vault-floor P0, run sea/qyvCSXteqC).
+    /// Driven every tick from <see cref="BuildAutoArchiveInputs"/> with the LIVE <c>hasFreshClear</c>
+    /// signal: once a fresh clear is seen the latch STICKS <c>true</c> (so it survives the framework's
+    /// next-floor <c>LastOutcome</c>/<c>LastSettlement</c> wipe) and captures the live settlement for its
+    /// pass-time/score — but overwrites the captured settlement ONLY when the live one is non-null, so a
+    /// bare outcome-only clear keeps whatever settlement it already banked. A tick with no fresh clear
+    /// carries the prior latch UNCHANGED; the flag is cleared only by the encounter reset
+    /// (<c>EnsureCombatStarted</c>), never here. Pure so it pins headless.</summary>
+    internal static (bool cleared, DungeonSettlementInfo? settlement) UpdateClearLatch(
+        bool wasCleared, DungeonSettlementInfo? latchedSettlement,
+        bool hasFreshClear, DungeonSettlementInfo? liveSettlement)
+        => hasFreshClear
+            ? (true, liveSettlement ?? latchedSettlement)
+            : (wasCleared, latchedSettlement);
 
     private long ComputeDurationMs()
     {

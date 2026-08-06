@@ -120,6 +120,22 @@ public sealed partial class Plugin : IStellarPlugin
     // starts. Guards against a dungeon exit — which steps through several run-end archives while the clear
     // settlement is still sticky — banking duplicate markers. See ShouldBankEmptyClearMarker.
     private bool _clearMarkerBanked;
+    // Run-scoped CLEAR latch (vault-floor "partial-not-kill" P0, run sea/qyvCSXteqC). A multi-floor
+    // dungeon's floor is its OWN framework run; when the NEXT floor's run-id latches the framework's
+    // SetCurrentRun WIPES IDungeonState.LastOutcome/LastSettlement — and that wipe lands BEFORE the
+    // plugin's always-firing run-end (scene) archive banks the OUTGOING floor. So BuildHistoryEntry read a
+    // blank live latch (freshSettlement null, outcome None) and the freshly-cleared floor archived as
+    // "partial". These two fields latch the clear fact IN THE PLUGIN the tick it is first observed
+    // (BuildAutoArchiveInputs, while the framework latch is still fresh) so it survives that wipe; the
+    // archive verdict reads _clearedThisRun (ResolveVerdict's clearedThisRun arg) and _clearedSettlement
+    // (the pass-time/score fallback). Set via the pure UpdateClearLatch seam; reset — alongside
+    // _clearMarkerBanked — only at the NEXT encounter's combat start (EnsureCombatStarted), which runs
+    // AFTER the outgoing floor's run-end archive has banked, so the clear cannot bleed into the next run.
+    // Deliberately NOT reset by Clear() (which runs on every banked archive, incl. the fast-boss archive
+    // that fires ~1 s before the settlement even lands) — that would erase the latch before the run-end
+    // archive could read it.
+    private bool _clearedThisRun;
+    private DungeonSettlementInfo? _clearedSettlement;
 
     // Persisted UI state.
     private Metric     _metric = Metric.Dps;
