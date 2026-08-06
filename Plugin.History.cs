@@ -100,6 +100,11 @@ public sealed partial class Plugin
         // Auto-archive on scene change. ManualArchive() is the single source of
         // truth for the snapshot-and-clear flow; the Archive button calls it too.
         ManualArchive(AutoArchive.ArchiveReason.SceneChange);
+        // The outgoing run is now archived under its OWN latched id (LevelUuid = _lastRunId) — clear the
+        // latch so a later archive (an empty scene hop, or the next floor before its own combat
+        // re-latches) can't reuse this run's id. The next run re-latches _lastRunId at its combat start
+        // (Plugin.Capture.EnsureCombatStarted).
+        _lastRunId = 0;
 
         // Scene-boundary replay reset — now CONDITIONAL (spec 2026-07-19): the provisional
         // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps
