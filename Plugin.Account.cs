@@ -18,6 +18,16 @@ public sealed partial class Plugin
 {
     private static readonly HttpClient AccountHttp = new() { Timeout = TimeSpan.FromSeconds(15) };
 
+    // The claim endpoint base. Defaults to prod (LogUploader.ApiBase); overridable via the
+    // "stellarlogs.claimApiBase" config key so the owner can point the claim flow at STAGING for
+    // in-game verification before the account backend ships to prod. Contained to the claim path —
+    // the protected upload base (LogUploader/ChunkUploader/PositionUploader) is unchanged.
+    private string ClaimApiBase()
+    {
+        var v = _prefs.Get("stellarlogs.claimApiBase", "");
+        return string.IsNullOrWhiteSpace(v) ? LogUploader.ApiBase : v!.TrimEnd('/');
+    }
+
     private IWindowControl _accountWindow = null!;
     private string _linkCode = string.Empty;
     private string _linkStatus = string.Empty;
@@ -89,7 +99,7 @@ public sealed partial class Plugin
         try
         {
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
-            using var resp = await AccountHttp.PostAsync(LogUploader.ApiBase + "/claim/submit", content).ConfigureAwait(false);
+            using var resp = await AccountHttp.PostAsync(ClaimApiBase() + "/claim/submit", content).ConfigureAwait(false);
             SetLinkStatus(resp.StatusCode switch
             {
                 HttpStatusCode.OK        => "✓ Linked! Refresh the site.",
