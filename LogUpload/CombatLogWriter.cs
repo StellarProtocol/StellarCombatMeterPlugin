@@ -169,6 +169,12 @@ internal static class CombatLogWriter
         w.Name("nonce").Str(u.Nonce);
         // Additive — omitted when unknown (0), matching the server's optional `masterScore`.
         if (u.MasterScore > 0) w.Name("masterScore").Number(u.MasterScore);
+        // Per-install identity + second signature (claim hardening). Omitted when no install key.
+        if (u.PubKey.Length > 0)
+        {
+            w.Name("pubkey").Str(u.PubKey);
+            w.Name("installSig").Str(u.InstallSig);
+        }
         w.EndObject();
     }
 
