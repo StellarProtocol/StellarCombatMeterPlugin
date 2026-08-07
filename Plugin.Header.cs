@@ -65,6 +65,7 @@ public sealed partial class Plugin
             new ButtonElement(() => "Archive", ManualArchiveFromMenu),
             new ButtonElement(() => $"History ({_history.Count})", ToggleHistory, Active: () => _historyWindow.IsShown),
             new ButtonElement(() => "Appearance", ToggleAppearance, Active: () => _settingsWindow.IsShown),
+            new ButtonElement(() => "Link to site", ToggleAccount, Active: () => _accountWindow.IsShown),
             // Settings gear: a BARE clickable icon (no button chrome / fill / border), right-aligned —
             // the StatInspector mini-HUD pattern (CellElement > SelectableElement > ImageElement). An
             // ImageElement carries no button styling, so it reads as a standalone cog like the sibling
