@@ -7,7 +7,7 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.CombatMeter</RootNamespace>
     <AssemblyName>Stellar.CombatMeter</AssemblyName>
-    <Version>1.6.1</Version>
+    <Version>1.7.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
@@ -30,6 +30,15 @@
   <ItemGroup>
     <PackageReference Include="Stellar.PluginContracts" Version="1.9.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="1.5.0" />
+    <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
+         NTE_NOT_SUPPORTED (0x80090029) under Wine/Proton, breaking signed uploads + per-install claims
+         (P2-SIGNING, 2026-06-30). BouncyCastle is pure-managed — works identically on Windows AND Wine.
+         Merged into the single plugin DLL by ILRepack.targets on Release (the deploy copies only that
+         one DLL; the framework loads plugins via Assembly.LoadFile with no sibling-dependency probing). -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.0" />
+    <!-- Build-only: merges BouncyCastle into Stellar.CombatMeter.dll on Release (see ILRepack.targets).
+         PrivateAssets=all so it never flows to the test project's transitive build. -->
+    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34.2" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources/mic.png" LogicalName="Stellar.CombatMeter.mic.png" />
