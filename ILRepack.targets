@@ -12,7 +12,7 @@
       <_BcRef Include="@(ReferencePath)" Condition="'%(Filename)' == 'BouncyCastle.Cryptography'" />
       <_ILRepackLibDir Include="@(ReferencePath->'%(RootDir)%(Directory)'->Distinct())" />
       <_ILRepackLibDir Include="$(OutputPath)" />
-      <ILRepackInput Include="$(OutputPath)$(TargetName)$(TargetExt)" />
+      <ILRepackInput Include="$(TargetPath)" />
       <ILRepackInput Include="@(_BcRef)" />
     </ItemGroup>
     <Error Condition="'@(_BcRef)' == ''"
@@ -24,7 +24,7 @@
         Internalize="true"
         InputAssemblies="@(ILRepackInput)"
         TargetKind="SameAsPrimaryAssembly"
-        OutputFile="$(OutputPath)$(TargetName)$(TargetExt)"
+        OutputFile="$(TargetPath)"
         LibraryPath="@(_ILRepackLibDir)" />
   </Target>
 </Project>
