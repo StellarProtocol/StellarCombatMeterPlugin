@@ -37,6 +37,11 @@ internal static class CanonicalPayload
             eventsHash);
     }
 
+    /// <summary>Canonical claim payload — MUST byte-match verify.ts canonicalClaimPayload:
+    /// <c>claim|{localUid}|{code}|{nonce}</c>. Pinned by ClaimCanonicalTests.</summary>
+    internal static string BuildClaim(long localUid, string code, string nonce)
+        => string.Concat("claim|", localUid.ToString(CultureInfo.InvariantCulture), "|", code, "|", nonce);
+
     private static string Sha256Hex(string input)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));

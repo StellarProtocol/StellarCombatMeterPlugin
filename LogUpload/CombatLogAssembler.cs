@@ -61,7 +61,8 @@ internal sealed class CombatLogAssembler
         string? signerKey,
         bool truncatedEvents,
         int snapshotBossConfigId = 0,
-        int eventChunks = 0)
+        int eventChunks = 0,
+        InstallKey? installKey = null)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
@@ -117,9 +118,10 @@ internal sealed class CombatLogAssembler
         // separately via sequential chunk POSTs once this summary lands (see ChunkUploader).
         var logUnsigned = new CombatLog(1, header, actors, Array.Empty<CombatLogEvent>(), derived);
 
-        // --- Signature ---
+        // --- Signature (dual-sign: shared key + per-install key over the SAME canonical) ---
         var sig = ComputeSig(logUnsigned, signerKey);
-        var uploaderSigned = new Uploader(localUid, sig, nonce, masterScore);
+        var (pubKey, installSig) = ComputeInstallSig(logUnsigned, installKey);
+        var uploaderSigned = new Uploader(localUid, sig, nonce, masterScore, pubKey, installSig);
         var headerSigned   = header with { Uploader = uploaderSigned };
         return logUnsigned with { Header = headerSigned };
     }
@@ -218,6 +220,24 @@ internal sealed class CombatLogAssembler
         var bossEntity = new EntityId(bossId.Value);
         var bossInfo   = _services.GameData.World.GetMonsterByEntity(bossEntity);
         return bossInfo.HasValue ? bossInfo.Value.Id : 0;
+    }
+
+    /// <summary>Second signature over the SAME canonical payload as <see cref="ComputeSig"/>, using
+    /// the per-install key. Returns (pubkey SPKI base64, install sig base64); ("","") when no install
+    /// key. Kept separate from ComputeSig so the existing shared-key path is byte-for-byte unchanged.</summary>
+    private static (string PubKey, string InstallSig) ComputeInstallSig(CombatLog log, InstallKey? installKey)
+    {
+        if (installKey == null) return ("", "");
+        try
+        {
+            var payload = CanonicalPayload.Build(log);
+            return (installKey.PubKeySpkiBase64, installKey.SignInstall(payload));
+        }
+        catch
+        {
+            // Never let per-install signing break an upload — the shared-key sig still stands.
+            return ("", "");
+        }
     }
 
     private static string ComputeSig(CombatLog log, string? signerKey)
