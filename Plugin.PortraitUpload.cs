@@ -13,8 +13,7 @@ namespace Stellar.CombatMeter;
 
 public sealed partial class Plugin
 {
-    private const string PrefPortraitStamps = "portraits.sentStamps";   // "uid:unixMs,uid:unixMs,…"
-    private const long PortraitTtlMs = 24L * 3_600_000L;
+    private const string PrefPortraitHashes = "portraits.sentHashes";   // "uid:hexhash,uid:hexhash,…"
     private const int PortraitMaxTextLen = 64;                          // server rejects name/guild > 64 chars
     private const int PortraitMaxUrlLen = 1024;                         // server rejects urls > 1024 chars
 
@@ -23,8 +22,8 @@ public sealed partial class Plugin
     private const string PrefMasterScoreLastSentPrefix = "masterScore.lastSent.";  // + self uid
     private const int MasterScoreNeverSent = -1;                                    // sentinel: no persisted baseline yet
 
-    private Dictionary<long, long>? _portraitStamps;                     // loaded lazily from prefs
-    private readonly ConcurrentQueue<(List<long> Uids, long SentAtMs)> _portraitAcks = new();
+    private Dictionary<long, string>? _portraitHashes;                  // uid -> last successfully-sent ChangeHash
+    private readonly ConcurrentQueue<Dictionary<long, string>> _portraitAcks = new();
     private bool _portraitEmptyLogged;                                   // one-shot breadcrumb, see LogNothingToReportOnce
 
     /// <summary>Called from AssembleAndUpload right after the log upload is fired (main thread).
@@ -35,33 +34,40 @@ public sealed partial class Plugin
         {
             if (!RegionKnownOrWarn()) return;                            // Task 12: withhold — region rides the batch body
             var members = _services.PartyRoster.Members;                 // empty on solo/NPC runs — self is covered below
-            _portraitStamps ??= LoadPortraitStamps();
+            _portraitHashes ??= LoadPortraitHashes();
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-            var entries = new List<PortraitEntry>(members.Count + 1);
-            var uids = new List<long>(members.Count + 1);
+            var candidates = new List<PortraitEntry>(members.Count + 1);
             foreach (var m in members)
             {
                 var entry = BuildPortraitEntry(m, now);
-                if (entry is null) continue;
-                entries.Add(entry);
-                uids.Add(entry.Uid);
-                if (entries.Count == 24) break;                          // server cap
+                if (entry is not null) candidates.Add(entry);
+                if (candidates.Count == 24) break;
             }
-            AppendSelfIfMissing(entries, uids, now);
+            AppendSelfIfMissing(candidates, candidates.ConvertAll(e => e.Uid), now);
+
+            // Include only members whose content CHANGED since the last successful send.
+            var entries = new List<PortraitEntry>(candidates.Count);
+            var sentHashes = new Dictionary<long, string>(candidates.Count);
+            foreach (var e in candidates)
+            {
+                var hash = PortraitReport.ChangeHash(e);
+                if (_portraitHashes.TryGetValue(e.Uid, out var prev) && prev == hash) continue;
+                entries.Add(e);
+                sentHashes[e.Uid] = hash;
+            }
             if (entries.Count == 0) { LogNothingToReportOnce(); return; }
 
-            var localUid = LocalUidForUpload();                          // same source as CombatLogAssembler's Uploader.LocalUid
+            var localUid = LocalUidForUpload();
             var nonce = Guid.NewGuid().ToString("N");
             var entriesJson = PortraitReport.WriteEntries(entries);
             var sig = SignPortraits(SignerKey, PortraitReport.CanonicalPayload(localUid, nonce, entriesJson));
             var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson, _services.GameEnvironment.RegionCode);
 
-            _services.Log.Info($"[CombatMeter.Portraits] Reporting {entries.Count} roster portrait(s).");
-            var sentAt = now;
+            _services.Log.Info($"[CombatMeter.Portraits] Reporting {entries.Count} changed portrait(s).");
             PortraitUploader.UploadFireAndForget(body, (ok, status) =>
             {
-                if (ok) _portraitAcks.Enqueue((uids, sentAt));           // stamp on the main thread later
+                if (ok) _portraitAcks.Enqueue(sentHashes);   // persist hashes on the main thread later
                 else _services.Log.Warning($"[CombatMeter.Portraits] Report FAILED (HTTP {status}).");
             });
         }
@@ -79,7 +85,6 @@ public sealed partial class Plugin
         // Entity uid ((charId << 16) | 640) — the key the StellarLogs site/DO reads for character
         // pages (same keying as the combat-log actor map). Stamps use the same uid we send.
         var uid = m.EntityId.Value;
-        if (_portraitStamps!.TryGetValue(uid, out var t) && nowMs - t < PortraitTtlMs) return null;
 
         // Enrich from the social-snapshot cache when available (always populated for self
         // after the ID card was opened; opportunistic for others).
@@ -130,7 +135,6 @@ public sealed partial class Plugin
         // (charId << 16) | 640 reconstruction from the snapshot is the equivalent fallback.
         var uid = selfEntity.Value != 0 ? selfEntity.Value : (snap.CharId << 16) | 640;
         if (uid == 0) return null;
-        if (_portraitStamps!.TryGetValue(uid, out var t) && nowMs - t < PortraitTtlMs) return null;
 
         var profileUrl  = PickUrl(snap.ProfileUrl, null);
         var halfbodyUrl = PickUrl(snap.HalfBodyUrl, null);
@@ -167,13 +171,13 @@ public sealed partial class Plugin
     private void DrainPortraitAcks()
     {
         var dirty = false;
-        while (_portraitAcks.TryDequeue(out var ack))
+        while (_portraitAcks.TryDequeue(out var sent))
         {
-            _portraitStamps ??= LoadPortraitStamps();
-            foreach (var uid in ack.Uids) _portraitStamps[uid] = ack.SentAtMs;
+            _portraitHashes ??= LoadPortraitHashes();
+            foreach (var kv in sent) _portraitHashes[kv.Key] = kv.Value;
             dirty = true;
         }
-        if (dirty) SavePortraitStamps();
+        if (dirty) SavePortraitHashes();
     }
 
     /// <summary>Same localUid source as <c>CombatLogAssembler.Assemble</c>'s <c>Uploader.LocalUid</c>.</summary>
@@ -210,32 +214,29 @@ public sealed partial class Plugin
         }
     }
 
-    private Dictionary<long, long> LoadPortraitStamps()
+    private Dictionary<long, string> LoadPortraitHashes()
     {
-        var raw = _prefs.Get(PrefPortraitStamps, "") ?? "";
-        var map = new Dictionary<long, long>();
+        var raw = _prefs.Get(PrefPortraitHashes, "") ?? "";
+        var map = new Dictionary<long, string>();
         foreach (var pair in raw.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
             var i = pair.IndexOf(':');
-            if (i > 0
-                && long.TryParse(pair.AsSpan(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var uid)
-                && long.TryParse(pair.AsSpan(i + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms))
-                map[uid] = ms;
+            if (i > 0 && long.TryParse(pair.AsSpan(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var uid))
+                map[uid] = pair[(i + 1)..];
         }
         return map;
     }
 
-    private void SavePortraitStamps()
+    private void SavePortraitHashes()
     {
-        if (_portraitStamps is null) return;
-        var sb = new StringBuilder(_portraitStamps.Count * 24);
-        foreach (var kv in _portraitStamps)
+        if (_portraitHashes is null) return;
+        var sb = new StringBuilder(_portraitHashes.Count * 72);
+        foreach (var kv in _portraitHashes)
         {
             if (sb.Length > 0) sb.Append(',');
-            sb.Append(kv.Key.ToString(CultureInfo.InvariantCulture)).Append(':')
-              .Append(kv.Value.ToString(CultureInfo.InvariantCulture));
+            sb.Append(kv.Key.ToString(CultureInfo.InvariantCulture)).Append(':').Append(kv.Value);
         }
-        _prefs.Set(PrefPortraitStamps, sb.ToString());
+        _prefs.Set(PrefPortraitHashes, sb.ToString());
         _prefs.Save();
     }
 
