@@ -107,6 +107,13 @@ public sealed partial class Plugin
     /// </summary>
     private string? SignerKey => _prefs.Get(PrefSignerKey, "");
 
+    // Per-install identity for claim hardening — generated locally + persisted on first use, then
+    // attached (pubkey + second signature) to every upload so the site can learn which install
+    // genuinely plays each character. Lazy singleton (process-lifetime), like LogAssembler.
+    private InstallKey? _installKey;
+    private InstallKey InstallKeyInstance
+        => _installKey ??= InstallKey.LoadOrCreate(k => _prefs.Get(k, ""), (k, v) => _prefs.Set(k, v));
+
     // -----------------------------------------------------------------------
     // Capture: called from OnCombatEvent (Plugin.Capture.cs) for every event
     // -----------------------------------------------------------------------
@@ -321,7 +328,7 @@ public sealed partial class Plugin
 
             // Pass the capture-time boss config id so the assembler doesn't re-resolve from
             // wiped entity caches (ResetEntities fires before archive on scene change).
-            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count);
+            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count, InstallKeyInstance);
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
@@ -460,7 +467,7 @@ public sealed partial class Plugin
             var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
             var events = _logBuffer.Flush();
             var chunks = EventChunker.Chunk(events);
-            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, _bossMonsterInfo?.Id ?? 0, chunks.Count);
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, _bossMonsterInfo?.Id ?? 0, chunks.Count, InstallKeyInstance);
             PersistReUpload(entry, log, chunks, replayDoc);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +

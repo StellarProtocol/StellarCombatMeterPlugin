@@ -82,7 +82,12 @@ internal sealed record Encounter(
 // (the server folds it into the char identity, decoupled from the throttled portraits feed).
 // Additive — 0/omitted when unknown. NOT covered by the upload signature (CanonicalPayload uses
 // only LocalUid + Nonce), so adding it never affects sig verification.
-internal sealed record Uploader(long LocalUid, string Sig, string Nonce, int MasterScore = 0);
+// PubKey/InstallSig: the per-install identity (SPKI base64) + a SECOND signature over the SAME
+// canonical payload as Sig, so the server can learn which install genuinely plays each uid and
+// harden character claims (docs/superpowers/specs/2026-08-07-claim-key-hardening-design.md).
+// Additive/defaulted — omitted when no install key; NOT part of the canonical, so it never affects
+// the existing Sig verification (same safety as MasterScore above).
+internal sealed record Uploader(long LocalUid, string Sig, string Nonce, int MasterScore = 0, string PubKey = "", string InstallSig = "");
 
 internal sealed record Actor(
     string Name, string Kind, long TeamId, bool IsLocal, long? Uid,
