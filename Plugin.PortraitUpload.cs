@@ -13,7 +13,7 @@ namespace Stellar.CombatMeter;
 
 public sealed partial class Plugin
 {
-    private const string PrefPortraitHashes = "portraits.sentHashes";   // "uid:hexhash,uid:hexhash,…"
+    private const string PrefPortraitHashes = "portraits.sentHashes.v2";   // "uid:hexhash,uid:hexhash,…"
     private const int PortraitMaxTextLen = 64;                          // server rejects name/guild > 64 chars
     private const int PortraitMaxUrlLen = 1024;                         // server rejects urls > 1024 chars
 
@@ -65,10 +65,13 @@ public sealed partial class Plugin
             var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson, _services.GameEnvironment.RegionCode);
 
             _services.Log.Info($"[CombatMeter.Portraits] Reporting {entries.Count} changed portrait(s).");
-            PortraitUploader.UploadFireAndForget(body, (ok, status) =>
+            PortraitUploader.UploadFireAndForget(body, (ok, status, respBody) =>
             {
-                if (ok) _portraitAcks.Enqueue(sentHashes);   // persist hashes on the main thread later
-                else _services.Log.Warning($"[CombatMeter.Portraits] Report FAILED (HTTP {status}).");
+                if (!ok) { _services.Log.Warning($"[CombatMeter.Portraits] Report FAILED (HTTP {status})."); return; }
+                var stored = PortraitResultParser.FullyStoredUids(respBody);
+                var toStamp = new Dictionary<long, string>(sentHashes.Count);
+                foreach (var kv in sentHashes) if (stored.Contains(kv.Key)) toStamp[kv.Key] = kv.Value;
+                if (toStamp.Count > 0) _portraitAcks.Enqueue(toStamp);   // members with a failed image are NOT stamped → retried
             });
         }
         catch (Exception ex)
@@ -321,7 +324,7 @@ public sealed partial class Plugin
         var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson, _services.GameEnvironment.RegionCode);
 
         _services.Log.Info($"[CombatMeter.MasterScore] Sending refreshed master score {score} for self.");
-        PortraitUploader.UploadFireAndForget(body, (ok, status) =>
+        PortraitUploader.UploadFireAndForget(body, (ok, status, _) =>
         {
             if (!ok) _services.Log.Warning($"[CombatMeter.MasterScore] Send FAILED (HTTP {status}).");
         });
