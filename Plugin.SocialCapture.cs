@@ -20,6 +20,7 @@ public sealed partial class Plugin
     {
         _services.ClientState.Login   += OnSocialLogin;
         _services.PartyEvents.MemberJoined += OnSocialMemberJoined;
+        _services.PartyEvents.MemberUpdated += OnSocialMemberUpdated;
         // Catch-up: if we loaded while already in a party, refresh everyone once (drained a few/frame).
         foreach (var m in _services.PartyRoster.Members) _socialCatchup.Enqueue(m.EntityId);
         // Self may already be in-world at load time.
@@ -31,6 +32,7 @@ public sealed partial class Plugin
     {
         _services.ClientState.Login   -= OnSocialLogin;
         _services.PartyEvents.MemberJoined -= OnSocialMemberJoined;
+        _services.PartyEvents.MemberUpdated -= OnSocialMemberUpdated;
     }
 
     private void OnSocialLogin()
@@ -41,6 +43,8 @@ public sealed partial class Plugin
     }
 
     private void OnSocialMemberJoined(PartyMember m) => RequestSocialRefresh(m.EntityId, isUpdate: false);
+
+    private void OnSocialMemberUpdated(PartyMember m) => RequestSocialRefresh(m.EntityId, isUpdate: true);
 
     // Drained from the existing per-frame OnUpdate — at most 2 refreshes per frame to avoid a Lua spike.
     private void DrainSocialCatchup()
@@ -56,6 +60,16 @@ public sealed partial class Plugin
         var uid = e.Value;
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (_socialReqAtMs.TryGetValue(uid, out var last) && now - last < SocialReqFloorMs) return;
+        // MemberUpdated fires often; only re-capture when we don't yet have a usable snapshot,
+        // or it's been a while since the last refresh for this uid (catch level/portrait/guild changes
+        // without churning the Lua VM during busy parties / spam-clears).
+        const long updateStaleMs = 5 * 60_000;
+        if (isUpdate && _socialReqAtMs.TryGetValue(uid, out var lastReq))
+        {
+            var snap = _services.EntityDetail.GetSocialSnapshot(e);
+            var haveUrls = snap is not null && (!string.IsNullOrEmpty(snap.ProfileUrl) || !string.IsNullOrEmpty(snap.HalfBodyUrl));
+            if (haveUrls && now - lastReq < updateStaleMs) return;
+        }
         _socialReqAtMs[uid] = now;
         try { _services.EntityDetail.RefreshSocialSnapshot(e); }
         catch (Exception ex) { _services.Log.Warning($"[CombatMeter.Social] refresh threw: {ex.Message}"); }
