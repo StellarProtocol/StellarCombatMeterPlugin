@@ -1,5 +1,5 @@
 // Portrait batch reporting: after each run upload, send roster avatar URLs + identity
-// to StellarLogs, throttled to once per 24 h per character (keyed by entity uid).
+// to StellarLogs. Each member's profile is uploaded only when its content changes (content-hash gate), keyed by entity uid.
 
 using System;
 using System.Collections.Concurrent;
@@ -27,7 +27,7 @@ public sealed partial class Plugin
     private bool _portraitEmptyLogged;                                   // one-shot breadcrumb, see LogNothingToReportOnce
 
     /// <summary>Called from AssembleAndUpload right after the log upload is fired (main thread).
-    /// Collects roster members whose stamp is stale and fires one signed batch POST. Never throws.</summary>
+    /// Collects roster members whose profile content changed since the last successful send and fires one signed batch POST. Never throws.</summary>
     private void MaybeReportPortraits()
     {
         try
@@ -78,7 +78,7 @@ public sealed partial class Plugin
     }
 
     /// <summary>Builds one member's batch entry, or null when the member is skipped
-    /// (no charId, throttle stamp still fresh, or no usable portrait URL yet).</summary>
+    /// (no charId or no usable portrait URL yet).</summary>
     private PortraitEntry? BuildPortraitEntry(PartyMember m, long nowMs)
     {
         if (m.CharId == 0) return null;
@@ -112,7 +112,7 @@ public sealed partial class Plugin
 
     /// <summary>Ensures the LOCAL player is in the batch even when the roster is empty (solo/NPC
     /// runs) or missed self. Built from the social-snapshot cache alone; no-op when the snapshot
-    /// is absent, self is already batched (by uid), the stamp is fresh, or the batch is full.</summary>
+    /// is absent, self is already batched (by uid), or the batch is full.</summary>
     private void AppendSelfIfMissing(List<PortraitEntry> entries, List<long> uids, long nowMs)
     {
         if (entries.Count >= 24) return;                                 // server cap
@@ -167,7 +167,7 @@ public sealed partial class Plugin
     }
 
     /// <summary>Drain acks on the main thread (call from the plugin's existing per-frame poll,
-    /// next to the other cross-thread drains). Persists stamps only after a 2xx.</summary>
+    /// next to the other cross-thread drains). Persists hashes only after a 2xx.</summary>
     private void DrainPortraitAcks()
     {
         var dirty = false;
@@ -244,7 +244,7 @@ public sealed partial class Plugin
     /// is fired (main thread), gated on <see cref="MasterScoreRefresh.IsMasterModeRun"/>. ALWAYS
     /// refreshes the account master score, then pushes it via a self-only, identity-only batch —
     /// completely decoupled from the throttled roster portrait feed above (does NOT read/write
-    /// <see cref="_portraitStamps"/>). Fire-and-forget; never throws into the caller.
+    /// <see cref="_portraitHashes"/>). Fire-and-forget; never throws into the caller.
     ///
     /// Send decision: compares the freshly-fetched score against the last score we actually SENT
     /// to the server (persisted per self-uid via <c>_prefs</c>) — NOT the volatile in-memory
