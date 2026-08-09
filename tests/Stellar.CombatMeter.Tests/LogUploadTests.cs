@@ -23,6 +23,11 @@ public sealed class LogUploadTests
         public void Set<T>(string key, T value) => _store[key] = value;
         public void Save() { }
         public void SaveQuiet() { }
+        public void RemoveByPrefix(string prefix)
+        {
+            foreach (var key in _store.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+                _store.Remove(key);
+        }
     }
 
     // Still load-bearing after the per-content upload policy replaced the global flag: this key is now

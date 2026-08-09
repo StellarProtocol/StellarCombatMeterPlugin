@@ -357,8 +357,10 @@ public sealed partial class Plugin
         // plus a couple of table rows fit at 480, so even at the floor the chart → navigator → table stay
         // stacked with the table scrolling. The real fix is the Fill:true table scroll + the chart-root minHeight
         // floor (WindowBuilder.LineChart) — this just stops a degenerate drag-to-nothing.
-        { StartVisible = false, HideUntilInWorld = true, Closable = true, Draggable = true,
-          Resizable = true, MinWidth = 600f, MinHeight = 480f, MaxWidth = 1200f, MaxHeight = 1000f },
+        { StartVisible = false, Closable = true, Draggable = true,
+          Resizable = true, MinWidth = 600f, MinHeight = 480f, MaxWidth = 1200f, MaxHeight = 1000f,
+          ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                            && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
         BuildHistoryRoot(),
         OnClose: CloseHistory));
 

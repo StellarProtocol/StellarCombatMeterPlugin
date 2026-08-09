@@ -33,7 +33,9 @@ public sealed partial class Plugin
                 DefaultRect: new WindowRect(100f, 100f, RowMenuW, 120f),
                 Category:    WindowCategory.HUD,
                 Style:       WindowPanelStyle.Borderless)
-            { StartVisible = false, HideUntilInWorld = true, DismissOnOutsideClick = true },
+            { StartVisible = false, DismissOnOutsideClick = true,
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
             BuildRowMenuRoot(),
             OnClose: CloseRowMenu));   // framework invokes this on Escape / click-outside (per-frame ticker)
 
@@ -59,7 +61,7 @@ public sealed partial class Plugin
     {
         _rowMenuItems.Clear();
         _rowMenuItems.Add(new EntityMenuItem("Invite to Party",
-            () => CallLua("pcall(function() (Z.UIMgr):OpenView('team_invite_popup') end)")));
+            () => _services.Lua.DoString("pcall(function() (Z.UIMgr):OpenView('team_invite_popup') end)")));
         _rowMenuName = "Party";
         ShowRowMenuAtCursor();
     }

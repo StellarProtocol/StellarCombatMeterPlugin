@@ -164,8 +164,10 @@ public sealed partial class Plugin
             DefaultRect: new WindowRect(1040f, 120f, 460f, 520f),
             Category:    WindowCategory.Tools,
             Style:       WindowPanelStyle.GlassMenu)
-        { StartVisible = false, HideUntilInWorld = true, Closable = true, Draggable = true,
-          Resizable = true, MinWidth = 360f, MinHeight = 300f, MaxWidth = 900f, MaxHeight = 1000f },
+        { StartVisible = false, Closable = true, Draggable = true,
+          Resizable = true, MinWidth = 360f, MinHeight = 300f, MaxWidth = 900f, MaxHeight = 1000f,
+          ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                            && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
         BuildSnapshotRoot(),
         OnClose: CloseSnapshot));
 

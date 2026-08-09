@@ -45,7 +45,7 @@ public sealed partial class Plugin
             isVisible: e => _viewMode == ViewMode.PartyFocus
                          && e == _services.CombatSnapshot.LocalEntityId
                          && !PartyExists,
-            onClick: _ => CallLua("pcall(function() (Z.CoroUtil).create_coro_xpcall(function() local vm=(Z.VMMgr).GetVM('team') if vm then local cs=(Z.CancelSource).Rent() vm.AsyncCreatTeam(1000,cs:CreateToken()) end end,function() end)() end)"));
+            onClick: _ => _services.Lua.DoString("pcall(function() (Z.CoroUtil).create_coro_xpcall(function() local vm=(Z.VMMgr).GetVM('team') if vm then local cs=(Z.CancelSource).Rent() vm.AsyncCreatTeam(1000,cs:CreateToken()) end end,function() end)() end)"));
 
         _leavePartyReg = _services.EntityContextMenu.Register(
             "Leave Party",

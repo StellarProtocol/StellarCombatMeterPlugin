@@ -43,7 +43,9 @@ public sealed partial class Plugin
                 DefaultRect: new WindowRect(900f, 120f, 380f, 620f),
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
-            { StartVisible = false, HideUntilInWorld = true, Closable = true, Draggable = true },
+            { StartVisible = false, Closable = true, Draggable = true,
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
             BuildAutoArchiveSettingsRoot(),
             OnClose: () => _archiveSettingsWindow.SetVisible(false)));
 

@@ -221,9 +221,13 @@ public sealed partial class Plugin : IStellarPlugin
                 DefaultRect: startRect,
                 Category:    WindowCategory.HUD,
                 Style:       WindowPanelStyle.Borderless)
-            { AutoHideBehindGameMenus = true, HideUntilInWorld = true, Draggable = true, EditModeDragOnly = true,
+            { Draggable = true, EditModeDragOnly = true,
               Resizable = true, MinWidth = 500f, MinHeight = 160f, MaxWidth = 760f, MaxHeight = 1000f,
-              ZOrder = -100 },   // background layer: every other Stellar window draws over the meter
+              ZOrder = -100,   // background layer: every other Stellar window draws over the meter
+              // In-world meter HUD: draw only in the World phase, and hide behind blocking overlays (old
+              // AutoHideBehindGameMenus == Blocking) and behind any menu incl. the line-selector (AnyMenu).
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & (GameUIState.Blocking | GameUIState.AnyMenu)) == 0 },
             BuildMainRoot()));
 
         _historyWindow = RegisterHistoryWindow();
