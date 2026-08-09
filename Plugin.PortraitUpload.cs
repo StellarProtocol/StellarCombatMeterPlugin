@@ -1,7 +1,8 @@
 // Portrait batch reporting: after each run upload, send roster avatar URLs + identity
-// to StellarLogs, throttled to once per 24 h per character (keyed by entity uid).
+// to StellarLogs. Each member's profile is uploaded only when its content changes (content-hash gate), keyed by entity uid.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -12,8 +13,7 @@ namespace Stellar.CombatMeter;
 
 public sealed partial class Plugin
 {
-    private const string PrefPortraitStamps = "portraits.sentStamps";   // "uid:unixMs,uid:unixMs,…"
-    private const long PortraitTtlMs = 24L * 3_600_000L;
+    private const string PrefPortraitHashes = "portraits.sentHashes.v2";   // "uid:hexhash,uid:hexhash,…"
     private const int PortraitMaxTextLen = 64;                          // server rejects name/guild > 64 chars
     private const int PortraitMaxUrlLen = 1024;                         // server rejects urls > 1024 chars
 
@@ -22,47 +22,56 @@ public sealed partial class Plugin
     private const string PrefMasterScoreLastSentPrefix = "masterScore.lastSent.";  // + self uid
     private const int MasterScoreNeverSent = -1;                                    // sentinel: no persisted baseline yet
 
-    private Dictionary<long, long>? _portraitStamps;                     // loaded lazily from prefs
+    private Dictionary<long, string>? _portraitHashes;                  // uid -> last successfully-sent ChangeHash
+    private readonly ConcurrentQueue<Dictionary<long, string>> _portraitAcks = new();
     private bool _portraitEmptyLogged;                                   // one-shot breadcrumb, see LogNothingToReportOnce
 
     /// <summary>Called from AssembleAndUpload right after the log upload is fired (main thread).
-    /// Collects roster members whose stamp is stale and fires one signed batch POST. Never throws.</summary>
+    /// Collects roster members whose profile content changed since the last successful send and fires one signed batch POST. Never throws.</summary>
     private void MaybeReportPortraits()
     {
         try
         {
             if (!RegionKnownOrWarn()) return;                            // Task 12: withhold — region rides the batch body
             var members = _services.PartyRoster.Members;                 // empty on solo/NPC runs — self is covered below
-            _portraitStamps ??= LoadPortraitStamps();
+            _portraitHashes ??= LoadPortraitHashes();
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-            var entries = new List<PortraitEntry>(members.Count + 1);
-            var uids = new List<long>(members.Count + 1);
+            var candidates = new List<PortraitEntry>(members.Count + 1);
             foreach (var m in members)
             {
                 var entry = BuildPortraitEntry(m, now);
-                if (entry is null) continue;
-                entries.Add(entry);
-                uids.Add(entry.Uid);
-                if (entries.Count == 24) break;                          // server cap
+                if (entry is not null) candidates.Add(entry);
+                if (candidates.Count == 24) break;
             }
-            AppendSelfIfMissing(entries, uids, now);
+            AppendSelfIfMissing(candidates, candidates.ConvertAll(e => e.Uid), now);
+
+            // Include only members whose content CHANGED since the last successful send.
+            var entries = new List<PortraitEntry>(candidates.Count);
+            var sentHashes = new Dictionary<long, string>(candidates.Count);
+            foreach (var e in candidates)
+            {
+                var hash = PortraitReport.ChangeHash(e);
+                if (_portraitHashes.TryGetValue(e.Uid, out var prev) && prev == hash) continue;
+                entries.Add(e);
+                sentHashes[e.Uid] = hash;
+            }
             if (entries.Count == 0) { LogNothingToReportOnce(); return; }
 
-            var localUid = LocalUidForUpload();                          // same source as CombatLogAssembler's Uploader.LocalUid
+            var localUid = LocalUidForUpload();
             var nonce = Guid.NewGuid().ToString("N");
             var entriesJson = PortraitReport.WriteEntries(entries);
             var sig = SignPortraits(SignerKey, PortraitReport.CanonicalPayload(localUid, nonce, entriesJson));
             var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson, _services.GameEnvironment.RegionCode);
 
-            _services.Log.Info($"[CombatMeter.Portraits] Reporting {entries.Count} roster portrait(s).");
-            var sentAt = now;
-            PortraitUploader.UploadFireAndForget(body, (ok, status) =>
+            _services.Log.Info($"[CombatMeter.Portraits] Reporting {entries.Count} changed portrait(s).");
+            PortraitUploader.UploadFireAndForget(body, (ok, status, respBody) =>
             {
-                // Upload callback runs off the main thread — marshal the stamp+persist back onto the
-                // plugin's next Update tick (framework Post) before it touches _portraitStamps/_prefs.
-                if (ok) _services.Framework.Post(() => StampPortraitSent(uids, sentAt));
-                else _services.Log.Warning($"[CombatMeter.Portraits] Report FAILED (HTTP {status}).");
+                if (!ok) { _services.Log.Warning($"[CombatMeter.Portraits] Report FAILED (HTTP {status})."); return; }
+                var stored = PortraitResultParser.FullyStoredUids(respBody);
+                var toStamp = new Dictionary<long, string>(sentHashes.Count);
+                foreach (var kv in sentHashes) if (stored.Contains(kv.Key)) toStamp[kv.Key] = kv.Value;
+                if (toStamp.Count > 0) _portraitAcks.Enqueue(toStamp);   // members with a failed image are NOT stamped → retried
             });
         }
         catch (Exception ex)
@@ -72,14 +81,13 @@ public sealed partial class Plugin
     }
 
     /// <summary>Builds one member's batch entry, or null when the member is skipped
-    /// (no charId, throttle stamp still fresh, or no usable portrait URL yet).</summary>
+    /// (no charId or no usable portrait URL yet).</summary>
     private PortraitEntry? BuildPortraitEntry(PartyMember m, long nowMs)
     {
         if (m.CharId == 0) return null;
         // Entity uid ((charId << 16) | 640) — the key the StellarLogs site/DO reads for character
         // pages (same keying as the combat-log actor map). Stamps use the same uid we send.
         var uid = m.EntityId.Value;
-        if (_portraitStamps!.TryGetValue(uid, out var t) && nowMs - t < PortraitTtlMs) return null;
 
         // Enrich from the social-snapshot cache when available (always populated for self
         // after the ID card was opened; opportunistic for others).
@@ -107,7 +115,7 @@ public sealed partial class Plugin
 
     /// <summary>Ensures the LOCAL player is in the batch even when the roster is empty (solo/NPC
     /// runs) or missed self. Built from the social-snapshot cache alone; no-op when the snapshot
-    /// is absent, self is already batched (by uid), the stamp is fresh, or the batch is full.</summary>
+    /// is absent, self is already batched (by uid), or the batch is full.</summary>
     private void AppendSelfIfMissing(List<PortraitEntry> entries, List<long> uids, long nowMs)
     {
         if (entries.Count >= 24) return;                                 // server cap
@@ -130,7 +138,6 @@ public sealed partial class Plugin
         // (charId << 16) | 640 reconstruction from the snapshot is the equivalent fallback.
         var uid = selfEntity.Value != 0 ? selfEntity.Value : (snap.CharId << 16) | 640;
         if (uid == 0) return null;
-        if (_portraitStamps!.TryGetValue(uid, out var t) && nowMs - t < PortraitTtlMs) return null;
 
         var profileUrl  = PickUrl(snap.ProfileUrl, null);
         var halfbodyUrl = PickUrl(snap.HalfBodyUrl, null);
@@ -162,13 +169,18 @@ public sealed partial class Plugin
         _services.Log.Info("[CombatMeter.Portraits] Nothing to report: no eligible roster entries and no self social snapshot cached yet.");
     }
 
-    /// <summary>Records a successful portrait batch on the main thread (via <c>Framework.Post</c> from the
-    /// off-thread upload callback). Persists stamps only after a 2xx.</summary>
-    private void StampPortraitSent(List<long> uids, long sentAtMs)
+    /// <summary>Drain acks on the main thread (call from the plugin's existing per-frame poll,
+    /// next to the other cross-thread drains). Persists hashes only after a 2xx.</summary>
+    private void DrainPortraitAcks()
     {
-        _portraitStamps ??= LoadPortraitStamps();
-        foreach (var uid in uids) _portraitStamps[uid] = sentAtMs;
-        SavePortraitStamps();
+        var dirty = false;
+        while (_portraitAcks.TryDequeue(out var sent))
+        {
+            _portraitHashes ??= LoadPortraitHashes();
+            foreach (var kv in sent) _portraitHashes[kv.Key] = kv.Value;
+            dirty = true;
+        }
+        if (dirty) SavePortraitHashes();
     }
 
     /// <summary>Same localUid source as <c>CombatLogAssembler.Assemble</c>'s <c>Uploader.LocalUid</c>.</summary>
@@ -205,32 +217,29 @@ public sealed partial class Plugin
         }
     }
 
-    private Dictionary<long, long> LoadPortraitStamps()
+    private Dictionary<long, string> LoadPortraitHashes()
     {
-        var raw = _prefs.Get(PrefPortraitStamps, "") ?? "";
-        var map = new Dictionary<long, long>();
+        var raw = _prefs.Get(PrefPortraitHashes, "") ?? "";
+        var map = new Dictionary<long, string>();
         foreach (var pair in raw.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
             var i = pair.IndexOf(':');
-            if (i > 0
-                && long.TryParse(pair.AsSpan(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var uid)
-                && long.TryParse(pair.AsSpan(i + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms))
-                map[uid] = ms;
+            if (i > 0 && long.TryParse(pair.AsSpan(0, i), NumberStyles.Integer, CultureInfo.InvariantCulture, out var uid))
+                map[uid] = pair[(i + 1)..];
         }
         return map;
     }
 
-    private void SavePortraitStamps()
+    private void SavePortraitHashes()
     {
-        if (_portraitStamps is null) return;
-        var sb = new StringBuilder(_portraitStamps.Count * 24);
-        foreach (var kv in _portraitStamps)
+        if (_portraitHashes is null) return;
+        var sb = new StringBuilder(_portraitHashes.Count * 72);
+        foreach (var kv in _portraitHashes)
         {
             if (sb.Length > 0) sb.Append(',');
-            sb.Append(kv.Key.ToString(CultureInfo.InvariantCulture)).Append(':')
-              .Append(kv.Value.ToString(CultureInfo.InvariantCulture));
+            sb.Append(kv.Key.ToString(CultureInfo.InvariantCulture)).Append(':').Append(kv.Value);
         }
-        _prefs.Set(PrefPortraitStamps, sb.ToString());
+        _prefs.Set(PrefPortraitHashes, sb.ToString());
         _prefs.Save();
     }
 
@@ -238,7 +247,7 @@ public sealed partial class Plugin
     /// is fired (main thread), gated on <see cref="MasterScoreRefresh.IsMasterModeRun"/>. ALWAYS
     /// refreshes the account master score, then pushes it via a self-only, identity-only batch —
     /// completely decoupled from the throttled roster portrait feed above (does NOT read/write
-    /// <see cref="_portraitStamps"/>). Fire-and-forget; never throws into the caller.
+    /// <see cref="_portraitHashes"/>). Fire-and-forget; never throws into the caller.
     ///
     /// Send decision: compares the freshly-fetched score against the last score we actually SENT
     /// to the server (persisted per self-uid via <c>_prefs</c>) — NOT the volatile in-memory
@@ -315,7 +324,7 @@ public sealed partial class Plugin
         var body = PortraitReport.WriteBody(localUid, nonce, sig, entriesJson, _services.GameEnvironment.RegionCode);
 
         _services.Log.Info($"[CombatMeter.MasterScore] Sending refreshed master score {score} for self.");
-        PortraitUploader.UploadFireAndForget(body, (ok, status) =>
+        PortraitUploader.UploadFireAndForget(body, (ok, status, _) =>
         {
             if (!ok) _services.Log.Warning($"[CombatMeter.MasterScore] Send FAILED (HTTP {status}).");
         });
