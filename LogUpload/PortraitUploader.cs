@@ -7,26 +7,28 @@ using System.Threading.Tasks;
 namespace Stellar.CombatMeter.LogUpload;
 
 /// <summary>Fire-and-forget POST of a portrait batch to StellarLogs. Never blocks or throws
-/// on the Unity main thread; onComplete fires on a thread-pool thread with (success, status).</summary>
+/// on the Unity main thread; onComplete fires on a thread-pool thread with (success, status, body).</summary>
 internal static class PortraitUploader
 {
     private const string Url = "https://api.stellarresonance.app/char/portraits";
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
 
-    internal static void UploadFireAndForget(string bodyJson, Action<bool, int>? onComplete = null)
+    internal static void UploadFireAndForget(string bodyJson, Action<bool, int, string?>? onComplete = null)
         => _ = Task.Run(() => UploadAsync(bodyJson, onComplete));
 
-    private static async Task UploadAsync(string bodyJson, Action<bool, int>? onComplete)
+    private static async Task UploadAsync(string bodyJson, Action<bool, int, string?>? onComplete)
     {
         try
         {
             using var content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
             using var response = await HttpClient.PostAsync(Url, content, CancellationToken.None).ConfigureAwait(false);
-            onComplete?.Invoke(response.IsSuccessStatusCode, (int)response.StatusCode);
+            string? respBody = null;
+            try { respBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false); } catch { /* body optional */ }
+            onComplete?.Invoke(response.IsSuccessStatusCode, (int)response.StatusCode, respBody);
         }
         catch
         {
-            onComplete?.Invoke(false, 0);
+            onComplete?.Invoke(false, 0, null);
         }
     }
 }

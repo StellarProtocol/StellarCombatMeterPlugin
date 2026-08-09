@@ -54,6 +54,27 @@ internal static class PortraitReport
     internal static string CanonicalPayload(long localUid, string nonce, string entriesJson)
         => string.Concat("portraits|", localUid.ToString(CultureInfo.InvariantCulture), "|", nonce, "|", Sha256Hex(entriesJson));
 
+    /// <summary>Stable hash of the fields that decide whether a member's profile CHANGED and must be
+    /// re-uploaded. MasterScore is intentionally excluded — the run fan-out updates it server-side on
+    /// every run, so a rising score must not trigger a redundant portrait upload.</summary>
+    internal static string ChangeHash(PortraitEntry e)
+    {
+        var sb = new StringBuilder(160);
+        sb.Append(e.Uid.ToString(CultureInfo.InvariantCulture))
+          .Append('|').Append(e.ProfileUrl ?? "")
+          .Append('|').Append(e.HalfbodyUrl ?? "")
+          .Append('|').Append(e.Name ?? "")
+          .Append('|').Append(e.Level.ToString(CultureInfo.InvariantCulture))
+          .Append('|').Append(e.ProfessionId.ToString(CultureInfo.InvariantCulture))
+          .Append('|').Append(e.Guild ?? "")
+          .Append('|').Append(e.TitleId.ToString(CultureInfo.InvariantCulture))
+          .Append('|').Append(e.FightPoint.ToString(CultureInfo.InvariantCulture))
+          .Append('|').Append(e.FashionCollect.ToString(CultureInfo.InvariantCulture))
+          .Append('|').Append(e.RideCollect.ToString(CultureInfo.InvariantCulture))
+          .Append('|').Append(e.WeaponSkinCollect.ToString(CultureInfo.InvariantCulture));
+        return Sha256Hex(sb.ToString());
+    }
+
     private static void WriteEntry(StringBuilder sb, PortraitEntry e)
     {
         sb.Append("{\"uid\":").Append(e.Uid.ToString(CultureInfo.InvariantCulture));
