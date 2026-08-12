@@ -1000,7 +1000,9 @@ public sealed class LogUploadTests
     // -------------------------------------------------------------------------
     // Multi-boss per battle (Spec A) Task 5: additive bosses[] array on the encounter upload.
     // BossRec carries every boss the plugin SAW this segment; the scalar BossId/BossKilled stay as
-    // the roster-preferred representative for old readers (Task 6 wires the assembler to populate it).
+    // the FIRST-ADMITTED-member representative for old readers (Task 6 wires the assembler to
+    // populate it — see BossRepresentative.ResolveStageBosses below; amendment 4 overrode the
+    // original roster-preferred design with a plain admission-order pick).
     // -------------------------------------------------------------------------
 
     [Fact]
@@ -1056,5 +1058,109 @@ public sealed class LogUploadTests
             actors, new List<CombatLogEvent>()));
 
         Assert.Equal(without, with);
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-boss per battle (Spec A) Task 6: assemble bosses[] from the archived stage-boss snapshot;
+    // derive the scalar BossId/BossKilled representative. AMENDMENT 4 (2026-08-12 review) overrides the
+    // original brief: the representative is the FIRST-ADMITTED member (index 0 of entry.StageBosses,
+    // itself StageBossSet.MembersSnapshot() in admission order) — NOT a raid-roster preference. There is
+    // NO plugin-side raid-roster mirror; master data for that lives server/site-side.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ResolveStageBosses_TwoMembers_BothCarried_RepresentativeIsFirstAdmitted()
+    {
+        // The CO-boss (102801) is admitted FIRST here and the "roster" boss (102800) SECOND — proving
+        // the representative tracks ADMISSION ORDER alone, never a roster preference (amendment 4).
+        var members = new[]
+        {
+            (Id: new EntityId(11), ConfigId: 102801, Killed: true),   // first-admitted → representative
+            (Id: new EntityId(10), ConfigId: 102800, Killed: true),
+        };
+
+        var (bossId, bossKilled, bosses) = BossRepresentative.ResolveStageBosses(members);
+
+        Assert.Equal(102801, bossId);   // first-admitted, NOT the "roster" boss 102800
+        Assert.True(bossKilled);
+        Assert.NotNull(bosses);
+        Assert.Equal(2, bosses!.Count);
+        Assert.Contains(bosses, b => b.ConfigId == 102800 && b.Killed);
+        Assert.Contains(bosses, b => b.ConfigId == 102801 && b.Killed);
+    }
+
+    [Fact]
+    public void ResolveStageBosses_RepresentativeKilledFlagMatchesFirstAdmittedOnly()
+    {
+        // First-admitted member is ALIVE while the second-admitted co-boss is dead — the representative
+        // must report the first-admitted member's OWN flag, not e.g. "any member killed".
+        var members = new[]
+        {
+            (Id: new EntityId(10), ConfigId: 102800, Killed: false),
+            (Id: new EntityId(11), ConfigId: 102801, Killed: true),
+        };
+
+        var (bossId, bossKilled, _) = BossRepresentative.ResolveStageBosses(members);
+
+        Assert.Equal(102800, bossId);
+        Assert.False(bossKilled);
+    }
+
+    // Backward compat: an entry archived with no stage-boss set at all (boss-phase detection off for
+    // this content, or a genuinely bossless trash segment) must fall back to "no bosses[], scalar 0" —
+    // the caller (Assemble) then falls back to its own (dead-cache) resolution, exactly as the
+    // pre-multi-boss per-segment scalar did for an entry with no captured boss.
+    [Fact]
+    public void ResolveStageBosses_Empty_ReturnsNoRepresentativeAndNullBosses()
+    {
+        var (bossId, bossKilled, bosses) = BossRepresentative.ResolveStageBosses(
+            Array.Empty<(EntityId Id, int ConfigId, bool Killed)>());
+
+        Assert.Equal(0, bossId);
+        Assert.False(bossKilled);
+        Assert.Null(bosses);
+    }
+
+    // entry.StageBosses defaults to an empty list (never null) for an entry built before this field
+    // existed (e.g. a pre-Task-6 in-memory entry, or one round-tripped through history — the field is
+    // not persisted, mirroring SegmentBossConfigId/BossKilled's own non-persistence) — a bare `new()`
+    // entry must resolve exactly like the empty case above, never throw.
+    [Fact]
+    public void EncounterHistoryEntry_DefaultStageBosses_IsEmpty_NotNull()
+    {
+        var entry = new Plugin.EncounterHistoryEntry();
+        Assert.Empty(entry.StageBosses);
+    }
+
+    // BuildEncounter wiring: the resolved representative + bosses list reach the encounter exactly as
+    // Assemble composes them (ResolveStageBosses -> BuildEncounter), without needing a full
+    // IPluginServices fake to exercise Assemble() itself.
+    [Fact]
+    public void BuildEncounter_CarriesResolvedBossesAndRepresentative()
+    {
+        var entry = new Plugin.EncounterHistoryEntry { SceneName = "13021", LevelUuid = 1 };
+        var members = new[]
+        {
+            (Id: new EntityId(11), ConfigId: 102801, Killed: true),
+            (Id: new EntityId(10), ConfigId: 102800, Killed: true),
+        };
+        var (bossId, bossKilled, bosses) = BossRepresentative.ResolveStageBosses(members);
+
+        var enc = CombatLogAssembler.BuildEncounter(entry, bossId, bossKilled: bossKilled, bosses: bosses);
+
+        Assert.Equal(102801, enc.BossId);
+        Assert.True(enc.BossKilled);
+        Assert.NotNull(enc.Bosses);
+        Assert.Equal(2, enc.Bosses!.Count);
+    }
+
+    // Backward compat at the BuildEncounter level: omitting `bosses` (old call sites, e.g. the replay-doc
+    // builder in Plugin.Replay.cs) leaves Encounter.Bosses null — byte-identical to before Task 6.
+    [Fact]
+    public void BuildEncounter_OmittedBosses_StaysNull()
+    {
+        var entry = new Plugin.EncounterHistoryEntry { SceneName = "13021", LevelUuid = 1 };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Null(enc.Bosses);
     }
 }

@@ -190,17 +190,35 @@ public sealed partial class Plugin
         // WHICH states actually fire in real content — which is what the per-stage settings need in order
         // to pick a default rather than guess. Read at archive time: the stage archive commits within
         // ~15-20ms of arming (see armedMs), so this is the arming state in practice.
-        // Per-segment boss upload fields, DIAGNOSTICS-gated: confirms per-boss re-adoption fired for a
-        // raid (segBoss changes across segments) and tunes BossScriptedKillHpFrac (hpFrac = the boss's
-        // last observed HP fraction before the vanish). Off in production so the [archive] line's cost
-        // is unchanged; the base line stays ungated as before.
-        var segText = StellarDiagnostics.IsEnabled
-            ? $" segBoss={_segmentBossConfigId} killed={_segmentBossKilled} hpFrac={_segmentBossLastHpFrac:0.###}"
-            : "";
+        // The FULL stage-boss SET, DIAGNOSTICS-gated (2026-08-12 review, amendment 5 — replaces the
+        // single-representative "segBoss=" mirror retired by Task 6): lists every member as
+        // configId:killed:hpFrac so an accept run catches BOTH admission risks a single scalar could
+        // hide — a co-boss NOT IsBoss-flagged (never admitted, so simply absent here) and an
+        // IsBoss-flagged add joining the set (an extra pair appears, delaying the all-gone cut). Off in
+        // production so the [archive] line's cost is unchanged; the base line stays ungated as before.
+        var segText = StellarDiagnostics.IsEnabled ? $" bosses={FormatStageBosses()}" : "";
         _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
             $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText} " +
             $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}{segText}");
+    }
+
+    // Diagnostics-only formatter for the [archive] line's "bosses=" field (amendment 5). Never called
+    // outside the StellarDiagnostics.IsEnabled gate above, so its Count/MemberAt loop + string building
+    // is not a hot-path cost. hpFrac reads the SAME per-member map BossStatus feeds
+    // (_memberLastHpFrac); -1 means the member was never seen with a valid HP reading.
+    private string FormatStageBosses()
+    {
+        if (_stageBosses.Count == 0) return "[]";
+        var sb = new System.Text.StringBuilder("[");
+        for (var i = 0; i < _stageBosses.Count; i++)
+        {
+            var (id, configId, killed) = _stageBosses.MemberAt(i);
+            var hpFrac = _memberLastHpFrac.TryGetValue(id, out var f) ? f : -1f;
+            if (i > 0) sb.Append(',');
+            sb.Append(configId).Append(':').Append(killed).Append(':').Append(hpFrac.ToString("0.###"));
+        }
+        return sb.Append(']').ToString();
     }
 
     // Remembers the last flow version SEEN here, so only real transitions log (this runs per tick).

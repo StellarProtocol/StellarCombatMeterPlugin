@@ -58,17 +58,6 @@ public sealed partial class Plugin
     // the map from carrying corpse entries across stages within one run.
     private readonly Dictionary<EntityId, float> _memberLastHpFrac = new();
 
-    // Per-segment boss upload fields (raid per-stage bossId + scripted-kill flag). UPLOAD-ONLY — none of
-    // these feed BossStatus's (present,gone,dead) tuple or any engine gate, so cut timing/count is
-    // unchanged (invariants 6/8). TEMPORARY REPRESENTATIVE MIRROR (multi-boss plan Task 2, 2026-08-12):
-    // now derived from the FIRST-admitted member of _stageBosses (CheckBossCandidate on first admission;
-    // BossStatus per tick) rather than the old single latch — for a single-boss stage (every stage
-    // today) this is byte-identical to the old behavior. Task 6 replaces this mirror with a proper
-    // roster-preferred pick built from the whole set at archive time and deletes these scalars.
-    private int   _segmentBossConfigId;          // monster config id of the boss THIS segment engaged; 0 = none
-    private bool  _segmentBossKilled;            // this segment's tracked boss was observed killed (upload flag)
-    private float _segmentBossLastHpFrac = -1f;  // last LIVE Hp/MaxHp of the tracked boss; -1 = never observed
-
     // Scripted raid bosses are brought to ~1% then killed by a triggered event (HP never reads 0, entity
     // vanishes). Treat "last seen at/under this fraction, then evicted" as a kill — RAID-GATED so a dungeon
     // boss the player merely walked away from at low HP is never counted (dungeons keep pure HP<=0).
@@ -158,16 +147,6 @@ public sealed partial class Plugin
                 Dead    = dead || scriptedKill,
             };
             _stageBosses.SetLiveness(id, live);
-
-            // UPLOAD-ONLY representative mirror (Task 2 stopgap — see the field doc; Task 6 replaces
-            // this with a roster-preferred pick built from the whole set at archive time): the
-            // FIRST-admitted member drives the per-segment scalar upload fields exactly as the single
-            // latch used to.
-            if (i == 0)
-            {
-                _segmentBossLastHpFrac = lastFrac;
-                if (dead || scriptedKill) _segmentBossKilled = true;
-            }
         }
 
         var agg = _stageBosses.Aggregate();
@@ -237,16 +216,7 @@ public sealed partial class Plugin
         // ResolveBossEntity). Admit into the set: no-op if the stage is closed, this id is already
         // tracked, or the set is at MaxMembers.
         var configId = _services.GameData.World.GetMonsterByEntity(id)?.Id ?? 0;
-        if (!_stageBosses.Admit(id, configId)) return;
-        // UPLOAD-ONLY: the FIRST-ever admission into a fresh set opens a new per-segment upload window
-        // (mirrors the old single latch's adoption reset — see the representative-mirror field doc). A
-        // later co-boss admission into an ALREADY-open set must not clobber it.
-        if (_stageBosses.Count == 1)
-        {
-            _segmentBossConfigId   = configId;
-            _segmentBossLastHpFrac = -1f;
-            _segmentBossKilled     = false;
-        }
+        _stageBosses.Admit(id, configId);
     }
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that

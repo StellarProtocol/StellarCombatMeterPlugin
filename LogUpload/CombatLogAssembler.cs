@@ -42,13 +42,6 @@ internal sealed class CombatLogAssembler
     /// True when the raw dmg/skill forensic ring overflowed during the encounter. Forensic
     /// metadata only — every rendered number comes from the unsigned <c>derived</c> aggregates.
     /// </param>
-    /// <param name="snapshotBossConfigId">
-    /// Monster-table config id of the boss, captured at fight time before entity caches were
-    /// wiped (provided by Plugin.Replay via <c>_bossMonsterInfo?.Id</c>).
-    /// When non-zero this value is used directly as <c>encounter.bossId</c>, bypassing the
-    /// dead-cache <c>ResolveBossConfigId</c> fallback. Pass 0 when no snapshot is available
-    /// (e.g. bossless runs or manual deferred upload of pre-fix entries).
-    /// </param>
     /// <param name="eventChunks">
     /// Number of chunks <see cref="EventChunker"/> planned for the raw event stream (Task 8).
     /// Written to <c>header.eventChunks</c>; the summary blob itself always ships
@@ -60,21 +53,23 @@ internal sealed class CombatLogAssembler
         IReadOnlyList<CombatLogEvent> events,
         string? signerKey,
         bool truncatedEvents,
-        int snapshotBossConfigId = 0,
         int eventChunks = 0,
         InstallKey? installKey = null)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
 
-        // Use the capture-time snapshot when available; fall back to live resolution for
-        // deferred manual uploads of old entries (caches may still be warm if still in-map).
-        // Per-segment id first (the boss THIS segment engaged, captured at cut time); fall back to the
-        // run-scoped capture-time snapshot, then the (players-only-entry, effectively empty) resolver.
-        var bossConfigId = entry.SegmentBossConfigId != 0 ? entry.SegmentBossConfigId
-                         : snapshotBossConfigId != 0      ? snapshotBossConfigId
-                         : ResolveBossConfigId(entry);
-        var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), entry.BossKilled);
+        // Multi-boss per battle (Task 6): entry.StageBosses is the ARCHIVE-TIME snapshot
+        // (StageBossSet.MembersSnapshot(), taken in Plugin.History.cs BuildHistoryEntry) — read it, and
+        // ONLY it, for this segment's boss set. NEVER the live _stageBosses: a manual re-upload of an
+        // old entry (UploadHistoryEntry -> AssembleAndUpload) can run long after the set has drained or
+        // moved on to a different stage/run, so a live read would silently mislabel the wrong fight's
+        // bosses onto this one. Empty (bossless segment, or boss-phase detection off for this content)
+        // falls back to the pre-existing (players-only-entry, effectively dead) cache resolver, exactly
+        // as the pre-multi-boss per-segment scalar did.
+        var (stageBossId, stageBossKilled, bosses) = BossRepresentative.ResolveStageBosses(entry.StageBosses);
+        var bossConfigId = bosses is not null ? stageBossId : ResolveBossConfigId(entry);
+        var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), stageBossKilled, bosses);
 
         // --- Uploader ---
         var localEntityId = _services.CombatSnapshot.LocalEntityId;
@@ -161,8 +156,13 @@ internal sealed class CombatLogAssembler
     /// which has no use for it, is unchanged. Blank is normalised to null so the server and site fall
     /// back to their own mapId lookup rather than storing an empty string.
     /// </param>
+    /// <param name="bosses">
+    /// Every boss the plugin SAW this segment (multi-boss per battle, Task 6) — null for the replay-doc
+    /// call site (which has no use for it) and for a bossless segment. Additive/null on old uploads.
+    /// </param>
     internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry, int bossConfigId = 0,
-                                            string? sceneDisplayName = null, bool bossKilled = false)
+                                            string? sceneDisplayName = null, bool bossKilled = false,
+                                            IReadOnlyList<BossRec>? bosses = null)
     {
         var sceneName = entry.SceneName ?? "";
         if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
@@ -198,7 +198,8 @@ internal sealed class CombatLogAssembler
             DungeonStartMs:  entry.DungeonStartMs,
             DefeatedCount:   entry.Defeated,
             PartyId:         entry.PartyId,
-            BossKilled:      bossKilled);
+            BossKilled:      bossKilled,
+            Bosses:          bosses);
     }
 
     /// <summary>
@@ -206,6 +207,9 @@ internal sealed class CombatLogAssembler
     /// Iterates non-player entities, calls <c>GetMonsterByEntity</c> for each, runs
     /// <see cref="BossPicker"/> to choose the highest-MaxHp boss, and returns its config id.
     /// Returns 0 when no boss entity is found or when the monster table is not yet loaded.
+    /// NOTE: <c>entry.Entities</c> is a PLAYERS-ONLY snapshot (<c>EntitySnapshot.SnapshotEntities</c>),
+    /// so in practice this always returns 0 today — kept as the last-resort fallback for parity with
+    /// the pre-multi-boss behavior rather than removed as unrelated dead-code cleanup.
     /// </summary>
     private int ResolveBossConfigId(Plugin.EncounterHistoryEntry entry)
     {

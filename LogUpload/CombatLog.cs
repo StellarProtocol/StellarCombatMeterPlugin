@@ -82,7 +82,8 @@ internal sealed record Encounter(
     // roster to derive the CLEAR verdict server-side.
     bool BossKilled = false,
     // Every boss the plugin SAW this segment (multi-boss per battle). Additive/null on old uploads.
-    // The scalar BossId/BossKilled above stay as the roster-preferred representative for old readers.
+    // The scalar BossId/BossKilled above stay as the FIRST-ADMITTED-member representative for old
+    // readers (Task 6; amendment 4, 2026-08-12 review — no plugin-side raid-roster preference).
     IReadOnlyList<BossRec>? Bosses = null);
 
 /// <summary>One boss engaged in a segment (multi-boss per battle, Spec A). configId = monster-table

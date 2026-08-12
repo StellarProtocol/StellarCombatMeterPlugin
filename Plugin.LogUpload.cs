@@ -326,9 +326,10 @@ public sealed partial class Plugin
             // an empty list, so Chunk() naturally yields zero chunks and eventChunks: 0).
             var chunks = EventChunker.Chunk(events!);
 
-            // Pass the capture-time boss config id so the assembler doesn't re-resolve from
-            // wiped entity caches (ResetEntities fires before archive on scene change).
-            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count, InstallKeyInstance);
+            // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
+            // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
+            // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
+            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, chunks.Count, InstallKeyInstance);
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
@@ -467,7 +468,7 @@ public sealed partial class Plugin
             var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
             var events = _logBuffer.Flush();
             var chunks = EventChunker.Chunk(events);
-            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, _bossMonsterInfo?.Id ?? 0, chunks.Count, InstallKeyInstance);
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, chunks.Count, InstallKeyInstance);
             PersistReUpload(entry, log, chunks, replayDoc);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
