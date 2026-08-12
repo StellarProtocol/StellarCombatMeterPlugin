@@ -33,6 +33,7 @@ public class HistoryTriggerFieldTests
         Assert.Equal("idle",   Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.Idle));
         Assert.Equal("stage",  Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.StageChange));
         Assert.Equal("bosskill", Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.BossKill));
+        Assert.Equal("boundary", Plugin.ArchiveReasonTag(AutoArchive.ArchiveReason.RunBoundary));
     }
 
     // The pre-boss archive banked at the inline boss cut (ArchiveReason.BossPhase) carries NO boss

@@ -23,6 +23,12 @@ internal enum ArchiveReason
     /// than in a sliver after it (2026-07-26 fix; owner runs sea/696115723671437312,
     /// sea/420833196448415744).</summary>
     BossKill = 6,
+    /// <summary>A confirmed run boundary caught by the poll-driven <c>RunBoundaryTracker</c> (spec
+    /// 2026-08-12-combatmeter-run-boundary-design.md) when the game's own scene-change lifecycle hooks
+    /// never fired for the hop (a rapid re-entry yank, or an open-world line switch) — banks the
+    /// pending archive under the OLD run id exactly like <see cref="SceneChange"/> does for the
+    /// normal path. Additive: appended at the end so any persisted numeric value is unaffected.</summary>
+    RunBoundary = 7,
 }
 
 /// <summary>Facts snapshot for one engine tick — assembled by Plugin.AutoArchive.cs (~10 Hz). Record

@@ -417,7 +417,7 @@ public sealed partial class Plugin
     // "bosskill" was), indistinguishable from a manual archive. internal (not private) so
     // TriggerSuffix_covers_every_auto_reason can pin completeness against every ArchiveReason value.
     internal static string TriggerSuffix(string trigger)
-        => trigger is "wipe" or "boss" or "idle" or "stage" or "bosskill" or "clear" or "prepare" ? $" · {trigger}" : "";
+        => trigger is "wipe" or "boss" or "idle" or "stage" or "bosskill" or "boundary" or "clear" or "prepare" ? $" · {trigger}" : "";
 
     private void RebuildSessionRows()
     {

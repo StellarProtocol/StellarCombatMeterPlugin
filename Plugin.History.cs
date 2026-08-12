@@ -88,21 +88,6 @@ public sealed partial class Plugin
         // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
         // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
         _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
-        // New scene = new run: forget which bosses died in the previous one, so the same boss template
-        // in the next run cuts normally. Deliberately NOT in Clear() — that runs on every archive.
-        _killedBosses.Clear();
-        // Critical A (review round 2026-07-27, second pass; carried into the multi-boss set, Task 2
-        // 2026-08-12): the tracked boss state gets a per-run reset here too. Before the original fix, a
-        // run that ended without the tracked boss ever being observed at hp<=0 (wipe-and-leave — the
-        // owner's normal loop, an abandoned pull, a fail-out, the boss despawning on reset) left the
-        // tracker pinned to a dead-and-gone entity for the REST OF THE SESSION, blocking every later
-        // boss — in this run or the next one — from ever being adopted again, so no BossKill ever fires
-        // again. Scoping this to the scene boundary is what makes a fresh dungeon in the same session
-        // detect its own boss(es) normally. (A sibling _settleBossId used to get the same reset here —
-        // retired with the rest of finding 3's boss-only settle clock, owner ruling 2026-07-28; see
-        // Plugin.AutoArchive.cs's retired-SettleClockMs note.)
-        _stageBosses.Clear(); _memberLastHpFrac.Clear();
-        RecomputeUploadPolicyCache();   // new scene ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;
@@ -114,14 +99,13 @@ public sealed partial class Plugin
         var archived = _stats.Count > 0;
         var samplesAtReset = _replay?.TotalSamples ?? 0;
 
-        // Auto-archive on scene change. ManualArchive() is the single source of
-        // truth for the snapshot-and-clear flow; the Archive button calls it too.
-        ManualArchive(AutoArchive.ArchiveReason.SceneChange);
-        // The outgoing run is now archived under its OWN latched id (LevelUuid = _lastRunId) — clear the
-        // latch so a later archive (an empty scene hop, or the next floor before its own combat
-        // re-latches) can't reuse this run's id. The next run re-latches _lastRunId at its combat start
-        // (Plugin.Capture.EnsureCombatStarted).
-        _lastRunId = 0;
+        // Auto-archive on scene change, through the shared bank+reset block (Plugin.RunBoundary.cs)
+        // also used by the poll-driven commit for a missed scene event (yank / line switch).
+        RunBoundaryCore(AutoArchive.ArchiveReason.SceneChange);
+        // The poll-driven tracker must adopt this already-handled boundary's new id, or its next
+        // Observe would see the same runId change and double-commit (invariant 6: one entry per
+        // boundary).
+        _runBoundary.NotifySceneBoundaryHandled(_services.Dungeon.CurrentRunId);
 
         // Scene-boundary replay reset — now CONDITIONAL (spec 2026-07-19): the provisional
         // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps
@@ -374,6 +358,7 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.Idle        => "idle",
         AutoArchive.ArchiveReason.StageChange => "stage",
         AutoArchive.ArchiveReason.BossKill    => "bosskill",
+        AutoArchive.ArchiveReason.RunBoundary => "boundary",
         _                                     => "manual",
     };
 
