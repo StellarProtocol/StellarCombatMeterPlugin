@@ -71,6 +71,11 @@ public sealed partial class Plugin
         // scalar representative (first-admitted, index 0) and the whole list becomes Encounter.Bosses.
         public IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> StageBosses =
             Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        // Boss-phase-OFF fallback (fix 2026-08-13, invariant 5 regression from 957c12f): archive-time
+        // snapshot of the standalone boss-HP heuristic's pick (_bossMonsterInfo?.Id ?? 0,
+        // Plugin.Replay.cs), consumed by BossRepresentative.ResolveStageBosses (full rationale there)
+        // only when StageBosses above is empty. 0 when the heuristic found nothing either.
+        public int FallbackBossConfigId;
         // NOTE: per-entry upload state (phase + run URL) is NOT stored on the entry — it persists as a
         // SIDECAR "uploadStates" key in the history config section (Plugin.HistoryStore.cs), keyed by the
         // stable (LevelUuid, ArchivedAtMs) composite, so the entry JSON stays byte-identical to what older
@@ -354,6 +359,7 @@ public sealed partial class Plugin
             Defeated         = _services.Dungeon.LastDefeatedCount,
             Trigger          = ResolveTriggerTag(reason),
             StageBosses      = _stageBosses.MembersSnapshot(),
+            FallbackBossConfigId = _bossMonsterInfo?.Id ?? 0,
         };
         ApplyAttrRanges(entry);
         ApplyClassSpans(entry);

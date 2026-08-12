@@ -65,10 +65,16 @@ internal sealed class CombatLogAssembler
         // old entry (UploadHistoryEntry -> AssembleAndUpload) can run long after the set has drained or
         // moved on to a different stage/run, so a live read would silently mislabel the wrong fight's
         // bosses onto this one. Empty (bossless segment, or boss-phase detection off for this content)
-        // falls back to the pre-existing (players-only-entry, effectively dead) cache resolver, exactly
-        // as the pre-multi-boss per-segment scalar did.
-        var (stageBossId, stageBossKilled, bosses) = BossRepresentative.ResolveStageBosses(entry.StageBosses);
-        var bossConfigId = bosses is not null ? stageBossId : ResolveBossConfigId(entry);
+        // falls back to entry.FallbackBossConfigId — the archive-time snapshot of the standalone boss-HP
+        // heuristic (Plugin.Replay.cs's _bossMonsterInfo, which runs regardless of BossEnabled) —
+        // restoring invariant 5 ("Boss phase = OFF -> bossId still recorded") after 957c12f dropped the
+        // equivalent live _bossMonsterInfo?.Id ?? 0 argument without a replacement (fix, 2026-08-13). If
+        // even that heuristic never resolved a boss, falls through to the pre-existing
+        // (players-only-entry, effectively dead) cache resolver, exactly as the pre-multi-boss
+        // per-segment scalar did.
+        var (stageBossId, stageBossKilled, bosses) = BossRepresentative.ResolveStageBosses(
+            entry.StageBosses, entry.FallbackBossConfigId);
+        var bossConfigId = stageBossId != 0 ? stageBossId : ResolveBossConfigId(entry);
         var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), stageBossKilled, bosses);
 
         // --- Uploader ---

@@ -25,15 +25,33 @@ internal static class BossRepresentative
     /// review): NO plugin-side raid-roster preference here — master data for that lives
     /// server/site-side, and the worker already prefers <c>bosses[]</c> when present.
     ///
-    /// Returns <c>(0, false, null)</c> when the segment tracked no stage boss at all (boss-phase
-    /// detection off for this content, or a genuinely bossless trash segment) — the caller falls back
-    /// to its own (dead-cache) resolution in that case, exactly as the pre-multi-boss per-segment
-    /// scalar did.
+    /// When the segment tracked NO stage boss at all (boss-phase detection OFF for this content, or a
+    /// genuinely bossless trash segment), falls back to <paramref name="fallbackBossConfigId"/> — the
+    /// entry's <c>FallbackBossConfigId</c>, itself the archive-time snapshot of the STANDALONE boss-HP
+    /// replay heuristic (<c>_bossMonsterInfo?.Id ?? 0</c>, Plugin.Replay.cs's
+    /// <c>ResolveBossEntity</c>), which runs independently of <c>_autoArchive.BossEnabled</c> — gated
+    /// only on the run being instanced. This restores the pre-Task-6 (commit a3cb7fa) behavior, where
+    /// that same heuristic's id rode as <c>encounter.BossId</c> whenever Boss-phase was OFF (protected
+    /// invariant 5 / "Boss phase = OFF -> bossId still recorded",
+    /// docs/recon/combatmeter-archive-flow.md) — a regression introduced when 957c12f dropped the
+    /// <c>_bossMonsterInfo?.Id ?? 0</c> argument from the two <c>Assemble</c> call sites without
+    /// replacing it. <c>Bosses</c> stays <c>null</c> and <c>BossKilled</c> stays <c>false</c> in the
+    /// fallback case: the heuristic carries no kill-state signal of its own, which matches EXACTLY what
+    /// a3cb7fa shipped for this shape — its <c>entry.BossKilled</c> scalar was populated only from the
+    /// same boss-phase-gated stage set (<c>_segmentBossKilled</c>, set only via <c>BossStatus()</c>'s
+    /// first-admitted-member mirror), so it was always <c>false</c> whenever that set was empty.
+    ///
+    /// Returns <c>(0, false, null)</c> when BOTH are absent (default <paramref
+    /// name="fallbackBossConfigId"/> of 0, i.e. the heuristic never resolved a boss either) — the
+    /// caller (Assemble) then falls back further to its own (dead-cache) resolution, exactly as the
+    /// pre-multi-boss per-segment scalar did.
     /// </summary>
     internal static (int BossConfigId, bool BossKilled, IReadOnlyList<BossRec>? Bosses) ResolveStageBosses(
-        IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> stageBosses)
+        IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> stageBosses, int fallbackBossConfigId = 0)
     {
-        if (stageBosses.Count == 0) return (0, false, null);
+        // Non-empty StageBosses ALWAYS wins over the fallback, regardless of fallbackBossConfigId's
+        // value — the real admitted-set representative below is never second-guessed by the heuristic.
+        if (stageBosses.Count == 0) return (fallbackBossConfigId, false, null);
 
         var bosses = new List<BossRec>(stageBosses.Count);
         foreach (var m in stageBosses) bosses.Add(new BossRec(m.ConfigId, m.Killed));

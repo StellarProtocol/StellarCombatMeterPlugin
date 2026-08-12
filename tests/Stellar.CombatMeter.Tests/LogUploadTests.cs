@@ -1163,4 +1163,85 @@ public sealed class LogUploadTests
         var enc = CombatLogAssembler.BuildEncounter(entry);
         Assert.Null(enc.Bosses);
     }
+
+    // -------------------------------------------------------------------------
+    // Boss-phase-OFF bossId fallback (fix 2026-08-13): 957c12f dropped the always-on
+    // _bossMonsterInfo?.Id ?? 0 argument from the two Plugin.LogUpload.cs Assemble call sites when it
+    // moved boss info onto entry.StageBosses, silently losing invariant 5 ("Boss phase = OFF -> bossId
+    // still recorded", docs/recon/combatmeter-archive-flow.md) for any content where BossEnabled is OFF
+    // (ObserveAutoArchiveBoss early-outs, so StageBosses never gets a member) but the STANDALONE boss-HP
+    // replay heuristic (_bossMonsterInfo, gated only on IsInstancedRun(), never on BossEnabled) still
+    // resolved one. entry.FallbackBossConfigId restores it: BossRepresentative.ResolveStageBosses now
+    // falls back to it ONLY when StageBosses is empty, and never overrides a real (non-empty) set.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ResolveStageBosses_EmptyStageBosses_FallsBackToHeuristicId_NotKilled_NoBossesArray()
+    {
+        // Boss-phase-OFF shape: no stage-boss set at all, but the standalone heuristic found one.
+        var (bossId, bossKilled, bosses) = BossRepresentative.ResolveStageBosses(
+            Array.Empty<(EntityId Id, int ConfigId, bool Killed)>(), fallbackBossConfigId: 55501);
+
+        Assert.Equal(55501, bossId);
+        // The heuristic carries no kill-state signal — matches a3cb7fa's ALWAYS-false BossKilled for
+        // this exact shape (its entry.BossKilled scalar was set only from the boss-phase-gated set,
+        // which was empty here too, so it was never true).
+        Assert.False(bossKilled);
+        // The heuristic never populates Bosses[] — only a real stage-boss set does.
+        Assert.Null(bosses);
+    }
+
+    [Fact]
+    public void ResolveStageBosses_NonEmptyStageBosses_FallbackNeverOverridesRealRepresentative()
+    {
+        // A real stage-boss set is present (Boss-phase ON) AND a stale/irrelevant fallback id is also
+        // supplied — the real set must win outright; the fallback applies ONLY to the empty-set shape.
+        var members = new[] { (Id: new EntityId(10), ConfigId: 102800, Killed: true) };
+
+        var (bossId, bossKilled, bosses) = BossRepresentative.ResolveStageBosses(
+            members, fallbackBossConfigId: 99999);
+
+        Assert.Equal(102800, bossId);   // NOT 99999
+        Assert.True(bossKilled);
+        Assert.NotNull(bosses);
+    }
+
+    // A bare `new()` entry (e.g. round-tripped/pre-fix) never carries a fallback id — mirrors
+    // EncounterHistoryEntry_DefaultStageBosses_IsEmpty_NotNull's convention for the sibling field.
+    [Fact]
+    public void EncounterHistoryEntry_DefaultFallbackBossConfigId_IsZero()
+    {
+        var entry = new Plugin.EncounterHistoryEntry();
+        Assert.Equal(0, entry.FallbackBossConfigId);
+    }
+
+    // Assemble-layer wiring: reproduces the EXACT composition CombatLogAssembler.Assemble performs
+    // (ResolveStageBosses(entry.StageBosses, entry.FallbackBossConfigId) -> pick bossConfigId ->
+    // BuildEncounter) for the Boss-phase-OFF shape — empty StageBosses, non-zero FallbackBossConfigId —
+    // proving the assembled encounter.BossId is the heuristic's id, not 0. Mirrors
+    // BuildEncounter_CarriesResolvedBossesAndRepresentative's convention of composing the two pure
+    // static members to stand in for Assemble() without an IPluginServices fake.
+    [Fact]
+    public void Assemble_BossPhaseOff_EmptyStageBosses_UploadsFallbackBossId()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName            = "13021",
+            LevelUuid            = 1,
+            FallbackBossConfigId = 55501,   // StageBosses stays at its default (empty) — BossEnabled was OFF
+        };
+        var (stageBossId, stageBossKilled, bosses) = BossRepresentative.ResolveStageBosses(
+            entry.StageBosses, entry.FallbackBossConfigId);
+        // Mirrors Assemble's `stageBossId != 0 ? stageBossId : ResolveBossConfigId(entry)`.
+        // ResolveBossConfigId is an IPluginServices-instance method unreachable from this pure-data
+        // test, but is documented dead code that always returns 0 (entry.Entities is players-only) —
+        // substituting the literal 0 it always yields keeps this composition byte-identical to Assemble's.
+        var bossConfigId = stageBossId != 0 ? stageBossId : 0;
+
+        var enc = CombatLogAssembler.BuildEncounter(entry, bossConfigId, bossKilled: stageBossKilled, bosses: bosses);
+
+        Assert.Equal(55501, enc.BossId);
+        Assert.False(enc.BossKilled);
+        Assert.Null(enc.Bosses);
+    }
 }
