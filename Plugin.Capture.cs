@@ -24,7 +24,10 @@ public sealed partial class Plugin
         // pre-boss trash into its own segment IMMEDIATELY (no settle defer) so this first boss hit lands
         // in the FRESH boss segment. MUST run BEFORE _agg/EnsureCombatStarted/CaptureTaken/Accumulate
         // below, or the first hit leaks into the archived trash (the owner's chopped-fight bug). O(1) +
-        // alloc-free once the boss is identified (the _autoArchiveBossId guard short-circuits).
+        // alloc-free once warm: admission into the _stageBosses set short-circuits via the _bossCheck
+        // cache (Plugin.BossDetection.cs), and the CUT itself short-circuits via EventInvolvesAnyStageBoss
+        // once a segment is already active (multi-boss plan Task 2, 2026-08-12 — the set replaced the
+        // single _autoArchiveBossId latch this comment used to name).
         bool priorCombat = _combatActive;
         MaybeCutForBossPhase(d.SourceId, d.TargetId, d.TimestampMs, priorCombat);
 

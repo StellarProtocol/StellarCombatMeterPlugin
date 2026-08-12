@@ -184,12 +184,12 @@ internal sealed partial class AutoArchiveEngine
     private bool _bossSegmentActive;
 
     // A confirmed boss death was observed while a boss segment was open, and that fight has not been
-    // banked yet. LATCHED rather than edge-consumed: BossStatus clears _autoArchiveBossId the instant
-    // it sees the death (Plugin.BossDetection.cs, moved there from Plugin.AutoArchive.cs by the Minor E
-    // extraction, review round 2026-07-27 second pass), so BossDead is a ONE-TICK pulse, and
-    // TickAutoArchiveTriggers skips Evaluate entirely while another archive is pending — an edge would
-    // be lost in both cases and the fight would never bank. Same shape as _wipeArchived: a level the
-    // fire gates read, set only from bookkeeping and cleared only on an actual fire / run exit.
+    // banked yet. LATCHED rather than edge-consumed: BossStatus marks the killed member(s) sticky and
+    // drains _stageBosses once the AGGREGATE reads all-gone (Plugin.BossDetection.cs — the set replaced
+    // the single _autoArchiveBossId latch this comment used to name, multi-boss plan Task 2, 2026-08-12),
+    // so BossDead is still a ONE-TICK pulse, and TickAutoArchiveTriggers skips Evaluate entirely while
+    // another archive is pending — an edge would be lost in both cases. Same shape as _wipeArchived: a
+    // level the fire gates read, set only from bookkeeping and cleared only on an actual fire / run exit.
     //
     // Gone-timeout (P0 fix, 2026-07-28) is the SECOND way this gets armed — see BossGoneTimeoutMs's doc
     // for the full mechanism. A boss that is continuously unobserved (gone but never confirmed dead) for

@@ -113,8 +113,29 @@ public class AutoArchiveContentGuardTests
     {
         Assert.True(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: true));   // fresh OR re-detect → cut (capped)
         Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: false, bossSegmentActive: false, inRun: true));  // boss auto-archive off
+        // PINNED (Critical fix, 2026-08-12 review): the CUT stays gated on an active segment — this must
+        // STILL be false after decoupling admission from the cut. Only ADMISSION (below) dropped the
+        // bossSegmentActive term; the cut decision itself is untouched.
         Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: true,  inRun: true));  // segment running → fast-exit
         Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
+    }
+
+    // ── Admission is a SEPARATE, less-strict gate than the cut (Critical fix, 2026-08-12 review) ──────
+    // Review finding: the ONLY call path into StageBossSet.Admit was MaybeCutForBossPhase, gated by
+    // ShouldConsiderInlineBossCut — which fast-exits the instant bossSegmentActive is true (the first
+    // boss-touching event sets it via TryBeginBossSegmentCut). So a co-boss engaged AFTER the first hit
+    // was NEVER admitted; the set could never exceed one member in a real simultaneous fight, defeating
+    // the multi-boss spec (§3.2: "admit every IsBoss-flagged, not-already-killed entity while the stage
+    // is open"). Fix: MaybeCutForBossPhase now calls ObserveAutoArchiveBoss under this SEPARATE guard —
+    // ShouldConsiderBossAdmission — which has NO bossSegmentActive parameter at all: that omission IS the
+    // fix, proven here by asserting admission stays true with a segment active, deliberately mirroring
+    // the same enabled/inRun terms ShouldConsiderInlineBossCut uses for everything EXCEPT segment state.
+    [Fact]
+    public void ShouldConsiderBossAdmission_ignores_segment_state_requires_enabled_and_in_run()
+    {
+        Assert.True(Plugin.ShouldConsiderBossAdmission(bossEnabled: true, inRun: true));    // admits — no segment-active term to block it
+        Assert.False(Plugin.ShouldConsiderBossAdmission(bossEnabled: false, inRun: true));  // boss auto-archive off
+        Assert.False(Plugin.ShouldConsiderBossAdmission(bossEnabled: true, inRun: false));  // open world — no admission
     }
 
     // ---- killed-boss marks (2026-07-26): the corpse-readoption loop that produced the sliver spam ----
