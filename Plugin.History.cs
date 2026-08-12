@@ -88,6 +88,11 @@ public sealed partial class Plugin
         // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
         // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
         _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
+        // 3fd7559 ran these resets (incl. RecomputeUploadPolicyCache) UNCONDITIONALLY, before the
+        // guard below; the RunBoundaryCore extraction had moved them after it, silently skipping the
+        // cache recompute on the very first scene observation (review fix, rb-task-2 finding 2) — only
+        // the archive half (BankRunBoundary, below the guard) stays conditional.
+        ResetRunScopedTrackers();
         if (_lastSceneName is null)
         {
             _lastSceneName = newScene;
@@ -99,9 +104,10 @@ public sealed partial class Plugin
         var archived = _stats.Count > 0;
         var samplesAtReset = _replay?.TotalSamples ?? 0;
 
-        // Auto-archive on scene change, through the shared bank+reset block (Plugin.RunBoundary.cs)
-        // also used by the poll-driven commit for a missed scene event (yank / line switch).
-        RunBoundaryCore(AutoArchive.ArchiveReason.SceneChange);
+        // Auto-archive on scene change — the archive half of the shared bank+reset block
+        // (Plugin.RunBoundary.cs); the reset half already ran above. RunBoundaryCore (both halves)
+        // is what the poll-driven commit for a missed scene event uses instead.
+        BankRunBoundary(AutoArchive.ArchiveReason.SceneChange);
         // The poll-driven tracker must adopt this already-handled boundary's new id, or its next
         // Observe would see the same runId change and double-commit (invariant 6: one entry per
         // boundary).
