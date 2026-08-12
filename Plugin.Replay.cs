@@ -277,6 +277,17 @@ public sealed partial class Plugin
     /// <summary>
     /// Registers the boss (lazily, once identified) and every player track with the
     /// HP sampler, then advances it. All timelines share the 500 ms cadence.
+    ///
+    /// Multi-boss (2026-08-12 review, Task 3 of the multi-boss plan): the block below ALSO
+    /// Tracks/MarkDeads every member of <see cref="_stageBosses"/> — not just the single
+    /// highest-MaxHp entity <see cref="ResolveBossEntity"/> lazily resolves. The scalar
+    /// <see cref="_bossEntityId"/>/<see cref="_bossMonsterInfo"/> path is left running
+    /// unchanged on purpose: <c>ResolveWindowBossFields</c>/<c>WindowMetaIds</c>/
+    /// <c>ResolveBossUploadFields</c> (Plugin.ReplayWindow.cs / this file) and the DPS-log
+    /// <c>_bossMonsterInfo?.Id</c> read (Plugin.LogUpload.cs) still consume it — Task 4/6 of the
+    /// multi-boss plan rewire those to the set and retire the scalar. Until then both mechanisms
+    /// coexist; <c>Track</c> is idempotent so re-tracking the same entity from both blocks is a
+    /// harmless no-op.
     /// </summary>
     private void TickHpTimelines(int nowMs, float dtMs)
     {
@@ -316,6 +327,21 @@ public sealed partial class Plugin
                 _hpSampler.MarkDead(_bossEntityId.Value, nowMs - _replay.CombatStartMs);
                 _bossDeathMarked = true;
             }
+        }
+
+        // Multi-boss (Task 3): every boss the stage set knows gets its OWN HP track. Alloc-free
+        // Count/MemberAt iteration (same convention as BossStatus/EventInvolvesAnyStageBoss in
+        // Plugin.BossDetection.cs) — this runs every replay tick. MarkDead is driven by the set's
+        // STICKY `killed` flag (amendment 3), never a raw Hp<=0 read here: a scripted-killed raid
+        // co-boss never reads 0, it just vanishes, so gating on Hp<=0 would leave that boss's HP
+        // line never terminating (the boss-hp-never-reaches-zero class; 0%-on-death precedent
+        // d1c8fbb). MarkDead is idempotent (no-op once the last sample is already 0), so calling
+        // it every tick while a member stays killed=true is safe and allocates nothing.
+        for (var i = 0; i < _stageBosses.Count; i++)
+        {
+            var (id, _, killed) = _stageBosses.MemberAt(i);
+            _hpSampler.Track(id.Value, nowMs - _replay.CombatStartMs);
+            if (killed) _hpSampler.MarkDead(id.Value, nowMs - _replay.CombatStartMs);
         }
 
         _hpSampler.Tick(dtMs);
@@ -485,6 +511,28 @@ public sealed partial class Plugin
 
     private HpTrack? BuildBossHpTrack()
         => _bossEntityId.Value != 0 ? _hpSampler?.GetTrack(_bossEntityId.Value) : null;
+
+    /// <summary>
+    /// Per-member HP-track builder (multi-boss plan Task 3): every current stage-set boss's id,
+    /// monster config id, and sampled HP track (null if the sampler has no samples for it yet).
+    /// Additive alongside the legacy scalar <see cref="BuildBossHpTrack"/> — that one (and the
+    /// <see cref="_bossEntityId"/>/<see cref="_bossMonsterInfo"/> fields it reads) stays wired into
+    /// <c>ResolveWindowBossFields</c>/<c>ResolveBossUploadFields</c> until Task 4 of the multi-boss
+    /// plan carries every boss into the positions/replay doc via this method. Indexed Count/MemberAt
+    /// iteration keeps this consistent with the set's other archive-time consumer,
+    /// <see cref="AutoArchive.StageBossSet.MembersSnapshot"/> — this allocates one list of size
+    /// Count, which is fine here (archive/window-assembly time, never per-tick).
+    /// </summary>
+    private IReadOnlyList<(EntityId id, int configId, HpTrack? track)> BuildBossHpTracks()
+    {
+        var list = new List<(EntityId, int, HpTrack?)>(_stageBosses.Count);
+        for (var i = 0; i < _stageBosses.Count; i++)
+        {
+            var (id, configId, _) = _stageBosses.MemberAt(i);
+            list.Add((id, configId, _hpSampler?.GetTrack(id.Value)));
+        }
+        return list;
+    }
 
     // -----------------------------------------------------------------------
     // Helpers

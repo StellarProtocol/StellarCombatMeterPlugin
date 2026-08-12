@@ -130,4 +130,43 @@ public class HpTimelineSamplerTests
         Assert.Single(s.GetTrack(7)!.Pct);
         Assert.Null(s.GetTrack(999));
     }
+
+    // Multi-boss plan Task 3: TickHpTimelines now Tracks/MarkDeads EVERY boss the stage set
+    // knows (Plugin.Replay.cs), not just one lazily-resolved entity. This pins the sampler-level
+    // capability that reworked loop depends on — two non-player (boss) entities sampled
+    // independently on the SAME tick, each keeping its own Ms0/Pct series.
+    [Fact]
+    public void Two_boss_tracks_are_sampled_independently()
+    {
+        var hp = new Dictionary<long, (long Hp, long MaxHp)>
+        {
+            [10] = (500, 1000),
+            [11] = (900, 1000),
+        };
+        var s = new HpTimelineSampler(id => hp[id]);
+        s.Track(10, ms0: 0);
+        s.Track(11, ms0: 0);
+        s.Tick(500f);
+        Assert.NotNull(s.GetTrack(10));
+        Assert.NotNull(s.GetTrack(11));
+        Assert.Equal(new[] { 50 }, s.GetTrack(10)!.Pct);
+        Assert.Equal(new[] { 90 }, s.GetTrack(11)!.Pct);
+    }
+
+    // Amendment 3 (2026-08-12 review): a scripted-killed raid co-boss never reads Hp<=0 — it just
+    // vanishes — so its HP track must terminate via an explicit MarkDead call driven by the stage
+    // set's sticky `killed` flag, not a raw HP read. Pins that MarkDead's own contract (idempotent
+    // final-zero append) composes correctly for that caller: calling it repeatedly while `killed`
+    // stays true (every tick) must not grow the track past the one terminating zero sample.
+    [Fact]
+    public void MarkDead_called_every_tick_while_killed_appends_only_one_terminating_zero()
+    {
+        long hp = 40, maxHp = 100;
+        var s = new HpTimelineSampler(_ => (hp, maxHp));
+        s.Track(20, ms0: 0);
+        s.Tick(500f);           // one 40% sample
+        for (var i = 0; i < 5; i++) s.MarkDead(20, 1000);   // repeated, as a per-tick loop would do
+        var track = s.GetTrack(20)!;
+        Assert.Equal(new[] { 40, 0 }, track.Pct);
+    }
 }
