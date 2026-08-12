@@ -409,6 +409,13 @@ public sealed partial class Plugin
     internal static bool ShouldConsiderInlineBossCut(bool bossEnabled, bool bossSegmentActive, bool inRun)
         => bossEnabled && !bossSegmentActive && inRun;
 
+    // NOTE (2026-08-12, multi-boss plan Task 2): the doc comments above and on MaybeCutForBossPhase
+    // below still narrate the fix history in terms of the single _autoArchiveBossId latch this method's
+    // caller used to carry. That field is gone — Plugin.BossDetection.cs now carries the SET
+    // (_stageBosses) — but the historical reasoning (why the gate is keyed on bossSegmentActive, why a
+    // blink must not re-arm the cut) is unchanged and still load-bearing at the SET level, so the prose
+    // is left intact rather than rewritten line-by-line.
+
     // Inline boss-phase cut (2026-07-21). Called from OnCombatEvent (Plugin.Capture.cs) on every
     // DamageDealt, BEFORE that event is accumulated — the SOLE boss-cut path. On the first boss combat
     // event of a fresh (or re-armed) boss segment, when enabled and no segment is active, cuts
@@ -427,16 +434,16 @@ public sealed partial class Plugin
     {
         // Fast-exit: boss auto-archive off, a segment is already active, or not in an instanced run.
         if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchive.BossSegmentActive, IsInstancedRun())) return;
-        ObserveAutoArchiveBoss(src, tgt);   // adopts _autoArchiveBossId on this run's first sighting of the boss (no-op if already tracked)
+        ObserveAutoArchiveBoss(src, tgt);   // admits into _stageBosses on any sighting of a boss (no-op if already tracked / stage closed)
         // Critical A / Important B (review round 2026-07-27, second pass): an EXPLICIT "does this event
-        // touch the boss" test, not the old `_autoArchiveBossId.Value == 0` proxy. The proxy was only
-        // valid the instant ObserveAutoArchiveBoss had just set the id from THIS event — once the id
-        // survives past that (a still-alive boss after a wipe archive, or — before Critical A's fix — a
-        // stale id pinned past its own fight), the proxy read "a boss is tracked at all" as "this event
-        // is about the boss", so an unrelated event (a rez heal between two players on the wipe→retry
-        // run-back) reached the cut below and opened a spurious boss segment over trash. See
-        // EventInvolvesBoss (Plugin.BossDetection.cs) for the pinned cases.
-        if (!EventInvolvesBoss(src, tgt, _autoArchiveBossId)) return;
+        // touch a tracked boss" test, not a bare "a boss is tracked at all" proxy. The proxy was only
+        // valid the instant ObserveAutoArchiveBoss had just set the id from THIS event — once the id (or,
+        // now, any set member) survives past that (a still-alive boss after a wipe archive, or — before
+        // Critical A's fix — a stale id pinned past its own fight), the proxy read "a boss is tracked" as
+        // "this event is about the boss", so an unrelated event (a rez heal between two players on the
+        // wipe→retry run-back) reached the cut below and opened a spurious boss segment over trash. See
+        // EventInvolvesBoss / EventInvolvesAnyStageBoss (Plugin.BossDetection.cs) for the pinned cases.
+        if (!EventInvolvesAnyStageBoss(src, tgt)) return;
 
         long keepBeforeMs = BossKeepBeforeMs;
         bool preempting = ShouldPreemptPendingForBoss(_pendingArchiveReason is not null);

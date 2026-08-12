@@ -29,34 +29,42 @@ public sealed partial class Plugin
     // every archive and would make the meter forget which bosses are already dead mid-run.
     private readonly AutoArchive.KilledBossTracker _killedBosses = new();
 
-    // The currently-identified boss for trigger purposes. NOT cleared by Clear(): the framework's
-    // vitals cache outlives a plugin archive, so BossStatus keeps tracking the same boss across
-    // the boss-phase archive; scene resets / AOI disappear / the idle sweep wipe its vitals row,
-    // which BossStatus reads as "gone" (the re-arm signal).
+    // The SET of bosses engaged this stage (multi-boss per battle, Spec A). Replaces the single
+    // _autoArchiveBossId latch this file used to carry. NOT cleared by Clear(): the framework's vitals
+    // cache outlives a plugin archive, so BossStatus keeps polling the same members across a boss-phase
+    // archive; scene resets / AOI disappear / the idle sweep clear a member's vitals row, which
+    // BossStatus reads as "gone" (the re-arm signal) — exactly as the single latch worked. Reset ONLY at
+    // the scene boundary (Plugin.History.cs OnSceneChanged), and drained at the boss cut (all members
+    // gone, ShouldClearTrackedBoss allows it) so the next stage opens a fresh set. Pure decisions
+    // (admit/aggregate/drain) live in StageBossSet (unit-tested); this file is the IL2CPP glue that
+    // polls _services.CombatLookup.GetVitals per member.
     //
-    // Critical A (review round 2026-07-27, second pass): a run that ends without the tracked boss ever
-    // being observed at hp<=0 (wipe-and-leave — the owner's normal loop, an abandoned pull, a fail-out,
-    // the boss despawning on reset) used to leave this id pinned to a dead-and-gone entity for the REST
-    // OF THE SESSION — ObserveAutoArchiveBoss's `!= 0` early-out then blocks every later boss from ever
-    // being adopted again, silently disabling BossKill for every later fight. Fixed two ways: (1) the
-    // scene boundary (Plugin.History.cs OnSceneChanged) now resets this alongside _killedBosses — a
-    // fresh run's boss is a new identity, so this must not survive into it stale; (2) within the SAME
-    // run (no scene change — a wipe-and-retry on a boss that is still alive), ShouldClearTrackedBoss now
-    // also clears on an eviction that has no open segment to protect, instead of pinning forever
-    // whenever the boss is never confirmed dead.
+    // Critical A (review round 2026-07-27, second pass; carried into the set): a run that ends without a
+    // tracked boss ever being observed at hp<=0 (wipe-and-leave — the owner's normal loop, an abandoned
+    // pull, a fail-out, the boss despawning on reset) must not leave a member pinned dead-and-gone for
+    // the rest of the session. Fixed the same two ways as the old single latch: (1) the scene boundary
+    // resets the whole set alongside _killedBosses; (2) within the SAME run, ShouldClearTrackedBoss still
+    // clears on an eviction that has no open segment to protect (now applied to the SET's aggregate
+    // gone/dead via Aggregate()), instead of pinning forever whenever a member is never confirmed dead.
     //
-    // RETIRED sibling (owner ruling 2026-07-28, defect 2): a separate _settleBossId used to ride on this
-    // same adoption to drive a boss-targeted settle clock (finding 3, 2026-07-27). That narrowing is
-    // withdrawn — see Plugin.AutoArchive.cs's retired-SettleClockMs note — so _settleBossId,
-    // _lastBossDamageMs, and IsSettleBossDamage are all deleted; this field alone now drives adoption.
-    private EntityId _autoArchiveBossId;
+    // RETIRED sibling (owner ruling 2026-07-28, defect 2): a separate _settleBossId used to ride on the
+    // old single-latch adoption to drive a boss-targeted settle clock (finding 3, 2026-07-27). That
+    // narrowing stays withdrawn — see Plugin.AutoArchive.cs's retired-SettleClockMs note.
+    private readonly AutoArchive.StageBossSet _stageBosses = new();
+
+    // Per-member last LIVE Hp/MaxHp fraction, for the raid scripted-kill inference (HP never reads 0,
+    // entity then vanishes). Keyed by entity; entries are pruned alongside the set at scene change AND
+    // when the set drains at a boss cut (2026-08-12 review, amendment 6) — bounded either way, and keeps
+    // the map from carrying corpse entries across stages within one run.
+    private readonly Dictionary<EntityId, float> _memberLastHpFrac = new();
 
     // Per-segment boss upload fields (raid per-stage bossId + scripted-kill flag). UPLOAD-ONLY — none of
     // these feed BossStatus's (present,gone,dead) tuple or any engine gate, so cut timing/count is
-    // unchanged (invariants 6/8). Config id is snapshotted at ADOPTION (caches live) because the boss's
-    // attr/vitals row is gone by the DEFERRED BossKill archive; it follows _autoArchiveBossId's lifecycle
-    // (set at adopt, reset at scene change) so the deferred archive — which fires after the death cleared
-    // _autoArchiveBossId — still uploads the right id.
+    // unchanged (invariants 6/8). TEMPORARY REPRESENTATIVE MIRROR (multi-boss plan Task 2, 2026-08-12):
+    // now derived from the FIRST-admitted member of _stageBosses (CheckBossCandidate on first admission;
+    // BossStatus per tick) rather than the old single latch — for a single-boss stage (every stage
+    // today) this is byte-identical to the old behavior. Task 6 replaces this mirror with a proper
+    // roster-preferred pick built from the whole set at archive time and deletes these scalars.
     private int   _segmentBossConfigId;          // monster config id of the boss THIS segment engaged; 0 = none
     private bool  _segmentBossKilled;            // this segment's tracked boss was observed killed (upload flag)
     private float _segmentBossLastHpFrac = -1f;  // last LIVE Hp/MaxHp of the tracked boss; -1 = never observed
@@ -78,56 +86,102 @@ public sealed partial class Plugin
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
     // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction): a death arms
     // the engine's BossKill want, while an eviction is ignored — only an archive ends a segment.
+    // Aggregate() is the SET-level lift of this same present/gone/dead shape: present = ANY member
+    // present; gone = ALL members gone; dead = set non-empty and ALL members killed (multi-boss plan,
+    // Task 1/2) — the intentional timing change that keeps a two-boss stage as ONE entry.
     //
-    // Finding 4 (2026-07-27): _autoArchiveBossId used to clear ONLY on a confirmed death
+    // Finding 4 (2026-07-27): the old single latch used to clear ONLY on a confirmed death
     // (ShouldClearTrackedBoss), never on a transient eviction alone. Before that fix a mid-fight
     // vitals-cache blink cleared the id same as a real death, but re-adoption is gated behind
     // !bossSegmentActive (ShouldConsiderInlineBossCut), which stays closed for the WHOLE fight — so the
     // id was never re-set, BossDead never rose again, and no BossKill ever fired for that fight (it
-    // only banked at the eventual run-end archive). Leaving the id in place lets the NEXT tick re-poll
-    // vitals for the SAME entity, so a recovered blink resumes with no re-detect needed. Do NOT instead
-    // move detection outside the !bossSegmentActive gate — a boss-tagged ADD would then get adopted
-    // while the real boss's death is momentarily cleared, and the add's own death would fire a
-    // spurious mid-fight BossKill.
+    // only banked at the eventual run-end archive). Leaving a member's liveness Present=false (not
+    // removed) lets the NEXT tick re-poll vitals for the SAME entity, so a recovered blink resumes with
+    // no re-detect needed — preserved per-member below: a lone eviction sets Present=false, Dead=false,
+    // so while another member is present Aggregate() stays (true,false,false) and re-polls next tick.
     //
     // Critical A (review round 2026-07-27, second pass): that finding-4 fix was too broad — an eviction
     // with NO open segment (the fight already ended via an earlier archive: a wipe, a scene change, a
-    // stage cut) has no fight left to protect, so pinning the id there just leaves it stuck on a corpse
-    // forever (see _autoArchiveBossId's doc). ShouldClearTrackedBoss now also clears in that shape;
-    // narrowing the blink protection to ONLY the case it was built for (a segment still open).
+    // stage cut) has no fight left to protect, so pinning a member there just leaves the set stuck on a
+    // corpse forever. ShouldClearTrackedBoss still clears in that shape (now gating DrainIfAllGone at
+    // the SET level); narrowing the blink protection to ONLY the case it was built for (a segment still
+    // open).
     //
-    // ACCEPTED RESIDUAL (not fixed, 2026-07-26): the mark below running BEFORE _autoArchiveBossId is
-    // cleared — the ordering that makes the whole fix correct — cannot itself be unit-tested (Plugin
+    // ACCEPTED RESIDUAL (not fixed, 2026-07-26): the mark below running BEFORE a member's liveness is
+    // recorded — the ordering that makes the whole fix correct — cannot itself be unit-tested (Plugin
     // needs the IL2CPP service surface: _services.CombatLookup.GetVitals). What IS unit-tested
-    // headless: the tracker (KilledBossTrackerTests), ShouldAdoptBossCandidate, and
-    // ShouldClearTrackedBoss (all in AutoArchiveContentGuardTests). A known, named gap.
+    // headless: the tracker (KilledBossTrackerTests), ShouldAdoptBossCandidate, ShouldClearTrackedBoss
+    // (all in AutoArchiveContentGuardTests), and the set's own aggregate rules (StageBossSetTests). A
+    // known, named gap — this method is the IL2CPP glue Task 2 exists to wire, not to prove.
+    //
+    // Alloc-free hot path (2026-08-12 review, amendment 1): this runs EVERY FRAME
+    // (BuildAutoArchiveInputs), so the loop below is a plain indexed `for` over Count/MemberAt — no
+    // LINQ, no MembersSnapshot() (that allocates and is archive-time-only).
     private (bool present, bool gone, bool dead) BossStatus()
     {
-        if (_autoArchiveBossId.Value == 0) return (false, false, false);
-        var v = _services.CombatLookup.GetVitals(_autoArchiveBossId);
-        bool dead    = v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
-        bool evicted = !v.IsKnown;
-        // UPLOAD-ONLY: remember the boss's last LIVE HP fraction for the scripted-kill inference below.
-        // Does NOT feed the (present,gone,dead) tuple, so the engine's cut timing/count is byte-identical
-        // (invariants 6/8).
-        if (v.HasHpObservation && v.MaxHp > 0) _segmentBossLastHpFrac = (float)v.Hp / v.MaxHp;
-        if (dead || evicted)
+        if (_stageBosses.Count == 0) return (false, false, false);
+
+        for (var i = 0; i < _stageBosses.Count; i++)
         {
-            // Mark BEFORE clearing — this is the only place that still knows which entity died. Never
-            // marks on a transient eviction, only a confirmed death.
-            if (dead && _killedBosses.MarkKilled(_autoArchiveBossId) is { } evictedBossId)
-                LogKilledBossEviction(evictedBossId, _autoArchiveBossId);
-            // UPLOAD-ONLY per-segment kill latch (feeds no engine decision): HP<=0 always; a scripted raid
-            // kill (HP never reaches 0, entity then vanishes) counts when the boss was last seen at/under
-            // BossScriptedKillHpFrac. RAID-GATED so a dungeon boss the player merely walks away from at low
-            // HP is never counted — dungeons keep pure HP<=0 semantics.
-            if (dead || (evicted && IsRaidContent()
-                         && _segmentBossLastHpFrac >= 0f && _segmentBossLastHpFrac <= BossScriptedKillHpFrac))
-                _segmentBossKilled = true;
-            if (ShouldClearTrackedBoss(dead, _autoArchive.BossSegmentActive)) _autoArchiveBossId = default;
-            return (false, true, dead);
+            var (id, _, _) = _stageBosses.MemberAt(i);
+            var v = _services.CombatLookup.GetVitals(id);
+            bool dead    = v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
+            bool evicted = !v.IsKnown;
+
+            // UPLOAD-ONLY: remember this member's last LIVE HP fraction for the scripted-kill inference
+            // below. Does NOT feed the (present,gone,dead) tuple, so the engine's cut timing/count is
+            // byte-identical (invariants 6/8).
+            if (v.HasHpObservation && v.MaxHp > 0) _memberLastHpFrac[id] = (float)v.Hp / v.MaxHp;
+            var lastFrac = _memberLastHpFrac.TryGetValue(id, out var f) ? f : -1f;
+
+            // Scripted raid bosses are brought to ~1% then killed by a triggered event (HP never reads
+            // 0, entity then vanishes). RAID-GATED so a dungeon boss the player merely walked away from
+            // at low HP is never counted — dungeons keep pure HP<=0 semantics.
+            bool scriptedKill = evicted && IsRaidContent()
+                && lastFrac >= 0f && lastFrac <= BossScriptedKillHpFrac;
+
+            // Mark BOTH trackers on a confirmed/scripted kill (2026-08-12 review, amendment 2). A member
+            // now STAYS in the set (sticky Killed) instead of being cleared like the old single latch,
+            // so without the !IsKilled gate this would re-add-and-re-log every tick for as long as a
+            // co-boss keeps the stage open. Also closes a phantom-stage hole: an unmarked scripted-killed
+            // corpse in _killedBosses could otherwise be re-admitted by CheckBossCandidate right after
+            // DrainIfAllGone.
+            if ((dead || scriptedKill) && !_killedBosses.IsKilled(id)
+                && _killedBosses.MarkKilled(id) is { } evictedBossId)
+                LogKilledBossEviction(evictedBossId, id);
+
+            // present when alive; a confirmed/scripted kill records Dead (sticky Killed); a bare
+            // eviction records not-present (blink) but not dead — Aggregate() decides gone = ALL gone.
+            var live = new AutoArchive.StageBossSet.BossLiveness
+            {
+                Present = !dead && !evicted,
+                Dead    = dead || scriptedKill,
+            };
+            _stageBosses.SetLiveness(id, live);
+
+            // UPLOAD-ONLY representative mirror (Task 2 stopgap — see the field doc; Task 6 replaces
+            // this with a roster-preferred pick built from the whole set at archive time): the
+            // FIRST-admitted member drives the per-segment scalar upload fields exactly as the single
+            // latch used to.
+            if (i == 0)
+            {
+                _segmentBossLastHpFrac = lastFrac;
+                if (dead || scriptedKill) _segmentBossKilled = true;
+            }
         }
-        return (true, false, false);
+
+        var agg = _stageBosses.Aggregate();
+        // Mirror the old single-latch clear-on-death/no-open-segment behavior at the SET level: once the
+        // whole stage is gone and no segment is open to protect, drain so the next stage opens fresh.
+        // Prune this drain's members out of _memberLastHpFrac too (amendment 6) — read ids BEFORE
+        // draining, since DrainIfAllGone clears the set's membership.
+        if (agg.gone && ShouldClearTrackedBoss(agg.dead, _autoArchive.BossSegmentActive))
+        {
+            for (var i = 0; i < _stageBosses.Count; i++)
+                _memberLastHpFrac.Remove(_stageBosses.MemberAt(i).id);
+            _stageBosses.DrainIfAllGone();
+        }
+        return agg;
     }
 
     /// <summary>Pure decision (finding 4, narrowed by Critical A — review round 2026-07-27): clear the
@@ -155,12 +209,16 @@ public sealed partial class Plugin
         => confirmedDead || !segmentActive;
 
     // Called from OnCombatEvent (Plugin.Capture.cs) BEFORE the player-only early-out, next to
-    // NoteReplayEntity — same "both sides of every event" coverage the boss-HP feature uses.
+    // NoteReplayEntity — same "both sides of every event" coverage the boss-HP feature uses. NO
+    // "already tracked" early-out (multi-boss plan Task 2): the old single latch stopped checking once
+    // one boss was adopted; the set must keep admitting so a co-boss engaged later in the same stage is
+    // seen too. CheckBossCandidate / StageBossSet.Admit are the actual gates (already-tracked id,
+    // already-killed id, closed stage, MaxMembers all no-op harmlessly).
     private void ObserveAutoArchiveBoss(EntityId src, EntityId tgt)
     {
-        if (!_autoArchive.BossEnabled || _autoArchiveBossId.Value != 0) return;
+        if (!_autoArchive.BossEnabled) return;
         CheckBossCandidate(src);
-        if (_autoArchiveBossId.Value == 0) CheckBossCandidate(tgt);
+        CheckBossCandidate(tgt);
     }
 
     private void CheckBossCandidate(EntityId id)
@@ -174,14 +232,21 @@ public sealed partial class Plugin
             _bossCheck[id] = isBoss;
         }
         if (!ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) return;
-        _autoArchiveBossId = id;
-        // Snapshot the boss's config id NOW (caches live at adoption) for the per-segment upload bossId,
-        // and open a fresh per-boss HP/killed window. Captured here — not at archive — because by the
-        // deferred BossKill archive the vitals/attr row is gone (same reason _bossMonsterInfo is
-        // snapshotted early in ResolveBossEntity).
-        _segmentBossConfigId   = _services.GameData.World.GetMonsterByEntity(id)?.Id ?? 0;
-        _segmentBossLastHpFrac = -1f;
-        _segmentBossKilled     = false;
+        // Snapshot the boss's config id NOW (caches live at adoption) — the vitals/attr row is gone by
+        // the deferred BossKill archive (same reason _bossMonsterInfo used to be snapshotted early in
+        // ResolveBossEntity). Admit into the set: no-op if the stage is closed, this id is already
+        // tracked, or the set is at MaxMembers.
+        var configId = _services.GameData.World.GetMonsterByEntity(id)?.Id ?? 0;
+        if (!_stageBosses.Admit(id, configId)) return;
+        // UPLOAD-ONLY: the FIRST-ever admission into a fresh set opens a new per-segment upload window
+        // (mirrors the old single latch's adoption reset — see the representative-mirror field doc). A
+        // later co-boss admission into an ALREADY-open set must not clobber it.
+        if (_stageBosses.Count == 1)
+        {
+            _segmentBossConfigId   = configId;
+            _segmentBossLastHpFrac = -1f;
+            _segmentBossKilled     = false;
+        }
     }
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that
@@ -202,4 +267,19 @@ public sealed partial class Plugin
     /// source, boss as target, neither side is the boss, and a zero (never-adopted) boss id.</summary>
     internal static bool EventInvolvesBoss(EntityId src, EntityId tgt, EntityId bossId)
         => bossId.Value != 0 && (src == bossId || tgt == bossId);
+
+    /// <summary>Set-aware wrapper (multi-boss plan Task 2): does this combat event involve ANY current
+    /// stage member? Replaces the single-id <c>EventInvolvesBoss(src, tgt, _autoArchiveBossId)</c> call
+    /// in <c>MaybeCutForBossPhase</c> (Plugin.AutoArchive.cs) — the pure two-id overload above stays as
+    /// it is for its own unit tests. Indexed Count/MemberAt iteration (2026-08-12 review, amendment 1):
+    /// this runs per COMBAT EVENT, so no LINQ/allocation.</summary>
+    private bool EventInvolvesAnyStageBoss(EntityId src, EntityId tgt)
+    {
+        for (var i = 0; i < _stageBosses.Count; i++)
+        {
+            var (id, _, _) = _stageBosses.MemberAt(i);
+            if (EventInvolvesBoss(src, tgt, id)) return true;
+        }
+        return false;
+    }
 }

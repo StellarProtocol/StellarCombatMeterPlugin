@@ -82,19 +82,19 @@ public sealed partial class Plugin
         // New scene = new run: forget which bosses died in the previous one, so the same boss template
         // in the next run cuts normally. Deliberately NOT in Clear() — that runs on every archive.
         _killedBosses.Clear();
-        // Critical A (review round 2026-07-27, second pass): the tracked boss id gets a per-run reset
-        // here too. Before this fix, a run that ended without the tracked boss ever being observed at
-        // hp<=0 (wipe-and-leave — the owner's normal loop, an abandoned pull, a fail-out, the boss
-        // despawning on reset) left _autoArchiveBossId pinned to a dead-and-gone entity for the REST OF
-        // THE SESSION: ObserveAutoArchiveBoss's `!= 0` early-out then blocks every later boss — in this
-        // run or the next one — from ever being adopted again, so no BossKill ever fires again. Scoping
-        // this to the scene boundary is what makes a fresh dungeon in the same session detect its own
-        // boss normally. (A sibling _settleBossId used to get the same reset here — retired with the
-        // rest of finding 3's boss-only settle clock, owner ruling 2026-07-28; see
+        // Critical A (review round 2026-07-27, second pass; carried into the multi-boss set, Task 2
+        // 2026-08-12): the tracked boss state gets a per-run reset here too. Before the original fix, a
+        // run that ended without the tracked boss ever being observed at hp<=0 (wipe-and-leave — the
+        // owner's normal loop, an abandoned pull, a fail-out, the boss despawning on reset) left the
+        // tracker pinned to a dead-and-gone entity for the REST OF THE SESSION, blocking every later
+        // boss — in this run or the next one — from ever being adopted again, so no BossKill ever fires
+        // again. Scoping this to the scene boundary is what makes a fresh dungeon in the same session
+        // detect its own boss(es) normally. (A sibling _settleBossId used to get the same reset here —
+        // retired with the rest of finding 3's boss-only settle clock, owner ruling 2026-07-28; see
         // Plugin.AutoArchive.cs's retired-SettleClockMs note.)
-        _autoArchiveBossId = default;
+        _stageBosses.Clear(); _memberLastHpFrac.Clear();
         // New run: drop the per-segment boss upload fields too, so a fresh dungeon/raid never inherits the
-        // previous run's boss id (mirrors the _autoArchiveBossId / _killedBosses per-run reset above).
+        // previous run's boss id (mirrors the _stageBosses / _killedBosses per-run reset above).
         _segmentBossConfigId   = 0;
         _segmentBossLastHpFrac = -1f;
         _segmentBossKilled     = false;

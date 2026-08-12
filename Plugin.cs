@@ -400,11 +400,11 @@ public sealed partial class Plugin : IStellarPlugin
         // walk-in-clip root cause, proven 2026-07-19). The recorder is a per-RUN capture: it resets
         // ONLY at true run end (scene-leave / run-id change) via ResetReplay, and each banked archive
         // uploads a watermark window without stopping it. See _replayWatermarkMs / ResetReplay.
-        _bossCheck.Clear();   // bounded boss-lookup cache; _autoArchiveBossId survives on purpose (see its doc)
+        _bossCheck.Clear();   // bounded boss-lookup cache; _stageBosses survives on purpose (see its doc)
         // Per-archive: the bossKilled upload flag is scoped to ONE segment. _segmentBossConfigId and
-        // _segmentBossLastHpFrac are deliberately NOT reset here — they follow _autoArchiveBossId's
-        // lifecycle (reset at scene change / next adoption) so the DEFERRED BossKill archive, which fires
-        // after the death already cleared _autoArchiveBossId AND after a pre-boss trash bank's Clear(),
+        // _segmentBossLastHpFrac are deliberately NOT reset here — they follow _stageBosses's
+        // lifecycle (reset at scene change / next first-admission) so the DEFERRED BossKill archive,
+        // which fires after the death already updated the set AND after a pre-boss trash bank's Clear(),
         // still uploads the correct boss id.
         _segmentBossKilled = false;
     }
