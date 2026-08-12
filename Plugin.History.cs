@@ -59,6 +59,14 @@ public sealed partial class Plugin
         public int       Defeated;
         // Why this segment was archived ("manual"|"scene"|"wipe"|"boss"|"idle"|"stage") — v10.
         public string   Trigger = "manual";
+        // Per-segment boss upload fields (additive; NOT persisted to the history JSON — read synchronously
+        // at archive-time upload only, so no history-format change / rollback risk per process-rules §6).
+        // SegmentBossConfigId = the boss THIS segment engaged (raid per-stage id, fixes the run-scoped
+        // collapse); BossKilled = that boss was observed killed. The worker aggregates BossKilled across a
+        // run's segments vs. the raid roster to derive the CLEAR verdict server-side (plugin does NOT
+        // compute the clear / touch the verdict).
+        public int      SegmentBossConfigId;
+        public bool     BossKilled;
         // NOTE: per-entry upload state (phase + run URL) is NOT stored on the entry — it persists as a
         // SIDECAR "uploadStates" key in the history config section (Plugin.HistoryStore.cs), keyed by the
         // stable (LevelUuid, ArchivedAtMs) composite, so the entry JSON stays byte-identical to what older
@@ -85,6 +93,11 @@ public sealed partial class Plugin
         // rest of finding 3's boss-only settle clock, owner ruling 2026-07-28; see
         // Plugin.AutoArchive.cs's retired-SettleClockMs note.)
         _autoArchiveBossId = default;
+        // New run: drop the per-segment boss upload fields too, so a fresh dungeon/raid never inherits the
+        // previous run's boss id (mirrors the _autoArchiveBossId / _killedBosses per-run reset above).
+        _segmentBossConfigId   = 0;
+        _segmentBossLastHpFrac = -1f;
+        _segmentBossKilled     = false;
         RecomputeUploadPolicyCache();   // new scene ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
         if (_lastSceneName is null)
         {
@@ -341,6 +354,8 @@ public sealed partial class Plugin
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome, _clearedThisRun),
             Defeated         = _services.Dungeon.LastDefeatedCount,
             Trigger          = ResolveTriggerTag(reason),
+            SegmentBossConfigId = _segmentBossConfigId,
+            BossKilled          = _segmentBossKilled,
         };
         ApplyAttrRanges(entry);
         ApplyClassSpans(entry);

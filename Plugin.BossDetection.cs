@@ -51,6 +51,29 @@ public sealed partial class Plugin
     // _lastBossDamageMs, and IsSettleBossDamage are all deleted; this field alone now drives adoption.
     private EntityId _autoArchiveBossId;
 
+    // Per-segment boss upload fields (raid per-stage bossId + scripted-kill flag). UPLOAD-ONLY — none of
+    // these feed BossStatus's (present,gone,dead) tuple or any engine gate, so cut timing/count is
+    // unchanged (invariants 6/8). Config id is snapshotted at ADOPTION (caches live) because the boss's
+    // attr/vitals row is gone by the DEFERRED BossKill archive; it follows _autoArchiveBossId's lifecycle
+    // (set at adopt, reset at scene change) so the deferred archive — which fires after the death cleared
+    // _autoArchiveBossId — still uploads the right id.
+    private int   _segmentBossConfigId;          // monster config id of the boss THIS segment engaged; 0 = none
+    private bool  _segmentBossKilled;            // this segment's tracked boss was observed killed (upload flag)
+    private float _segmentBossLastHpFrac = -1f;  // last LIVE Hp/MaxHp of the tracked boss; -1 = never observed
+
+    // Scripted raid bosses are brought to ~1% then killed by a triggered event (HP never reads 0, entity
+    // vanishes). Treat "last seen at/under this fraction, then evicted" as a kill — RAID-GATED so a dungeon
+    // boss the player merely walked away from at low HP is never counted (dungeons keep pure HP<=0).
+    private const float BossScriptedKillHpFrac = 0.15f;
+
+    // Raid-content gate (owner: party size does NOT classify content — Golem is 20p but not a raid, so
+    // PartyType.Raid20 is wrong here). mapId is derived the SAME way BuildEncounter derives the uploaded
+    // mapId — ParseMapId(_lastSceneName), the scene id string that becomes encounter.mapId. The nine raid
+    // ids are documented in docs/recon/combatmeter-data-facts.md.
+    private static readonly HashSet<int> RaidMapIds =
+        new() { 13001, 13002, 13003, 13011, 13012, 13013, 13021, 13022, 13023 };
+    private bool IsRaidContent() => RaidMapIds.Contains(ParseMapId(_lastSceneName));
+
     // Boss liveness for the engine. Gone = a REAL death observation (HasHpObservation) or the
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
     // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction): a death arms
@@ -84,12 +107,23 @@ public sealed partial class Plugin
         var v = _services.CombatLookup.GetVitals(_autoArchiveBossId);
         bool dead    = v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
         bool evicted = !v.IsKnown;
+        // UPLOAD-ONLY: remember the boss's last LIVE HP fraction for the scripted-kill inference below.
+        // Does NOT feed the (present,gone,dead) tuple, so the engine's cut timing/count is byte-identical
+        // (invariants 6/8).
+        if (v.HasHpObservation && v.MaxHp > 0) _segmentBossLastHpFrac = (float)v.Hp / v.MaxHp;
         if (dead || evicted)
         {
             // Mark BEFORE clearing — this is the only place that still knows which entity died. Never
             // marks on a transient eviction, only a confirmed death.
             if (dead && _killedBosses.MarkKilled(_autoArchiveBossId) is { } evictedBossId)
                 LogKilledBossEviction(evictedBossId, _autoArchiveBossId);
+            // UPLOAD-ONLY per-segment kill latch (feeds no engine decision): HP<=0 always; a scripted raid
+            // kill (HP never reaches 0, entity then vanishes) counts when the boss was last seen at/under
+            // BossScriptedKillHpFrac. RAID-GATED so a dungeon boss the player merely walks away from at low
+            // HP is never counted — dungeons keep pure HP<=0 semantics.
+            if (dead || (evicted && IsRaidContent()
+                         && _segmentBossLastHpFrac >= 0f && _segmentBossLastHpFrac <= BossScriptedKillHpFrac))
+                _segmentBossKilled = true;
             if (ShouldClearTrackedBoss(dead, _autoArchive.BossSegmentActive)) _autoArchiveBossId = default;
             return (false, true, dead);
         }
@@ -141,6 +175,13 @@ public sealed partial class Plugin
         }
         if (!ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) return;
         _autoArchiveBossId = id;
+        // Snapshot the boss's config id NOW (caches live at adoption) for the per-segment upload bossId,
+        // and open a fresh per-boss HP/killed window. Captured here — not at archive — because by the
+        // deferred BossKill archive the vitals/attr row is gone (same reason _bossMonsterInfo is
+        // snapshotted early in ResolveBossEntity).
+        _segmentBossConfigId   = _services.GameData.World.GetMonsterByEntity(id)?.Id ?? 0;
+        _segmentBossLastHpFrac = -1f;
+        _segmentBossKilled     = false;
     }
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that

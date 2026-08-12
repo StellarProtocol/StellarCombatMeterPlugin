@@ -69,8 +69,12 @@ internal sealed class CombatLogAssembler
 
         // Use the capture-time snapshot when available; fall back to live resolution for
         // deferred manual uploads of old entries (caches may still be warm if still in-map).
-        var bossConfigId = snapshotBossConfigId != 0 ? snapshotBossConfigId : ResolveBossConfigId(entry);
-        var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName));
+        // Per-segment id first (the boss THIS segment engaged, captured at cut time); fall back to the
+        // run-scoped capture-time snapshot, then the (players-only-entry, effectively empty) resolver.
+        var bossConfigId = entry.SegmentBossConfigId != 0 ? entry.SegmentBossConfigId
+                         : snapshotBossConfigId != 0      ? snapshotBossConfigId
+                         : ResolveBossConfigId(entry);
+        var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), entry.BossKilled);
 
         // --- Uploader ---
         var localEntityId = _services.CombatSnapshot.LocalEntityId;
@@ -158,7 +162,7 @@ internal sealed class CombatLogAssembler
     /// back to their own mapId lookup rather than storing an empty string.
     /// </param>
     internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry, int bossConfigId = 0,
-                                            string? sceneDisplayName = null)
+                                            string? sceneDisplayName = null, bool bossKilled = false)
     {
         var sceneName = entry.SceneName ?? "";
         if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
@@ -193,7 +197,8 @@ internal sealed class CombatLogAssembler
             DifficultyLevel: entry.DifficultyLevel,
             DungeonStartMs:  entry.DungeonStartMs,
             DefeatedCount:   entry.Defeated,
-            PartyId:         entry.PartyId);
+            PartyId:         entry.PartyId,
+            BossKilled:      bossKilled);
     }
 
     /// <summary>

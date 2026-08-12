@@ -190,10 +190,17 @@ public sealed partial class Plugin
         // WHICH states actually fire in real content — which is what the per-stage settings need in order
         // to pick a default rather than guess. Read at archive time: the stage archive commits within
         // ~15-20ms of arming (see armedMs), so this is the arming state in practice.
+        // Per-segment boss upload fields, DIAGNOSTICS-gated: confirms per-boss re-adoption fired for a
+        // raid (segBoss changes across segments) and tunes BossScriptedKillHpFrac (hpFrac = the boss's
+        // last observed HP fraction before the vanish). Off in production so the [archive] line's cost
+        // is unchanged; the base line stays ungated as before.
+        var segText = StellarDiagnostics.IsEnabled
+            ? $" segBoss={_segmentBossConfigId} killed={_segmentBossKilled} hpFrac={_segmentBossLastHpFrac:0.###}"
+            : "";
         _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
             $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText} " +
-            $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}");
+            $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}{segText}");
     }
 
     // Remembers the last flow version SEEN here, so only real transitions log (this runs per tick).

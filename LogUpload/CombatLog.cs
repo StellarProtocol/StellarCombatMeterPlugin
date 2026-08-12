@@ -75,7 +75,12 @@ internal sealed record Encounter(
     int DefeatedCount = 0,
     // Party id (GrpcTeam team_id) frozen at run-start (B1). Emitted as a STRING; additive —
     // 0/omitted when solo/unknown.
-    long PartyId = 0);
+    long PartyId = 0,
+    // Per-segment boss-kill flag (raid per-stage clear derivation). Additive — false/omitted when the
+    // segment's tracked boss was not observed killed. NOT part of CanonicalPayload (signature-neutral,
+    // like bossId/partyId). The worker aggregates the killed set across a run's segments vs. the raid
+    // roster to derive the CLEAR verdict server-side.
+    bool BossKilled = false);
 
 // MasterScore: the uploader's CURRENT account master-mode score (SocialIdentity.MasterScore),
 // attached on every upload so the StellarLogs char page reflects a fresh dungeon clear promptly
