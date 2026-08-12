@@ -1,3 +1,5 @@
+using System;
+using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter.AutoArchive;
 
 namespace Stellar.CombatMeter;
@@ -51,6 +53,25 @@ public sealed partial class Plugin
         // re-latches) can't reuse this run's id. The next run re-latches _lastRunId at its combat start
         // (Plugin.Capture.EnsureCombatStarted).
         _lastRunId = 0;
+        // New finding (re-review, 2026-08-13) — stage-boss latch staleness: _segmentStageBosses
+        // (Plugin.BossDetection.cs) is otherwise only reset by Clear(), which ManualArchive's skip-empty
+        // (Plugin.History.cs, `_stats.Count == 0` early return) and suppressed-junk (ShouldSuppressAutoArchive
+        // early return) paths both SKIP. A boss admitted by a whiffed/abandoned pull (CheckBossCandidate
+        // runs on every combat event, incl. 0-amount ones) then dropped via one of those two early returns
+        // left the latch pinned to a dead run's boss past its own run boundary — a LATER, unrelated banked
+        // archive (next run, no boss engaged) would read it via ResolveCurrentStageBosses/BuildBossHpTracks
+        // and misattribute a stale boss to itself. Reset unconditionally here, right after ManualArchive
+        // above returns (whichever branch it took — banked, skip-empty, or suppressed all count as "this
+        // boundary's archive attempt already had its read"), so the latch can never survive past the
+        // boundary entitled to consume it. Boundary-scoped ONLY — this method runs from RunBoundaryCore's
+        // poll-commit path and OnSceneChanged's post-guard call, never from a within-run auto-archive
+        // trigger (wipe/boss/idle/stage calls ManualArchive directly, not through here) — so a still-open
+        // stage's latch keeps flowing forward correctly within the same run.
+        // GLUE GAP (documented, not pinned — same IL2CPP-adjacent convention as the other instance-state
+        // mutations in this region; Plugin can't be instantiated in tests): this call itself is untestable
+        // headless. The invariant it restores — empty live set + empty latch yields no bosses — is pinned
+        // by PreferLiveStageBosses_both_empty_returns_the_empty_live_set (AutoArchiveContentGuardTests.cs).
+        _segmentStageBosses = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
     }
 
     // The ONE run-boundary bank+reset block (spec §3 COMMIT), composed of the two halves above. Called

@@ -70,11 +70,21 @@ public sealed partial class Plugin
     // prefers the LIVE set and falls back here only when it is empty — a still-open multi-boss stage is
     // unaffected. Always assigned a WHOLE NEW list (StageBossSet.MembersSnapshot()), never mutated in
     // place, so an already-archived entry's copy of an older snapshot can never change out from under it.
-    // Reset in Clear() (Plugin.cs) — AFTER BuildHistoryEntry has already read it for THIS archive, so one
-    // segment's bosses never bleed into the next (mirrors _segmentBossKilled's per-archive Clear() reset,
-    // commit 9346ece, before the multi-boss set replaced the single-boss scalar). Deliberately NOT reset
-    // in ResetRunScopedTrackers/OnSceneChanged: that runs BEFORE the scene archive's BuildHistoryEntry, so
-    // clearing the latch there would reproduce the exact bug this field exists to fix.
+    // Reset at TWO points, each AFTER the archive entitled to read it has had its chance: (1) Clear()
+    // (Plugin.cs), run AFTER BuildHistoryEntry has read it for a REAL bank — mirrors _segmentBossKilled's
+    // per-archive Clear() reset, commit 9346ece, before the multi-boss set replaced the single-boss scalar
+    // (that mirror claim covers ONLY this reset point — the retired scalar had no boundary-scoped
+    // counterpart of its own). (2) BankRunBoundary (Plugin.RunBoundary.cs), run immediately after its
+    // ManualArchive(reason) call, beside `_lastRunId = 0` — new finding, re-review 2026-08-13: a boss
+    // admitted by a whiffed/abandoned pull (CheckBossCandidate runs on every combat event, even 0-amount
+    // ones) then dropped via ManualArchive's skip-empty or suppressed-junk early return (both SKIP
+    // Clear()) left this latch holding a dead run's boss past its own run boundary — a LATER, unrelated
+    // banked archive (next run, no boss engaged) would read it via ResolveCurrentStageBosses and
+    // misattribute a stale boss to itself. Both reset points are boundary/archive-scoped ONLY — never
+    // inside ResetRunScopedTrackers/OnSceneChanged's early half, which runs BEFORE the scene archive's own
+    // BuildHistoryEntry and would reproduce the ORIGINAL Critical-1 bug if cleared there — so a within-run
+    // suppressed cut (same stage, no boundary crossed) still keeps the latch correctly. With both reset
+    // points in place, the "never bleeds into the next [segment/run]" claim is true again.
     private IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> _segmentStageBosses =
         Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
 
