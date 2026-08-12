@@ -146,6 +146,18 @@ internal static class CombatLogWriter
         if (e.Name != null) w.Name("name").Str(e.Name);
         w.Name("bossId").Number(e.BossId);
         if (e.BossKilled) w.Name("bossKilled").Bool(true);
+        if (e.Bosses is { Count: > 0 } bosses)
+        {
+            w.Name("bosses"); w.BeginArray();
+            foreach (var b in bosses)
+            {
+                w.BeginObject();
+                w.Name("configId").Number(b.ConfigId);
+                if (b.Killed) w.Name("killed").Bool(true);
+                w.EndObject();
+            }
+            w.EndArray();
+        }
         if (e.BossName != null) w.Name("bossName").Str(e.BossName);
         if (e.Difficulty != null) w.Name("difficulty").Str(e.Difficulty);
         w.Name("masterModeScore").Number(e.MasterModeScore);

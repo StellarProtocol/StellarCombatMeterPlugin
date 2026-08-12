@@ -996,4 +996,65 @@ public sealed class LogUploadTests
         Assert.Contains("region=jp", precheck);
         Assert.Contains("levelUuid=", precheck);
     }
+
+    // -------------------------------------------------------------------------
+    // Multi-boss per battle (Spec A) Task 5: additive bosses[] array on the encounter upload.
+    // BossRec carries every boss the plugin SAW this segment; the scalar BossId/BossKilled stay as
+    // the roster-preferred representative for old readers (Task 6 wires the assembler to populate it).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Writer_emits_bosses_array_when_present()
+    {
+        var enc = new Encounter("dungeon", 77L, null, 100, 0, null, 0, null, null, 0,
+            "kill", 1000L, 2000L, 1000L, 0,
+            Bosses: new[] { new BossRec(102800, true), new BossRec(102801, true) });
+        var hdr = new LogHeader("cm-bosses", 2000L, "2.11", "SEA", null, null, "unlisted",
+            enc, new Uploader(55L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains("\"bosses\"", json);
+        Assert.Contains("102801", json);
+        Assert.Contains("\"killed\":true", json);
+    }
+
+    // Unknown/legacy (null) is OMITTED from header.encounter — matching the other additive fields
+    // (dungeonStartMs, partyId, …) so an old-shape upload's JSON is byte-identical to before.
+    [Fact]
+    public void Writer_omits_bosses_when_null_backcompat()
+    {
+        var enc = new Encounter("dungeon", 77L, null, 100, 0, null, 0, null, null, 0,
+            "partial", 1000L, 2000L, 1000L, 0);   // Bosses left at default null
+        var hdr = new LogHeader("cm-no-bosses", 2000L, "2.11", "SEA", null, null, "unlisted",
+            enc, new Uploader(55L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+
+        var json = CombatLogWriter.Write(log);
+
+        Assert.DoesNotContain("\"bosses\"", json);
+    }
+
+    // Signature safety: Bosses (like bossId/partyId) is NOT covered by the canonical payload
+    // (logId|levelUuid|localUid|startMs|endMs|nonce|sha256(events)) — adding it can never change an
+    // existing signature.
+    [Fact]
+    public void CanonicalPayload_is_invariant_to_bosses()
+    {
+        var actors = new Dictionary<string, Actor>();
+        var upl = new Uploader(55L, "", "abc123nonce");
+        Encounter Enc(IReadOnlyList<BossRec>? bosses) => new Encounter("dungeon", 77L, null, 100, 0, null, 0, null, null, 0,
+            "kill", 1000L, 2000L, 1000L, 0, Bosses: bosses);
+
+        var without = CanonicalPayload.Build(new CombatLog(1,
+            new LogHeader("my-log-id", 2000L, "2.11", "SEA", null, null, "public", Enc(null), upl),
+            actors, new List<CombatLogEvent>()));
+        var with = CanonicalPayload.Build(new CombatLog(1,
+            new LogHeader("my-log-id", 2000L, "2.11", "SEA", null, null, "public",
+                Enc(new[] { new BossRec(102800, true) }), upl),
+            actors, new List<CombatLogEvent>()));
+
+        Assert.Equal(without, with);
+    }
 }

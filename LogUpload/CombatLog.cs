@@ -80,7 +80,15 @@ internal sealed record Encounter(
     // segment's tracked boss was not observed killed. NOT part of CanonicalPayload (signature-neutral,
     // like bossId/partyId). The worker aggregates the killed set across a run's segments vs. the raid
     // roster to derive the CLEAR verdict server-side.
-    bool BossKilled = false);
+    bool BossKilled = false,
+    // Every boss the plugin SAW this segment (multi-boss per battle). Additive/null on old uploads.
+    // The scalar BossId/BossKilled above stay as the roster-preferred representative for old readers.
+    IReadOnlyList<BossRec>? Bosses = null);
+
+/// <summary>One boss engaged in a segment (multi-boss per battle, Spec A). configId = monster-table
+/// config id (e.g. 102800 Sunfire, 102801 Moonstrike); killed = observed dead / scripted-killed.
+/// Additive — omitted on old uploads; NOT part of CanonicalPayload (signature-neutral).</summary>
+internal sealed record BossRec(int ConfigId, bool Killed);
 
 // MasterScore: the uploader's CURRENT account master-mode score (SocialIdentity.MasterScore),
 // attached on every upload so the StellarLogs char page reflects a fresh dungeon clear promptly
