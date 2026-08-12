@@ -60,9 +60,10 @@ public sealed partial class Plugin
         // Why this segment was archived ("manual"|"scene"|"wipe"|"boss"|"idle"|"stage") — v10.
         public string   Trigger = "manual";
         // Multi-boss per battle (Task 6): every boss the stage set had ADMITTED when this segment
-        // archived — StageBossSet.MembersSnapshot(), snapshotted HERE (additive; NOT persisted to the
-        // history JSON — read synchronously at archive-time upload only, so no history-format change /
-        // rollback risk per process-rules §6), exactly like every other per-segment field on this entry.
+        // archived — via ResolveCurrentStageBosses() (Plugin.BossDetection.cs: live set, or the sticky
+        // latch when the live set already drained/reset — final review, Critical 1), snapshotted HERE
+        // (additive; NOT persisted to history JSON — read synchronously at archive-time upload only, so
+        // no history-format change / rollback risk per process-rules §6).
         // NEVER re-read the live _stageBosses at upload time: an upload (a manual re-upload from
         // history, or even the same-tick assemble call) must describe THIS segment's set as it stood at
         // archive, not whatever the live set has become since (drained by the next stage, or reset by a
@@ -88,12 +89,16 @@ public sealed partial class Plugin
         // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
         // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
         _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
-        // 3fd7559 ran these resets (incl. RecomputeUploadPolicyCache) UNCONDITIONALLY, before the
-        // guard below; the RunBoundaryCore extraction had moved them after it, silently skipping the
-        // cache recompute on the very first scene observation (review fix, rb-task-2 finding 2) — only
-        // the archive half (BankRunBoundary, below the guard) stays conditional.
+        var isFirstObservation = _lastSceneName is null;
+        // MINOR 8 fix (final review): log BEFORE the reset below clears _stageBosses, so a scene-sourced
+        // boundary line can carry bosses= too (see LogRunBoundary's doc, Plugin.Diagnostics.cs).
+        if (!isFirstObservation)
+            LogRunBoundary("scene", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+        // 3fd7559 ran these resets (incl. RecomputeUploadPolicyCache) UNCONDITIONALLY, before the guard
+        // below (review fix, rb-task-2 finding 2 — a prior extraction had silently skipped the cache
+        // recompute on the very first scene observation); only the archive half stays conditional.
         ResetRunScopedTrackers();
-        if (_lastSceneName is null)
+        if (isFirstObservation)
         {
             _lastSceneName = newScene;
             return;
@@ -104,23 +109,18 @@ public sealed partial class Plugin
         var archived = _stats.Count > 0;
         var samplesAtReset = _replay?.TotalSamples ?? 0;
 
-        // Auto-archive on scene change — the archive half of the shared bank+reset block
-        // (Plugin.RunBoundary.cs); the reset half already ran above. RunBoundaryCore (both halves)
-        // is what the poll-driven commit for a missed scene event uses instead.
-        LogRunBoundary("scene", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+        // Auto-archive on scene change — the archive half of the shared bank+reset block (the reset +
+        // boundary log already ran above); RunBoundaryCore composes both for the poll-driven commit.
         BankRunBoundary(AutoArchive.ArchiveReason.SceneChange);
-        // The poll-driven tracker must adopt this already-handled boundary's new id, or its next
-        // Observe would see the same runId change and double-commit (invariant 6: one entry per
-        // boundary).
+        // The poll-driven tracker must adopt this already-handled boundary's new id, or its next Observe
+        // would see the same runId change and double-commit (invariant 6: one entry per boundary).
         _runBoundary.NotifySceneBoundaryHandled(_services.Dungeon.CurrentRunId);
 
         // Scene-boundary replay reset — now CONDITIONAL (spec 2026-07-19): the provisional
-        // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps
-        // the buffer so the lobby movement survives into the run's replay. Every other
-        // boundary resets, preserving the 93:53 cross-scene-carryover protection: entering a
-        // candidate from town starts fresh, leaving to town discards, and committed runs keep
-        // per-segment archives. When the outgoing scene HAD combat, ManualArchive above
-        // already uploaded + reset — this is then a harmless no-op either way.
+        // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps the buffer
+        // so the lobby movement survives into the run's replay. Every other boundary resets, preserving
+        // the 93:53 cross-scene-carryover protection. When the outgoing scene HAD combat, ManualArchive
+        // above already uploaded + reset — this is then a harmless no-op either way.
         var incomingCandidate = ResolveSceneCandidate(newScene);
         var reset = ReplayCaptureGate.ShouldResetOnSceneChange(
             _services.Dungeon.CurrentRunId, _sceneIsCandidate, incomingCandidate);
@@ -349,7 +349,7 @@ public sealed partial class Plugin
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome, _clearedThisRun),
             Defeated         = _services.Dungeon.LastDefeatedCount,
             Trigger          = ResolveTriggerTag(reason),
-            StageBosses      = _stageBosses.MembersSnapshot(),
+            StageBosses      = ResolveCurrentStageBosses(),
             FallbackBossConfigId = _bossMonsterInfo?.Id ?? 0,
         };
         ApplyAttrRanges(entry);

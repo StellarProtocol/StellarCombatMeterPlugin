@@ -251,13 +251,10 @@ public sealed partial class Plugin
     // under which id) is exactly what field diagnosis of a merged/split run needs — gating it behind
     // StellarDiagnostics.IsEnabled would leave the owner's normal log with zero record of which layer
     // fired. Reuses FormatStageBosses() (added by the multi-boss Task 6) when the stage-boss set is
-    // non-empty — in practice the bosses= suffix only ever appears on the poll-runid source.
-    // PollRunBoundary (Plugin.RunBoundary.cs) calls this BEFORE RunBoundaryCore runs
-    // ResetRunScopedTrackers, so _stageBosses is still whatever the outgoing run had tracked. The
-    // scene source (OnSceneChanged, Plugin.History.cs) calls this AFTER ResetRunScopedTrackers has
-    // already cleared _stageBosses, so a scene-sourced line never carries bosses= — by original
-    // design a stage's own bosses ride their own boss-cut archives, and the scene archive is only
-    // the run-end tail with nothing left to report.
+    // non-empty. MINOR 8 (final review): both callers now log BEFORE their respective reset clears
+    // _stageBosses — PollRunBoundary already did (Plugin.RunBoundary.cs, before RunBoundaryCore's
+    // ResetRunScopedTrackers); OnSceneChanged (Plugin.History.cs) now does too, so a scene-sourced line
+    // can carry bosses= exactly like poll-runid, instead of always logging an already-emptied set.
     private void LogRunBoundary(string source, long oldId, long newId, int statsCount)
     {
         var bossesText = _stageBosses.Count > 0 ? $" bosses={FormatStageBosses()}" : "";

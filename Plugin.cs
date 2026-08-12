@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Plugins;
@@ -402,6 +403,10 @@ public sealed partial class Plugin : IStellarPlugin
         // ONLY at true run end (scene-leave / run-id change) via ResetReplay, and each banked archive
         // uploads a watermark window without stopping it. See _replayWatermarkMs / ResetReplay.
         _bossCheck.Clear();   // bounded boss-lookup cache; _stageBosses survives on purpose (see its doc)
+        // Per-archive: the sticky stage-boss latch is scoped to ONE segment (final review, Critical 1) —
+        // reset it here, AFTER BuildHistoryEntry already read it for THIS archive, so it never bleeds
+        // into the next one (mirrors the retired _segmentBossKilled's own per-archive Clear() reset).
+        _segmentStageBosses = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
     }
 
     private double EncounterElapsedSeconds()

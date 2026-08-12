@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
+using Stellar.CombatMeter.Replay;
 
 namespace Stellar.CombatMeter;
 
@@ -14,11 +16,15 @@ namespace Stellar.CombatMeter;
 // decides WHICH entity the boss is and WHETHER a given event touches it.
 public sealed partial class Plugin
 {
-    // Boss observation cache: entity id -> IsBoss, resolved at most once per distinct entity
+    // Boss observation cache: entity id -> (IsBoss, ConfigId), resolved at most once per distinct entity
     // (mirrors _replayMonsterInfo's contains-guard, Plugin.Replay.cs:163-169). BOUNDED: hard cap
     // + cleared by Clear() — the FPS-leak lesson (never an unbounded per-mob dict in the field).
+    // Important 3 (final review): ConfigId rides alongside IsBoss now — the SAME GetMonsterByEntity call
+    // that resolves IsBoss already has it, so a later admission off a cache hit needs no second interop
+    // call (CheckBossCandidate used to re-call GetMonsterByEntity on every boss-touching event just to
+    // fetch the config id, even once IsBoss was already cached).
     private const int MaxBossCheckEntries = 512;
-    private readonly Dictionary<EntityId, bool> _bossCheck = new();
+    private readonly Dictionary<EntityId, (bool IsBoss, int ConfigId)> _bossCheck = new();
 
     // Bosses whose fight has already been observed dead THIS RUN — a corpse must never re-open a boss
     // segment. Extracted to AutoArchive.KilledBossTracker (review round, 2026-07-26): the mark/consult/
@@ -51,6 +57,26 @@ public sealed partial class Plugin
     // old single-latch adoption to drive a boss-targeted settle clock (finding 3, 2026-07-27). That
     // narrowing stays withdrawn — see Plugin.AutoArchive.cs's retired-SettleClockMs note.
     private readonly AutoArchive.StageBossSet _stageBosses = new();
+
+    // Sticky snapshot of _stageBosses' last known NON-EMPTY membership (final review, Critical 1: kill
+    // archives were shipping empty bosses[]). Two places drain/clear the LIVE set before a deferred
+    // archive's BuildHistoryEntry (Plugin.History.cs) can read it: (1) BossStatus below, via
+    // DrainIfAllGone() on the SAME tick the last member dies/is scripted-killed — the deferred boss-kill
+    // archive fires later, onto an already-empty set; (2) ResetRunScopedTrackers's _stageBosses.Clear()
+    // (Plugin.RunBoundary.cs), which the always-firing scene archive calls BEFORE its own
+    // BuildHistoryEntry — even for a stage that never drained (still open, abandoned at scene change).
+    // LatchStageBosses() (below) re-latches at both points, ONLY when non-empty, so a later empty
+    // clear/drain can never overwrite a previously latched segment with nothing. ResolveCurrentStageBosses
+    // prefers the LIVE set and falls back here only when it is empty — a still-open multi-boss stage is
+    // unaffected. Always assigned a WHOLE NEW list (StageBossSet.MembersSnapshot()), never mutated in
+    // place, so an already-archived entry's copy of an older snapshot can never change out from under it.
+    // Reset in Clear() (Plugin.cs) — AFTER BuildHistoryEntry has already read it for THIS archive, so one
+    // segment's bosses never bleed into the next (mirrors _segmentBossKilled's per-archive Clear() reset,
+    // commit 9346ece, before the multi-boss set replaced the single-boss scalar). Deliberately NOT reset
+    // in ResetRunScopedTrackers/OnSceneChanged: that runs BEFORE the scene archive's BuildHistoryEntry, so
+    // clearing the latch there would reproduce the exact bug this field exists to fix.
+    private IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> _segmentStageBosses =
+        Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
 
     // Per-member last LIVE Hp/MaxHp fraction, for the raid scripted-kill inference (HP never reads 0,
     // entity then vanishes). Keyed by entity; entries are pruned alongside the set at scene change AND
@@ -158,6 +184,7 @@ public sealed partial class Plugin
         {
             for (var i = 0; i < _stageBosses.Count; i++)
                 _memberLastHpFrac.Remove(_stageBosses.MemberAt(i).id);
+            LatchStageBosses();   // Critical 1: preserve this stage's final state before the drain empties it
             _stageBosses.DrainIfAllGone();
         }
         return agg;
@@ -203,20 +230,26 @@ public sealed partial class Plugin
     private void CheckBossCandidate(EntityId id)
     {
         if (id.IsPlayer || id.Value == 0) return;
-        if (!_bossCheck.TryGetValue(id, out var isBoss))
+        // Important 3 (final review): an already-admitted member can never be re-admitted (Admit's own
+        // dupe check below would just no-op), so skip the cache lookup AND the interop call entirely for
+        // one — a cheap Count/MemberAt-bounded scan, no allocation.
+        if (_stageBosses.Contains(id)) return;
+        if (!_bossCheck.TryGetValue(id, out var cached))
         {
             if (_bossCheck.Count >= MaxBossCheckEntries) return;   // runaway guard (field id churn)
             var info = _services.GameData.World.GetMonsterByEntity(id);
-            isBoss = info.HasValue && info.Value.IsBoss;           // ResolveBossEntity's exact test
-            _bossCheck[id] = isBoss;
+            var isBoss = info.HasValue && info.Value.IsBoss;       // ResolveBossEntity's exact test
+            // Cache the config id alongside isBoss — the SAME call already has it (caches live now,
+            // and the vitals/attr row is gone by the deferred BossKill archive, same reason
+            // _bossMonsterInfo used to be snapshotted early in ResolveBossEntity), so admission off a
+            // cache hit below never repeats this interop call.
+            cached = (isBoss, info?.Id ?? 0);
+            _bossCheck[id] = cached;
         }
-        if (!ShouldAdoptBossCandidate(isBoss, _killedBosses.IsKilled(id))) return;
-        // Snapshot the boss's config id NOW (caches live at adoption) — the vitals/attr row is gone by
-        // the deferred BossKill archive (same reason _bossMonsterInfo used to be snapshotted early in
-        // ResolveBossEntity). Admit into the set: no-op if the stage is closed, this id is already
-        // tracked, or the set is at MaxMembers.
-        var configId = _services.GameData.World.GetMonsterByEntity(id)?.Id ?? 0;
-        _stageBosses.Admit(id, configId);
+        if (!ShouldAdoptBossCandidate(cached.IsBoss, _killedBosses.IsKilled(id))) return;
+        // Admit into the set with the config id already resolved above: no-op if the stage is closed,
+        // this id is already tracked, or the set is at MaxMembers.
+        _stageBosses.Admit(id, cached.ConfigId);
     }
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that
@@ -251,5 +284,66 @@ public sealed partial class Plugin
             if (EventInvolvesBoss(src, tgt, id)) return true;
         }
         return false;
+    }
+
+    // -----------------------------------------------------------------------
+    // Sticky latch (final review, Critical 1 + Important 2)
+    // -----------------------------------------------------------------------
+
+    /// <summary>Re-latches <see cref="_segmentStageBosses"/> from the LIVE set — but ONLY when the live
+    /// set is non-empty, so a call against an already-drained/never-populated set can never overwrite a
+    /// previously latched segment with nothing. Called at both points that empty the live set: here (via
+    /// <see cref="BossStatus"/>, right before <c>DrainIfAllGone()</c>) and <c>ResetRunScopedTrackers</c>
+    /// (Plugin.RunBoundary.cs, right before <c>_stageBosses.Clear()</c>).</summary>
+    private void LatchStageBosses()
+    {
+        if (_stageBosses.Count > 0) _segmentStageBosses = _stageBosses.MembersSnapshot();
+    }
+
+    /// <summary>Pure decision (final review, Critical 1): prefer the LIVE stage-boss membership, falling
+    /// back to the sticky latch only when the live set is empty. This is the exact shape a deferred
+    /// archive hits after the live set has already drained (same tick as the last member's death) or
+    /// been cleared by a run boundary (scene change) before the archive's own BuildHistoryEntry ran.
+    /// Pure/static so it pins headless without a live Plugin instance — <see cref="ResolveCurrentStageBosses"/>
+    /// is the IL2CPP-adjacent instance wrapper that supplies the two arguments.</summary>
+    internal static IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> PreferLiveStageBosses(
+        IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> live,
+        IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> latched)
+        => live.Count > 0 ? live : latched;
+
+    /// <summary>Archive-time resolver: the LIVE stage-boss set when it still has members, else
+    /// <see cref="_segmentStageBosses"/>. Consumed by BuildHistoryEntry (Plugin.History.cs) and
+    /// BuildBossHpTracks (Plugin.Replay.cs, feeds BuildWindowBossMembers). Allocates via
+    /// MembersSnapshot() — archive/window-assembly time only, never per-frame (see
+    /// <see cref="TickStageBossHpTracks"/> for the alloc-free hot-path equivalent).</summary>
+    private IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> ResolveCurrentStageBosses()
+        => PreferLiveStageBosses(_stageBosses.MembersSnapshot(), _segmentStageBosses);
+
+    /// <summary>Ticks every stage boss's HP track for the replay sampler (multi-boss plan Task 3;
+    /// Important 2 fix, final review): Track/MarkDead off the LIVE set when non-empty, else the sticky
+    /// latch — so the member whose death drains the live set on THIS tick (BossStatus above) still gets
+    /// its terminal MarkDead stamp on later ticks, instead of vanishing from this loop the instant it's
+    /// gone. Called every replay tick (Plugin.Replay.cs's TickHpTimelines) — alloc-free either way:
+    /// MemberAt is indexed access into the live set; the latch is an already-allocated snapshot from the
+    /// drain/reset moment, indexed here with a plain [] read — no new allocation on this per-frame
+    /// path.</summary>
+    private void TickStageBossHpTracks(HpTimelineSampler sampler, long combatStartMs, int nowMs)
+    {
+        if (_stageBosses.Count > 0)
+        {
+            for (var i = 0; i < _stageBosses.Count; i++)
+            {
+                var (id, _, killed) = _stageBosses.MemberAt(i);
+                sampler.Track(id.Value, nowMs - combatStartMs);
+                if (killed) sampler.MarkDead(id.Value, nowMs - combatStartMs);
+            }
+            return;
+        }
+        for (var i = 0; i < _segmentStageBosses.Count; i++)
+        {
+            var (id, _, killed) = _segmentStageBosses[i];
+            sampler.Track(id.Value, nowMs - combatStartMs);
+            if (killed) sampler.MarkDead(id.Value, nowMs - combatStartMs);
+        }
     }
 }

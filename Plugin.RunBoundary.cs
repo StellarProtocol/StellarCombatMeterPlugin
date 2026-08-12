@@ -30,6 +30,10 @@ public sealed partial class Plugin
         // again. Scoping this to the run boundary is what makes a fresh dungeon in the same session
         // detect its own boss(es) normally. (A sibling _settleBossId used to get the same reset here —
         // retired with the rest of finding 3's boss-only settle clock, owner ruling 2026-07-28.)
+        // Critical 1 fix (final review): latch the outgoing stage's membership BEFORE this clears it —
+        // the scene/run-boundary archive that follows (BankRunBoundary, below) reads the latch when its
+        // own BuildHistoryEntry finds the live set already emptied (Plugin.BossDetection.cs).
+        LatchStageBosses();
         _stageBosses.Clear();
         _memberLastHpFrac.Clear();
         RecomputeUploadPolicyCache();   // new run ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)

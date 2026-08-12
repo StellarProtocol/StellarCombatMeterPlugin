@@ -1,3 +1,4 @@
+using System;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter;
 using Xunit;
@@ -234,5 +235,52 @@ public class AutoArchiveContentGuardTests
         var healer        = new EntityId(1);
         var downedAlly    = new EntityId(2);
         Assert.False(Plugin.EventInvolvesBoss(healer, downedAlly, survivingBoss));
+    }
+
+    // ---- Final review, Critical 1: kill archives were shipping empty bosses[] ----
+    // Plugin.BossDetection.cs's BossStatus() drains _stageBosses on the SAME tick the last member
+    // dies/is scripted-killed, and Plugin.RunBoundary.cs's ResetRunScopedTrackers clears it again before
+    // the always-firing scene archive banks — both BEFORE a deferred BuildHistoryEntry (Plugin.History.cs)
+    // gets to read it. PreferLiveStageBosses is the pure preference rule BuildHistoryEntry/BuildBossHpTracks
+    // apply via ResolveCurrentStageBosses (an IL2CPP-adjacent instance method, unreachable headlessly
+    // without a live Plugin — "Plugin can't be instantiated in tests"). This pins the rule itself: prefer
+    // the live set, fall back to the latch ONLY when live is empty — never the other way around.
+    private static readonly (EntityId Id, int ConfigId, bool Killed) LiveOnly =
+        (new EntityId(10), 102800, true);
+    private static readonly (EntityId Id, int ConfigId, bool Killed) LatchedOnly =
+        (new EntityId(11), 102801, false);
+
+    [Fact]
+    public void PreferLiveStageBosses_prefers_live_when_non_empty()
+    {
+        var live    = new[] { LiveOnly };
+        var latched = new[] { LatchedOnly };
+
+        var result = Plugin.PreferLiveStageBosses(live, latched);
+
+        Assert.Same(live, result);
+    }
+
+    [Fact]
+    public void PreferLiveStageBosses_falls_back_to_latch_when_live_is_empty()
+    {
+        // The exact shape a deferred kill/scene archive hits: the live set already drained/reset.
+        var live    = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        var latched = new[] { LatchedOnly };
+
+        var result = Plugin.PreferLiveStageBosses(live, latched);
+
+        Assert.Same(latched, result);
+    }
+
+    [Fact]
+    public void PreferLiveStageBosses_both_empty_returns_the_empty_live_set()
+    {
+        var live    = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        var latched = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+
+        var result = Plugin.PreferLiveStageBosses(live, latched);
+
+        Assert.Empty(result);
     }
 }

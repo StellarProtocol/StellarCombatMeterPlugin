@@ -118,4 +118,38 @@ public class StageBossSetTests
         for (var i = 0; i < s.Count; i++)
             Assert.Equal(snapshot[i], s.MemberAt(i));
     }
+
+    // --- Final review, Important 3: Contains() lets CheckBossCandidate skip the interop call + cache
+    // lookup entirely for an already-admitted id. ---
+
+    [Fact]
+    public void Contains_true_for_an_admitted_member_alive_or_killed()
+    {
+        var s = new StageBossSet();
+        s.Admit(E(10), 102800); s.SetLiveness(E(10), Alive);
+        s.Admit(E(11), 102801); s.SetLiveness(E(11), Dead);
+
+        Assert.True(s.Contains(E(10)));
+        Assert.True(s.Contains(E(11)));
+    }
+
+    [Fact]
+    public void Contains_false_for_an_unknown_id_and_an_empty_set()
+    {
+        var s = new StageBossSet();
+        Assert.False(s.Contains(E(10)));   // empty set
+
+        s.Admit(E(10), 102800);
+        Assert.False(s.Contains(E(99)));   // non-empty, but this id was never admitted
+    }
+
+    [Fact]
+    public void Contains_false_again_once_the_set_drains()
+    {
+        var s = new StageBossSet();
+        s.Admit(E(10), 102800); s.SetLiveness(E(10), Dead);
+        s.DrainIfAllGone();
+
+        Assert.False(s.Contains(E(10)));   // drained — a fresh admission must be allowed again
+    }
 }

@@ -64,6 +64,17 @@ internal sealed class StageBossSet
         return list;
     }
 
+    /// <summary>True if <paramref name="id"/> is already a tracked member (alive or killed). Alloc-free
+    /// linear scan (MaxMembers-bounded) — mirrors Admit's own dupe-check loop below. Lets a hot-path
+    /// caller skip re-resolving/re-admitting an already-admitted id without paying for the interop call
+    /// behind it (final review, Important 3 — Plugin.BossDetection.cs's CheckBossCandidate).</summary>
+    internal bool Contains(EntityId id)
+    {
+        for (var i = 0; i < _members.Count; i++)
+            if (_members[i].Id == id) return true;
+        return false;
+    }
+
     /// <summary>True if the stage is currently open to new members: the set is empty (new stage), or at
     /// least one existing member is present. A member already tracked (or a full set) is not re-added.</summary>
     internal bool Admit(EntityId id, int configId)

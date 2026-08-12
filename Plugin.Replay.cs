@@ -329,20 +329,15 @@ public sealed partial class Plugin
             }
         }
 
-        // Multi-boss (Task 3): every boss the stage set knows gets its OWN HP track. Alloc-free
-        // Count/MemberAt iteration (same convention as BossStatus/EventInvolvesAnyStageBoss in
-        // Plugin.BossDetection.cs) — this runs every replay tick. MarkDead is driven by the set's
-        // STICKY `killed` flag (amendment 3), never a raw Hp<=0 read here: a scripted-killed raid
-        // co-boss never reads 0, it just vanishes, so gating on Hp<=0 would leave that boss's HP
-        // line never terminating (the boss-hp-never-reaches-zero class; 0%-on-death precedent
-        // d1c8fbb). MarkDead is idempotent (no-op once the last sample is already 0), so calling
-        // it every tick while a member stays killed=true is safe and allocates nothing.
-        for (var i = 0; i < _stageBosses.Count; i++)
-        {
-            var (id, _, killed) = _stageBosses.MemberAt(i);
-            _hpSampler.Track(id.Value, nowMs - _replay.CombatStartMs);
-            if (killed) _hpSampler.MarkDead(id.Value, nowMs - _replay.CombatStartMs);
-        }
+        // Multi-boss (Task 3): every boss the stage set knows gets its OWN HP track. MarkDead is driven
+        // by the set's STICKY `killed` flag (amendment 3), never a raw Hp<=0 read here: a scripted-killed
+        // raid co-boss never reads 0, it just vanishes, so gating on Hp<=0 would leave that boss's HP
+        // line never terminating (the boss-hp-never-reaches-zero class; 0%-on-death precedent d1c8fbb).
+        // Important 2 fix (final review): extracted to Plugin.BossDetection.cs's TickStageBossHpTracks,
+        // which falls back to the sticky latch once the live set has drained same-tick-as-death — this
+        // loop used to read ONLY the live set, so the last member's death (which drains the set in the
+        // SAME BossStatus call) never got its terminal MarkDead stamp.
+        TickStageBossHpTracks(_hpSampler, _replay.CombatStartMs, nowMs);
 
         _hpSampler.Tick(dtMs);
     }
@@ -520,17 +515,20 @@ public sealed partial class Plugin
     /// monster config id, and sampled HP track (null if the sampler has no samples for it yet).
     /// Consumed by <c>BuildWindowBossMembers</c> (Task 4, Plugin.ReplayWindow.cs), which slices+rebases
     /// each member's track to the upload window and feeds both the additive
-    /// <see cref="Replay.PositionUploadDoc.Bosses"/> array and the meta-id union. Indexed Count/MemberAt
-    /// iteration keeps this consistent with the set's other archive-time consumer,
-    /// <see cref="AutoArchive.StageBossSet.MembersSnapshot"/> — this allocates one list of size
-    /// Count, which is fine here (archive/window-assembly time, never per-tick).
+    /// <see cref="Replay.PositionUploadDoc.Bosses"/> array and the meta-id union. Critical 1 fix (final
+    /// review): reads <c>ResolveCurrentStageBosses()</c> (Plugin.BossDetection.cs) — the live set, or the
+    /// sticky latch when the live set already drained/reset before this ran — instead of the live set
+    /// directly, so a window built after the boss died/the run boundary fired still carries it. This
+    /// allocates a list of size Count either way, which is fine here (archive/window-assembly time,
+    /// never per-tick).
     /// </summary>
     private IReadOnlyList<(EntityId id, int configId, HpTrack? track)> BuildBossHpTracks()
     {
-        var list = new List<(EntityId, int, HpTrack?)>(_stageBosses.Count);
-        for (var i = 0; i < _stageBosses.Count; i++)
+        var members = ResolveCurrentStageBosses();
+        var list = new List<(EntityId, int, HpTrack?)>(members.Count);
+        for (var i = 0; i < members.Count; i++)
         {
-            var (id, configId, _) = _stageBosses.MemberAt(i);
+            var (id, configId, _) = members[i];
             list.Add((id, configId, _hpSampler?.GetTrack(id.Value)));
         }
         return list;
