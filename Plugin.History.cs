@@ -107,6 +107,7 @@ public sealed partial class Plugin
         // Auto-archive on scene change — the archive half of the shared bank+reset block
         // (Plugin.RunBoundary.cs); the reset half already ran above. RunBoundaryCore (both halves)
         // is what the poll-driven commit for a missed scene event uses instead.
+        LogRunBoundary("scene", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
         BankRunBoundary(AutoArchive.ArchiveReason.SceneChange);
         // The poll-driven tracker must adopt this already-handled boundary's new id, or its next
         // Observe would see the same runId change and double-commit (invariant 6: one entry per

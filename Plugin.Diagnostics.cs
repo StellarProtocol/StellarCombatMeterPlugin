@@ -243,6 +243,22 @@ public sealed partial class Plugin
         _services.Log.Info($"[CombatMeter][flow] {state}#{version} (was #{previous})");
     }
 
+    // One line per run-boundary COMMIT (rb-task-3, spec 2026-08-12-combatmeter-run-boundary-design.md):
+    // which layer fired (scene = OnSceneChanged's always-firing scene archive; poll-runid =
+    // PollRunBoundary's missed-scene-event heal via RunBoundaryCore) and the old/new run id it
+    // committed across. Deliberately UNGATED Info, same reasoning as LogArchiveOutcome: a run boundary
+    // is a rare per-run lifecycle event and its evidence trail (which path banked the outgoing run,
+    // under which id) is exactly what field diagnosis of a merged/split run needs — gating it behind
+    // StellarDiagnostics.IsEnabled would leave the owner's normal log with zero record of which layer
+    // fired. Reuses FormatStageBosses() (added by the multi-boss Task 6) when the stage-boss set is
+    // non-empty, so the same boundary line also shows which bosses were still tracked at the cut.
+    private void LogRunBoundary(string source, long oldId, long newId, int statsCount)
+    {
+        var bossesText = _stageBosses.Count > 0 ? $" bosses={FormatStageBosses()}" : "";
+        _services.Log.Info(
+            $"[CombatMeter][boundary] source={source} old={oldId} new={newId} stats={statsCount}{bossesText}");
+    }
+
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
     // (review round, 2026-07-26) — deliberately UNGATED Warning, same reasoning as LogArchiveOutcome
     // above: the standing rule is diagnostics stay gated behind StellarDiagnostics.IsEnabled, but a

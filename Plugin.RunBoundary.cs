@@ -79,6 +79,9 @@ public sealed partial class Plugin
             _services.Dungeon.CurrentRunId, _services.Dungeon.RunTimerStartMs,
             inWorldLoading: null, combatEvent: false, nowMs: _services.CombatSnapshot.ServerNowMs);
         if (boundaryAction == RunBoundaryTracker.BoundaryAction.Commit && _runBoundary.CommittedOldRunId == _lastRunId)
+        {
+            LogRunBoundary("poll-runid", _runBoundary.CommittedOldRunId, _services.Dungeon.CurrentRunId, _stats.Count);
             RunBoundaryCore(AutoArchive.ArchiveReason.RunBoundary);
+        }
     }
 }
