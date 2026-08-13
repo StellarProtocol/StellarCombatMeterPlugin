@@ -173,7 +173,8 @@ public sealed partial class Plugin
     // HP<=0 at all, so without this the ungated line alone could not tell the two apart on the next
     // field diagnosis. Reads "n/a" for every non-BossKill reason (the field is meaningless there — a
     // fixed sentinel, same pattern quietMs already uses, so the line's field COUNT never varies).
-    private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
+    private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs,
+                                   IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)>? entryBosses = null)
     {
         var now = _services.CombatSnapshot.ServerNowMs;
         var quietMsText = _lastDamageMs == 0 ? "n/a" : (now - _lastDamageMs).ToString();
@@ -196,7 +197,14 @@ public sealed partial class Plugin
         // hide — a co-boss NOT IsBoss-flagged (never admitted, so simply absent here) and an
         // IsBoss-flagged add joining the set (an extra pair appears, delaying the all-gone cut). Off in
         // production so the [archive] line's cost is unchanged; the base line stays ungated as before.
-        var segText = StellarDiagnostics.IsEnabled ? $" bosses={FormatStageBosses()}" : "";
+        // A BANKED archive passes its ENTRY's latched StageBosses (owner pre-production checklist
+        // 2026-08-13, item 3): by the time a deferred boss-kill archive logs, BossStatus's
+        // DrainIfAllGone has already emptied the live set (and a scene archive runs AFTER
+        // ResetRunScopedTrackers), so formatting the live set printed bosses=[] while the entry it
+        // just banked carried the real members — the exact drain the entry's own sticky-latch
+        // snapshot exists to survive (Plugin.BossDetection.cs, _segmentStageBosses).
+        var segText = !StellarDiagnostics.IsEnabled ? ""
+            : $" bosses={(entryBosses is null ? FormatStageBosses() : FormatStageBosses(entryBosses, _memberLastHpFrac))}";
         _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
             $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText} " +
@@ -215,6 +223,26 @@ public sealed partial class Plugin
         {
             var (id, configId, killed) = _stageBosses.MemberAt(i);
             var hpFrac = _memberLastHpFrac.TryGetValue(id, out var f) ? f : -1f;
+            if (i > 0) sb.Append(',');
+            sb.Append(configId).Append(':').Append(killed).Append(':').Append(hpFrac.ToString("0.###"));
+        }
+        return sb.Append(']').ToString();
+    }
+
+    // ENTRY-list overload: formats an archived entry's latched StageBosses (see the banked-line note
+    // in LogArchiveOutcome above). hpFrac still reads the live per-member map — a member already
+    // pruned at drain/reset reads -1 (killed:True is the meaningful field on such lines). Internal
+    // static (pure) so the tests pin the format headless, same pattern as the tracker/guard tests.
+    internal static string FormatStageBosses(
+        IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> members,
+        IReadOnlyDictionary<EntityId, float> lastHpFrac)
+    {
+        if (members.Count == 0) return "[]";
+        var sb = new System.Text.StringBuilder("[");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var (id, configId, killed) = members[i];
+            var hpFrac = lastHpFrac.TryGetValue(id, out var f) ? f : -1f;
             if (i > 0) sb.Append(',');
             sb.Append(configId).Append(':').Append(killed).Append(':').Append(hpFrac.ToString("0.###"));
         }

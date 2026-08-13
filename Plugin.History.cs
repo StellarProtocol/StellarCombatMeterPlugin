@@ -221,7 +221,8 @@ public sealed partial class Plugin
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
         var summaryFired = FinalizeAndMaybeUploadReplay(entry, replayUpperCapServerMs);
-        LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
+        LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs,
+                          entryBosses: entry.StageBosses);
         if (reason == AutoArchive.ArchiveReason.Manual) NotifyManualArchived(entry.CombatDurationMs);
 
         _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
