@@ -245,8 +245,10 @@ public sealed partial class Plugin
 
     // One line per run-boundary COMMIT (rb-task-3, spec 2026-08-12-combatmeter-run-boundary-design.md):
     // which layer fired (scene = OnSceneChanged's always-firing scene archive; poll-runid =
-    // PollRunBoundary's missed-scene-event heal via RunBoundaryCore) and the old/new run id it
-    // committed across. Deliberately UNGATED Info, same reasoning as LogArchiveOutcome: a run boundary
+    // PollRunBoundary's missed-scene-event heal via RunBoundaryCore, now B-mode-live post rb-task-4;
+    // combat-belt = Plugin.Capture.cs's OnCombatEvent resolving an already-ARMed boundary the instant a
+    // real combat event proves the load already resolved, ahead of the next poll tick) and the old/new
+    // run id it committed across. Deliberately UNGATED Info, same reasoning as LogArchiveOutcome: a run boundary
     // is a rare per-run lifecycle event and its evidence trail (which path banked the outgoing run,
     // under which id) is exactly what field diagnosis of a merged/split run needs — gating it behind
     // StellarDiagnostics.IsEnabled would leave the owner's normal log with zero record of which layer

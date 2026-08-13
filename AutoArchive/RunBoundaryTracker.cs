@@ -19,6 +19,13 @@ namespace Stellar.CombatMeter.AutoArchive;
 /// other signal distinguishes "the scene path just hasn't run yet" from "the scene path was
 /// missed". Timer changes compare ONLY across a load cycle: mid-run rank-upgrade refinements
 /// (SetRunTimerStart) must never cut a run. Alloc-free; plain fields only.
+///
+/// <para>rb-task-4 review fixes: (1) a loading rising edge arriving while a C-mode candidate is still
+/// pending grace now banks the pending boundary immediately and arms fresh for the load cycle that is
+/// genuinely starting, instead of being silently swallowed by the pending branch's priority in the
+/// if/else-if chain. (2) the very FIRST Observe call ever made on an instance is a baseline-only
+/// no-op — it never arms or commits — so a tracker whose first observation lands mid-load-screen
+/// cannot misread it as a rising edge against a nonexistent "before" state.</para>
 /// </summary>
 internal sealed class RunBoundaryTracker
 {
@@ -34,6 +41,7 @@ internal sealed class RunBoundaryTracker
     private long _armedRunId;        // 0 = not armed
     private long _armedTimerMs;
     private bool _lastLoading;
+    private bool _hasObserved;       // false only before the very first Observe call ever made
 
     private long _pendingOldRunId;     // 0 = no C-mode boundary pending
     private long _pendingDeadlineMs;
@@ -41,10 +49,21 @@ internal sealed class RunBoundaryTracker
     /// <summary>The OLD run id of the boundary returned by the last Commit-returning Observe call.</summary>
     internal long CommittedOldRunId { get; private set; }
 
+    /// <summary>True while a B-mode loading rising edge has ARMed a boundary reference awaiting its
+    /// falling edge (or a combat event) to resolve. Alloc-free, one field read — the combat-event belt
+    /// (<c>Plugin.Capture.cs</c>'s <c>OnCombatEvent</c>) gates its (rare) extra <see cref="Observe"/> call
+    /// on this so the hot path costs exactly one bool test when the tracker is not armed.</summary>
+    internal bool IsArmed => _armedRunId != 0;
+
     internal BoundaryAction Observe(long runId, long runTimerStartMs, bool? inWorldLoading, bool combatEvent, long nowMs)
     {
-        var action = BoundaryAction.None;
         bool loading = inWorldLoading ?? false;
+
+        // First-ever observation: there is no real "before" state to compare against — baseline only,
+        // no edge/commit/discard decision (review finding, rb-task-4; see ObserveFirstEver's doc).
+        if (!_hasObserved) return ObserveFirstEver(runId, loading);
+
+        var action = BoundaryAction.None;
 
         // C: id change with a real prior id = a candidate boundary.
         if (runId != _lastRunId && _lastRunId != 0)
@@ -72,7 +91,13 @@ internal sealed class RunBoundaryTracker
         }
         else if (_pendingOldRunId != 0)
         {
-            if (nowMs >= _pendingDeadlineMs)
+            // rb-task-4 review finding: a rising edge arriving here used to be swallowed — see
+            // AbsorbPendingIntoRisingEdge's doc for why this sub-branch must be checked FIRST.
+            if (inWorldLoading is not null && loading && !_lastLoading && runId != 0)
+            {
+                action = AbsorbPendingIntoRisingEdge(runId, runTimerStartMs);
+            }
+            else if (nowMs >= _pendingDeadlineMs)
             {
                 CommittedOldRunId = _pendingOldRunId;   // missed scene event — commit for real
                 action = BoundaryAction.Commit;
@@ -103,6 +128,40 @@ internal sealed class RunBoundaryTracker
         _lastRunId = runId;
         _lastLoading = loading;
         return action;
+    }
+
+    /// <summary>Baseline-only handling for the very first Observe call ever made on this instance
+    /// (rb-task-4 review finding). There is no real "before" state yet, so this call never arms,
+    /// commits, or discards — it only seeds <see cref="_lastRunId"/>/<see cref="_lastLoading"/>.
+    /// Without this guard, <see cref="_lastLoading"/>'s default (false) makes a tracker whose first
+    /// observation lands mid-load-screen (plugin construction, or the poll's first tick landing after
+    /// a load already started) misread that call's loading=true as a genuine false→true rising edge,
+    /// arming against a reference with no real prior run to anchor it.</summary>
+    private BoundaryAction ObserveFirstEver(long runId, bool loading)
+    {
+        _hasObserved = true;
+        _lastRunId = runId;
+        _lastLoading = loading;
+        return BoundaryAction.None;
+    }
+
+    /// <summary>A loading rising edge arrives while a C-mode candidate boundary is still awaiting the
+    /// scene path's claim (rb-task-4 review finding). Must be checked BEFORE the pending grace-deadline
+    /// check in the caller's if/else-if chain — otherwise the deadline branch consumes this tick, and
+    /// since <see cref="_lastLoading"/> updates unconditionally at the end of every <see cref="Observe"/>
+    /// call, the edge can never be re-observed for the rest of this load cycle (IsArmed would stay
+    /// permanently false for it — the edge is silently swallowed). The rising edge is itself proof the
+    /// scene path won't reach this in time (a genuinely NEW load is starting on top of the still-unclaimed
+    /// boundary), so this banks the pending boundary NOW instead of waiting out the grace window, then
+    /// arms fresh for the load cycle that is genuinely starting — two distinct boundaries (the
+    /// already-confirmed old id, and whatever this new load resolves into), so nothing double-commits.</summary>
+    private BoundaryAction AbsorbPendingIntoRisingEdge(long runId, long runTimerStartMs)
+    {
+        CommittedOldRunId = _pendingOldRunId;
+        _pendingOldRunId = 0;
+        _armedRunId = runId;
+        _armedTimerMs = runTimerStartMs;
+        return BoundaryAction.Commit;
     }
 
     /// <summary>The scene-change path banked this boundary itself — adopt the new id so the next

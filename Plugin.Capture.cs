@@ -19,6 +19,12 @@ public sealed partial class Plugin
         if (evt is CombatEvent.EntitySummonAppeared sa) { ObserveSummonAppeared(sa); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
+        // Run-boundary combat-belt (Task 4, Plugin.RunBoundary.cs): MUST run before
+        // MaybeCutForBossPhase/EnsureCombatStarted below so a commit here resets the run-scoped
+        // trackers (stage bosses etc.) before this same event's boss-phase cut or combat-start latch
+        // could attribute it to the WRONG (stale) run. Hot path when not armed costs one field read.
+        ResolveArmedBoundaryBelt();
+
         // Inline boss-phase cut (Task 7, 2026-07-21). Capture whether combat was ALREADY running before
         // this event establishes it, then — on the FIRST combat event involving the boss — cut the
         // pre-boss trash into its own segment IMMEDIATELY (no settle defer) so this first boss hit lands

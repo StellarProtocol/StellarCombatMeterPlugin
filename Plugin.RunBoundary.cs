@@ -7,9 +7,10 @@ namespace Stellar.CombatMeter;
 public sealed partial class Plugin
 {
     // Pure ARM/COMMIT/DISCARD run-boundary state machine (Task 1, spec
-    // 2026-08-12-combatmeter-run-boundary-design.md). C-mode only (inWorldLoading: null) until the
-    // plugin's WindowSpec/2.0.0 migration exposes the loading bit (Task 4 then passes the real edge).
-    // C-mode id-changes are grace-windowed (rb-task-2 review fix): the poll defers to the scene path
+    // 2026-08-12-combatmeter-run-boundary-design.md). B-mode glue landed (Task 4, post-2.0.0
+    // migration): PollRunBoundary now passes the real GameUIState.Loading bit, so the tracker's rising/
+    // falling-edge ARM/COMMIT/DISCARD logic is live, not just its C-mode (id-change-only) half.
+    // C-mode id-changes remain grace-windowed (rb-task-2 review fix): the poll defers to the scene path
     // for SceneHandledGraceMs before committing on its own — see RunBoundaryTracker.Observe.
     private readonly RunBoundaryTracker _runBoundary = new();
 
@@ -86,26 +87,49 @@ public sealed partial class Plugin
         BankRunBoundary(reason);
     }
 
-    // Run-boundary poll (spec 2026-08-12): C-mode until the WindowSpec migration exposes the loading
-    // bit (then Task 4 passes the real edge). Alloc-free: three reads + an enum compare. Called from
-    // Plugin.cs's OnUpdate BEFORE TrackClearLatch() so a commit banks the OLD run before the new run's
-    // state starts tracking. The CommittedOldRunId == _lastRunId guard makes the commit a no-op when
-    // the scene path already banked it this tick (belt on top of NotifySceneBoundaryHandled). The
-    // tracker itself now grace-windows a C-mode id-change (SceneHandledGraceMs, review fix rb-task-2
-    // finding 1) so this poll defers to the scene path on every NORMAL floor transition and only fires
-    // for real when the scene path is genuinely missed. Headless-untestable end-to-end (no test
-    // instantiates a live Plugin — see tests/ convention); correctness rides on
-    // RunBoundaryTrackerTests (the pure decision) + the full suite staying green (the shared
-    // RunBoundaryCore/ResetRunScopedTrackers/BankRunBoundary behave identically to pre-extraction
-    // OnSceneChanged).
+    // Run-boundary poll (spec 2026-08-12, B-mode glue landed Task 4). Alloc-free: four reads + a mask
+    // compare + an enum compare. Called from Plugin.cs's OnUpdate BEFORE TrackClearLatch() so a commit
+    // banks the OLD run before the new run's state starts tracking. The CommittedOldRunId == _lastRunId
+    // guard makes the commit a no-op when the scene path already banked it this tick (belt on top of
+    // NotifySceneBoundaryHandled). The tracker itself grace-windows a C-mode id-change with no loading
+    // signal yet (SceneHandledGraceMs, review fix rb-task-2 finding 1) so this poll still defers to the
+    // scene path on every NORMAL floor transition; the loading bit below is what lets it ALSO catch the
+    // re-entry-yank / same-instance-teleport cases the pure id-change signal can't distinguish (spec §3).
+    // Headless-untestable end-to-end (no test instantiates a live Plugin — see tests/ convention);
+    // correctness rides on RunBoundaryTrackerTests (the pure decision) + the full suite staying green
+    // (the shared RunBoundaryCore/ResetRunScopedTrackers/BankRunBoundary behave identically to
+    // pre-extraction OnSceneChanged).
     private void PollRunBoundary()
     {
+        bool loading = (_services.ClientState.UiState & GameUIState.Loading) != 0;
         var boundaryAction = _runBoundary.Observe(
             _services.Dungeon.CurrentRunId, _services.Dungeon.RunTimerStartMs,
-            inWorldLoading: null, combatEvent: false, nowMs: _services.CombatSnapshot.ServerNowMs);
+            inWorldLoading: loading, combatEvent: false, nowMs: _services.CombatSnapshot.ServerNowMs);
         if (boundaryAction == RunBoundaryTracker.BoundaryAction.Commit && _runBoundary.CommittedOldRunId == _lastRunId)
         {
             LogRunBoundary("poll-runid", _runBoundary.CommittedOldRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+            RunBoundaryCore(AutoArchive.ArchiveReason.RunBoundary);
+        }
+    }
+
+    // Combat-event belt (Task 4, spec 2026-08-12-combatmeter-run-boundary-design.md §5). Called from
+    // Plugin.Capture.cs's OnCombatEvent, before MaybeCutForBossPhase/EnsureCombatStarted. A genuine
+    // DamageDealt event cannot fire mid-load, so its mere arrival while the tracker is ARMED (a B-mode
+    // loading rising edge already fired) is itself proof the load has already resolved — resolves the
+    // boundary NOW instead of waiting on the next ~10Hz PollRunBoundary tick. Hot path when NOT armed
+    // (the overwhelming majority of combat events) costs exactly one field read (IsArmed) before this
+    // method returns. Same Commit + CommittedOldRunId == _lastRunId no-op guard as PollRunBoundary
+    // (belt on top of a scene/poll commit that already banked this tick).
+    private void ResolveArmedBoundaryBelt()
+    {
+        if (!_runBoundary.IsArmed) return;
+        bool loading = (_services.ClientState.UiState & GameUIState.Loading) != 0;
+        var boundaryAction = _runBoundary.Observe(
+            _services.Dungeon.CurrentRunId, _services.Dungeon.RunTimerStartMs,
+            inWorldLoading: loading, combatEvent: true, nowMs: _services.CombatSnapshot.ServerNowMs);
+        if (boundaryAction == RunBoundaryTracker.BoundaryAction.Commit && _runBoundary.CommittedOldRunId == _lastRunId)
+        {
+            LogRunBoundary("combat-belt", _runBoundary.CommittedOldRunId, _services.Dungeon.CurrentRunId, _stats.Count);
             RunBoundaryCore(AutoArchive.ArchiveReason.RunBoundary);
         }
     }

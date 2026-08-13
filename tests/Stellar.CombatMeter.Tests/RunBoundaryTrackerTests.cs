@@ -160,4 +160,89 @@ public class RunBoundaryTrackerTests
         Assert.Equal(RunBoundaryTracker.BoundaryAction.None, t.Observe(0, 0, true, false, nowMs: 500));
         Assert.Equal(RunBoundaryTracker.BoundaryAction.None, t.Observe(0, 0, false, false, nowMs: 1_000));
     }
+
+    // --- rb-task-4 review findings (both latent-until-now) ---------------------------------------
+
+    // Finding (a): a loading rising edge arriving WHILE a C-mode candidate is still pending grace used
+    // to be swallowed — the pending branch ran first in the if/else-if chain and _lastLoading updates
+    // unconditionally at the end of Observe, so the edge could never be seen again this load cycle and
+    // IsArmed stayed permanently false. Fix: the rising edge is itself proof the scene path won't reach
+    // this in time, so it banks the still-open pending boundary NOW (instead of waiting out the grace
+    // window) and arms fresh for the load cycle that is genuinely starting — two distinct boundaries,
+    // neither lost, neither double-committed.
+    [Fact]
+    public void Cmode_pending_boundary_then_rising_edge_commits_pending_and_arms_fresh()
+    {
+        var t = new RunBoundaryTracker();
+        t.Observe(100, 5_000, null, false, nowMs: 0);                       // baseline: run 100
+        var onChange = t.Observe(200, 6_000, null, false, nowMs: 1_000);    // C-mode candidate: pending old=100
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.None, onChange);
+        Assert.False(t.IsArmed);
+
+        // Rising edge arrives well inside the SceneHandledGraceMs window (deadline would be 3_500).
+        var onRisingEdge = t.Observe(200, 6_000, true, false, nowMs: 1_200);
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.Commit, onRisingEdge);
+        Assert.Equal(100, t.CommittedOldRunId);    // the still-open boundary banks now, not lost
+        Assert.True(t.IsArmed);                    // AND armed fresh for the new (200) load cycle
+
+        // The fresh arm resolves independently and correctly on its own falling edge (timer moved).
+        var onFallingEdge = t.Observe(200, 9_000, false, false, nowMs: 1_500);
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.Commit, onFallingEdge);
+        Assert.Equal(200, t.CommittedOldRunId);
+
+        // The original pending deadline (3_500) passing later must never re-fire — no double commit.
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.None, t.Observe(200, 9_000, false, false, nowMs: 3_600));
+    }
+
+    // Same setup, but the absorbed load cycle turns out to be a same-instance teleport (timer
+    // unchanged at the falling edge) — it must Discard cleanly WITHOUT touching the pending boundary
+    // that was already committed at the rising edge.
+    [Fact]
+    public void Cmode_pending_boundary_then_rising_edge_arm_can_still_discard_its_own_cycle()
+    {
+        var t = new RunBoundaryTracker();
+        t.Observe(100, 5_000, null, false, nowMs: 0);
+        t.Observe(200, 6_000, null, false, nowMs: 1_000);
+        var onRisingEdge = t.Observe(200, 6_000, true, false, nowMs: 1_200);
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.Commit, onRisingEdge);
+        Assert.Equal(100, t.CommittedOldRunId);
+
+        var onFallingEdge = t.Observe(200, 6_000, false, false, nowMs: 1_500);   // same id + same timer
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.Discard, onFallingEdge);
+        Assert.Equal(100, t.CommittedOldRunId);   // unchanged — the earlier commit is not overwritten
+    }
+
+    // Finding (b): a tracker whose FIRST-EVER Observe call happens mid-load-screen (plugin construction,
+    // or the poll's first tick after a load already started) must not misread it as a rising edge —
+    // _lastLoading defaults false, so without a baseline-only guard the first call's loading=true looks
+    // like a genuine false->true transition and arms against a reference with no real "before" state.
+    [Fact]
+    public void First_observe_while_loading_is_baseline_only_no_arm()
+    {
+        var t = new RunBoundaryTracker();
+        var first = t.Observe(100, 5_000, true, false, nowMs: 0);
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.None, first);
+        Assert.False(t.IsArmed);
+
+        // The "falling" edge of this same phantom cycle must resolve to nothing — there was never a
+        // legitimate ARM to close out.
+        var falling = t.Observe(100, 5_000, false, false, nowMs: 500);
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.None, falling);
+        Assert.False(t.IsArmed);
+    }
+
+    // Sanity: the first-observe guard doesn't interfere with the ordinary C-mode candidate path — a
+    // genuine id change on the SECOND call (first call merely established the baseline) still behaves
+    // exactly as every other C-mode test above.
+    [Fact]
+    public void First_observe_baseline_then_normal_cmode_candidate_still_works()
+    {
+        var t = new RunBoundaryTracker();
+        t.Observe(100, 5_000, null, false, nowMs: 0);   // baseline only
+        var onChange = t.Observe(200, 6_000, null, false, nowMs: 1_000);
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.None, onChange);
+        var afterGrace = t.Observe(200, 6_000, null, false, nowMs: 1_000 + RunBoundaryTracker.SceneHandledGraceMs);
+        Assert.Equal(RunBoundaryTracker.BoundaryAction.Commit, afterGrace);
+        Assert.Equal(100, t.CommittedOldRunId);
+    }
 }
