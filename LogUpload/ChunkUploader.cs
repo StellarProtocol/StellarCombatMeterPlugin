@@ -27,8 +27,9 @@ internal static class ChunkUploader
         Timeout = TimeSpan.FromSeconds(30),
     };
 
-    // 2 retries (3 attempts total) with 1s then 3s backoff between attempts.
-    private static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
+    // 2 retries (3 attempts total) with 1s then 3s backoff between attempts. Internal (was private)
+    // so PositionUploaderRetryTests can pin PositionUploader's policy to THIS one (parity model).
+    internal static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
 
     /// <summary>
     /// Kicks off sequential chunk uploads on the thread pool. Returns immediately; never throws.
