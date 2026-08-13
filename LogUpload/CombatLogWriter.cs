@@ -9,7 +9,7 @@ using System.Text;
 namespace Stellar.CombatMeter.LogUpload;
 
 /// <summary>Hand-rolled, reflection-free (IL2CPP-safe) JSON writer for a <see cref="CombatLog"/>.</summary>
-internal static class CombatLogWriter
+internal static partial class CombatLogWriter   // Spec B bucket half: CombatLogWriter.Buckets.cs
 {
     internal static string Write(CombatLog log)
     {
@@ -41,6 +41,7 @@ internal static class CombatLogWriter
             w.EndArray();
         }
         w.Name("series"); WriteSeries(w, d.Series);
+        WriteDerivedBuckets(w, d);   // Spec B per-boss/elite buckets — all six keys conditional
         w.EndObject();
     }
 
@@ -67,20 +68,9 @@ internal static class CombatLogWriter
     private static void WriteSkillMap(JsonWriter w, IReadOnlyDictionary<string, IReadOnlyList<SkillAgg>> m)
     {
         w.BeginObject();
-        foreach (var kv in m)
-        {
-            w.Name(kv.Key); w.BeginArray();
-            foreach (var s in kv.Value)
-            {
-                w.BeginObject();
-                w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total);
-                w.Name("hits").Number(s.Hits); w.Name("crits").Number(s.Crits);
-                w.Name("luckys").Number(s.Luckys); w.Name("critLuckys").Number(s.CritLuckys);
-                w.Name("top").Number(s.Top); w.Name("min").Number(s.Min);
-                w.EndObject();
-            }
-            w.EndArray();
-        }
+        // Row shape lives in WriteSkillRows (CombatLogWriter.Buckets.cs) — shared with the Spec B
+        // per-bucket skill rows so the two can never drift apart.
+        foreach (var kv in m) { w.Name(kv.Key); WriteSkillRows(w, kv.Value); }
         w.EndObject();
     }
 

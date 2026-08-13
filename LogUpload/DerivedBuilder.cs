@@ -48,16 +48,20 @@ internal static class DerivedBuilder
         foreach (var ic in entry.ImagineCasts)
             casts.Add(new ImagineCastRec(ic.Ms, ic.Source.Value.ToString(CultureInfo.InvariantCulture), ic.Skill));
 
-        var series = BuildSeries(entry);
+        // ONE normalized bucket width for the whole block — the max over the per-actor timelines AND
+        // the Spec B bucket cells (which coalesce independently; see DerivedBucketBuilder).
+        var bucketMs = DerivedBucketBuilder.ResolveBucketMs(entry);
+        var series = BuildSeries(entry, bucketMs);
+        var boss  = DerivedBucketBuilder.Build(entry.BossBuckets, bucketMs);
+        var elite = DerivedBucketBuilder.Build(entry.EliteBuckets, bucketMs);
         return new Derived(entry.CombatDurationMs, truncatedEvents, perActor, dmgSkills, healSkills, takenSkills, deaths, series,
-            casts.Count > 0 ? casts : null);
+            casts.Count > 0 ? casts : null,
+            boss.Dealt, boss.Taken, boss.Series,
+            elite.Dealt, elite.Taken, elite.Series);
     }
 
-    private static SeriesBlock BuildSeries(Plugin.EncounterHistoryEntry entry)
+    private static SeriesBlock BuildSeries(Plugin.EncounterHistoryEntry entry, int bucketMs)
     {
-        // SourceSeries.BucketMs can differ per actor if a timeline coalesced; normalize to the max bucket.
-        int bucketMs = 1000;
-        foreach (var ser in entry.Series.Values) if (ser.BucketMs > bucketMs) bucketMs = ser.BucketMs;
         var perActor = new Dictionary<string, ActorSeries>(entry.Series.Count);
         foreach (var (id, ser) in entry.Series)
         {
@@ -70,8 +74,10 @@ internal static class DerivedBuilder
         return new SeriesBlock(bucketMs, perActor);
     }
 
-    // Merge a per-actor array recorded at srcBucketMs into dstBucketMs slots (dst is a multiple of src).
-    private static long[] Rebucket(long[] src, int srcBucketMs, int dstBucketMs)
+    // Merge a series recorded at srcBucketMs into dstBucketMs slots (dst is a multiple of src — every
+    // timeline starts at 1000 ms and only ever DOUBLES). Loss-free: the merged array's sum is unchanged.
+    // internal so DerivedBucketBuilder normalizes the Spec B per-bucket series through this same path.
+    internal static long[] Rebucket(long[] src, int srcBucketMs, int dstBucketMs)
     {
         if (src.Length == 0 || srcBucketMs == dstBucketMs || srcBucketMs <= 0) return src;
         int factor = dstBucketMs / srcBucketMs;

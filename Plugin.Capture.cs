@@ -120,7 +120,12 @@ public sealed partial class Plugin
     // junk suppression, bossId/bosses[], or run identity — the whole-fight _stats stay the single source
     // of truth for every existing surface (archive-flow invariants untouched:
     // docs/recon/combatmeter-archive-flow.md). Bucket width/cap are the whole-fight timeline constants
-    // so a per-bucket series lines up bucket-for-bucket with the whole-fight one (the site swaps them).
+    // and the anchor is the same (combat start), so a per-bucket series starts out aligned with the
+    // whole-fight one. It does NOT stay aligned by construction: each cell owns its own SourceTimeline
+    // and coalesces INDEPENDENTLY (its BucketMs doubles when THAT cell outruns the cap), so on a very
+    // long fight cadences can diverge — they are normalized to one bucketMs at emission
+    // (LogUpload/DerivedBucketBuilder.ResolveBucketMs), which is what makes the site's chart swap
+    // like-for-like.
     // ------------------------------------------------------------------------------------------------
     private readonly TargetBucketStats _bossBuckets  = new(TimelineBucketMs, TimelineMaxBuckets);
     private readonly TargetBucketStats _eliteBuckets = new(TimelineBucketMs, TimelineMaxBuckets);

@@ -26,7 +26,7 @@ public sealed partial class Plugin
     private readonly List<EncounterHistoryEntry> _history = new();
     private string? _lastSceneName;
 
-    internal sealed class EncounterHistoryEntry
+    internal sealed partial class EncounterHistoryEntry   // BossBuckets/EliteBuckets: Plugin.BucketStats.cs
     {
         public string?  SceneName;
         public long     EnteredAtMs;
@@ -357,8 +357,8 @@ public sealed partial class Plugin
             FallbackBossConfigId = _bossMonsterInfo?.Id ?? 0,
             Elites           = ResolveCurrentElites(),
         };
-        ApplyAttrRanges(entry);
-        ApplyClassSpans(entry);
+        // Post-build appliers, one per feature partial (last: Spec B buckets, Plugin.BucketStats.cs).
+        ApplyAttrRanges(entry); ApplyClassSpans(entry); ApplyBucketStats(entry);
         return entry;
     }
 
