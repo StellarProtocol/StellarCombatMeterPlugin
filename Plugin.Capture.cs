@@ -195,18 +195,24 @@ public sealed partial class Plugin
         _agg.AddTaken(d.TargetId, d.Amount);
         var ts = StatsFor(d.TargetId);
         ts.TotalTaken += d.Amount;
+        // Bucket AddTaken is pinned HERE, beside the ts.TotalTaken accrual above and ABOVE the
+        // `_combatActive` guard below, so whole-fight taken and bucket taken are structurally
+        // INSEPARABLE — they must accrue under identical conditions or Σbuckets==totals silently
+        // breaks (review finding, task-3: the guard is unreachable-as-true today since
+        // EnsureCombatStarted runs earlier in OnCombatEvent, but that must not matter). The bucket
+        // is the ATTACKER (d.SourceId); d.TargetId is the store's player key, mirroring the line
+        // above. Ms anchor is identical whether this sits above or below the guard: AddTaken takes
+        // a fight-anchored ms (d.TimestampMs - _combatStartMs), and _combatStartMs is already set
+        // by EnsureCombatStarted before this method's sole call site. The guard below now gates
+        // ONLY the whole-fight timeline add (a display series, not a Σ-invariant one).
+        var (isElite, bucketKey) = ResolveTargetBucket(d.SourceId);
+        (isElite ? _eliteBuckets : _bossBuckets)
+            .AddTaken(d.TargetId, bucketKey, d.Amount, d.TimestampMs - _combatStartMs);
         if (d.IsDead) { ts.Deaths += 1; _deaths.Add(new DeathEntry(d.TimestampMs, d.TargetId, d.SkillId)); }
         if (!ts.IncomingBySkill.TryGetValue(d.SkillId, out var inc)) { inc = new IncomingSkillStats(); ts.IncomingBySkill[d.SkillId] = inc; }
         inc.Total += d.Amount; inc.Hits += 1; if (d.Amount > inc.TopHit) inc.TopHit = d.Amount;
         if (!_combatActive) return;
         TimelineFor(d.TargetId).Add(TimelineChannel.Taken, d.TimestampMs, _combatStartMs, d.Amount);
-        // Spec B bucket routing (capture-only). For TAKEN the bucket is the ATTACKER (d.SourceId); the
-        // victim (d.TargetId) is the store's player key, mirroring the whole-fight line above. The ms is
-        // FIGHT-ANCHORED here because the store passes startMs:0 to its own SourceTimeline — the two
-        // series must land in identical bucket indices or the site's per-bucket chart swap skews.
-        var (isElite, bucketKey) = ResolveTargetBucket(d.SourceId);
-        (isElite ? _eliteBuckets : _bossBuckets)
-            .AddTaken(d.TargetId, bucketKey, d.Amount, d.TimestampMs - _combatStartMs);
     }
 
     private void AccumulateDamage(SourceStats s, CombatEvent.DamageDealt d)
