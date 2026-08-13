@@ -122,4 +122,28 @@ public class EliteSetTests
         s.Admit(E(10), 200100);
         Assert.False(s.Contains(E(99)));   // non-empty, but this id was never admitted
     }
+
+    // --- Spec B (2026-08-14-per-boss-statistics-design §3.1): TryGetConfigId mirrors StageBossSet's own
+    // bucket-key lookup. RUN-scoped set (no drain), so a killed elite keeps resolving until the run
+    // boundary clears the set — its post-kill DoT tail stays on its own bucket. ---
+
+    [Fact]
+    public void TryGetConfigId_returns_admitted_members_config_and_false_for_unknown()
+    {
+        var s = new EliteSet();
+        s.Admit(E(10), 200100); s.SetLiveness(E(10), Alive);
+        s.Admit(E(11), 200101); s.SetLiveness(E(11), Dead);
+
+        Assert.True(s.TryGetConfigId(E(10), out var a));
+        Assert.Equal(200100, a);
+        Assert.True(s.TryGetConfigId(E(11), out var killed));   // killed → still its own bucket
+        Assert.Equal(200101, killed);
+
+        Assert.False(s.TryGetConfigId(E(99), out var unknown));
+        Assert.Equal(0, unknown);                               // never admitted → Other
+
+        s.Clear();
+        Assert.False(s.TryGetConfigId(E(10), out var cleared));
+        Assert.Equal(0, cleared);
+    }
 }

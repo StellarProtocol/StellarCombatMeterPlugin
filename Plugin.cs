@@ -368,6 +368,11 @@ public sealed partial class Plugin : IStellarPlugin
     {
         _stats.Clear();
         _timelines.Clear();
+        // Buckets share _stats' PER-SEGMENT lifecycle exactly (Spec B §7): a SUPPRESSED archive never
+        // calls Clear() at all (suppression wipes NOTHING), so they carry forward with _stats and the
+        // sums stay equal. NOT run-scoped — never move these into ResetRunScopedTrackers.
+        _bossBuckets.Clear();
+        _eliteBuckets.Clear();
         _deaths.Clear();
         _imagineCasts.Clear();
         _lastImagineHitMs.Clear();

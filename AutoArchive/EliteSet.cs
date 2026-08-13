@@ -82,6 +82,23 @@ internal sealed class EliteSet
         return false;
     }
 
+    /// <summary>Member lookup returning the member's CONFIG id — the per-elite statistics bucket key
+    /// (Spec B, docs/superpowers/specs/2026-08-14-per-boss-statistics-design.md §3.1). Mirrors
+    /// <see cref="StageBossSet.TryGetConfigId"/> exactly, including the 0-on-miss contract
+    /// (<c>TargetBucketStats.OtherKey</c>); the elite result feeds its OWN store, never a boss
+    /// surface. Bounded alloc-free scan — this runs per COMBAT EVENT.</summary>
+    internal bool TryGetConfigId(EntityId id, out int configId)
+    {
+        for (var i = 0; i < _members.Count; i++)
+        {
+            if (_members[i].Id != id) continue;
+            configId = _members[i].ConfigId;
+            return true;
+        }
+        configId = 0;
+        return false;
+    }
+
     /// <summary>Admits a new elite up to <see cref="MaxMembers"/>. UNLIKE <see cref="StageBossSet.Admit"/>
     /// there is no "stage open/closed" gate here — elite capture is RUN-scoped, not stage-scoped (no
     /// drain concept), so membership simply grows (de-duplicated) until the run/scene boundary clears

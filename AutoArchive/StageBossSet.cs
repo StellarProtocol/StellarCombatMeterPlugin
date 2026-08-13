@@ -80,6 +80,24 @@ internal sealed class StageBossSet
         return false;
     }
 
+    /// <summary>Member lookup returning the member's CONFIG id — the per-boss statistics bucket key
+    /// (Spec B, docs/superpowers/specs/2026-08-14-per-boss-statistics-design.md §3.1). Same bounded,
+    /// alloc-free scan as <see cref="Contains"/> (this runs per COMBAT EVENT — no dictionary, no LINQ).
+    /// <paramref name="configId"/> is 0 on a miss, which is <c>TargetBucketStats.OtherKey</c>, so an
+    /// unrouted target lands in Other rather than being dropped (no-loss invariant §7.2). A KILLED
+    /// member still resolves until the stage drains, keeping the post-kill DoT tail on its boss.</summary>
+    internal bool TryGetConfigId(EntityId id, out int configId)
+    {
+        for (var i = 0; i < _members.Count; i++)
+        {
+            if (_members[i].Id != id) continue;
+            configId = _members[i].ConfigId;
+            return true;
+        }
+        configId = 0;
+        return false;
+    }
+
     /// <summary>True if the stage is currently open to new members: the set is empty (new stage), or at
     /// least one existing member is present. A member already tracked (or a full set) is not re-added.</summary>
     internal bool Admit(EntityId id, int configId)

@@ -112,6 +112,44 @@ public sealed partial class Plugin
         _difficultyAtCombatStart = _services.Dungeon.CurrentDifficulty;
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Per-boss/per-elite statistics — CAPTURE-ONLY bucket routing (Spec B,
+    // docs/superpowers/specs/2026-08-14-per-boss-statistics-design.md §3). Split boss vs elite exactly
+    // like bosses[]/elites[] (owner ruling 2026-08-13: elites never reach boss surfaces). Routing READS
+    // _stageBosses/_eliteSet and feeds NOTHING back into AutoArchiveEngine, BossStatus, the verdict,
+    // junk suppression, bossId/bosses[], or run identity — the whole-fight _stats stay the single source
+    // of truth for every existing surface (archive-flow invariants untouched:
+    // docs/recon/combatmeter-archive-flow.md). Bucket width/cap are the whole-fight timeline constants
+    // so a per-bucket series lines up bucket-for-bucket with the whole-fight one (the site swaps them).
+    // ------------------------------------------------------------------------------------------------
+    private readonly TargetBucketStats _bossBuckets  = new(TimelineBucketMs, TimelineMaxBuckets);
+    private readonly TargetBucketStats _eliteBuckets = new(TimelineBucketMs, TimelineMaxBuckets);
+
+    /// <summary>Pure bucket precedence: a tracked stage boss wins; else a tracked elite (routed to its
+    /// OWN store via <c>isElite</c>); else <see cref="TargetBucketStats.OtherKey"/> on the boss store.
+    /// Boss beats elite because a real boss can be RE-TYPED to Elite in event/rotation content
+    /// (<c>MonsterType</c> is not stable per name — docs/recon/raid-clear-and-multiboss.md), and the
+    /// surface it is TRACKED on must win. Pinned headless (Plugin cannot be instantiated in tests —
+    /// repo pattern, see <see cref="ObserveBurstHit"/>).</summary>
+    internal static (bool isElite, int bucketKey) RouteTargetBucket(
+        bool bossMember, int bossConfigId, bool eliteMember, int eliteConfigId)
+    {
+        if (bossMember) return (false, bossConfigId);
+        if (eliteMember) return (true, eliteConfigId);
+        return (false, TargetBucketStats.OtherKey);
+    }
+
+    // Both sets are probed (not short-circuited on the boss hit) so RouteTargetBucket alone decides
+    // precedence — the overlap case is a re-typed boss, not a theoretical one. Alloc-free: two bounded
+    // MaxMembers scans, no interop call and no admission logic (membership is whatever the engine and
+    // the elite channel already admitted).
+    private (bool isElite, int bucketKey) ResolveTargetBucket(EntityId id)
+    {
+        var boss  = _stageBosses.TryGetConfigId(id, out var bossConfigId);
+        var elite = _eliteSet.TryGetConfigId(id, out var eliteConfigId);
+        return RouteTargetBucket(boss, bossConfigId, elite, eliteConfigId);
+    }
+
     // Get-or-create the per-source aggregate.
     private SourceStats StatsFor(EntityId id)
     {
@@ -155,7 +193,15 @@ public sealed partial class Plugin
         if (d.IsDead) { ts.Deaths += 1; _deaths.Add(new DeathEntry(d.TimestampMs, d.TargetId, d.SkillId)); }
         if (!ts.IncomingBySkill.TryGetValue(d.SkillId, out var inc)) { inc = new IncomingSkillStats(); ts.IncomingBySkill[d.SkillId] = inc; }
         inc.Total += d.Amount; inc.Hits += 1; if (d.Amount > inc.TopHit) inc.TopHit = d.Amount;
-        if (_combatActive) TimelineFor(d.TargetId).Add(TimelineChannel.Taken, d.TimestampMs, _combatStartMs, d.Amount);
+        if (!_combatActive) return;
+        TimelineFor(d.TargetId).Add(TimelineChannel.Taken, d.TimestampMs, _combatStartMs, d.Amount);
+        // Spec B bucket routing (capture-only). For TAKEN the bucket is the ATTACKER (d.SourceId); the
+        // victim (d.TargetId) is the store's player key, mirroring the whole-fight line above. The ms is
+        // FIGHT-ANCHORED here because the store passes startMs:0 to its own SourceTimeline — the two
+        // series must land in identical bucket indices or the site's per-bucket chart swap skews.
+        var (isElite, bucketKey) = ResolveTargetBucket(d.SourceId);
+        (isElite ? _eliteBuckets : _bossBuckets)
+            .AddTaken(d.TargetId, bucketKey, d.Amount, d.TimestampMs - _combatStartMs);
     }
 
     private void AccumulateDamage(SourceStats s, CombatEvent.DamageDealt d)
@@ -187,6 +233,13 @@ public sealed partial class Plugin
         if (d.IsDead) sk.Kills += 1;
         if (d.Amount > sk.TopHit) sk.TopHit = d.Amount;
         if (d.Amount > 0 && (sk.MinHit == 0 || d.Amount < sk.MinHit)) sk.MinHit = d.Amount;
+
+        // Spec B bucket routing (capture-only). DEALT only — heals returned via CaptureHeal before this
+        // method and are never bucketed (healing targets players, not bosses: spec §2). Fight-anchored ms,
+        // same reason as CaptureTaken's: the store's own series is built with startMs:0.
+        var (isElite, bucketKey) = ResolveTargetBucket(d.TargetId);
+        (isElite ? _eliteBuckets : _bossBuckets)
+            .AddDealt(d.SourceId, bucketKey, d.SkillId, d.Amount, d.IsCrit, d.TimestampMs - _combatStartMs);
     }
 
     // Spec comes from the framework's shared cast-resolved cache (ICombatSpec): the framework recognises

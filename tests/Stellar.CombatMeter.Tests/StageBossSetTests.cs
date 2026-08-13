@@ -181,4 +181,34 @@ public class StageBossSetTests
 
         Assert.False(s.Contains(E(10)));   // drained — a fresh admission must be allowed again
     }
+
+    // --- Spec B (2026-08-14-per-boss-statistics-design §3.1): TryGetConfigId is the per-event bucket-key
+    // lookup. A non-member yields configId 0 == TargetBucketStats.OtherKey, so an unrouted target lands
+    // in Other rather than being dropped (no-loss invariant §7.2). ---
+
+    [Fact]
+    public void TryGetConfigId_returns_admitted_members_config_and_false_after_drain()
+    {
+        var s = new StageBossSet();
+        s.Admit(E(10), 102800); s.SetLiveness(E(10), Alive);
+        s.Admit(E(11), 102801);                              // co-boss joins while #10 is present
+
+        Assert.True(s.TryGetConfigId(E(10), out var a));
+        Assert.Equal(102800, a);
+        Assert.True(s.TryGetConfigId(E(11), out var b));
+        Assert.Equal(102801, b);
+
+        Assert.False(s.TryGetConfigId(E(99), out var unknown));
+        Assert.Equal(0, unknown);                            // never admitted → Other
+
+        // A KILLED member still resolves until the stage drains, so the post-kill DoT tail keeps
+        // bucketing to that boss instead of leaking into Other.
+        s.SetLiveness(E(10), Dead); s.SetLiveness(E(11), Dead);
+        Assert.True(s.TryGetConfigId(E(10), out var dead));
+        Assert.Equal(102800, dead);
+
+        s.DrainIfAllGone();
+        Assert.False(s.TryGetConfigId(E(10), out var drained));
+        Assert.Equal(0, drained);
+    }
 }
