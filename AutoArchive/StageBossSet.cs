@@ -22,7 +22,12 @@ namespace Stellar.CombatMeter.AutoArchive;
 /// </summary>
 internal sealed class StageBossSet
 {
-    internal const int MaxMembers = 8;   // runaway guard; a stage never has this many bosses
+    // Runaway brake, NOT a fight-size assumption — this exists to stop a bad boss-detection flag
+    // from admitting a whole mob pack, not to cap how many real bosses a stage can hold. 8 was wrong:
+    // a live dungeon (Foggy Sea Shadows, 2026-08-13) spawned 5-10 simultaneous bosses and got clipped.
+    // 32 matches the upload schema's bosses[] maxItems bound (services/stellar-logs
+    // schema/combat-log.v1.schema.json) so the brake never fires before the server-side limit would.
+    internal const int MaxMembers = 32;
 
     internal struct BossLiveness
     {

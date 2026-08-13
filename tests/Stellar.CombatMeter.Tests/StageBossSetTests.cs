@@ -104,6 +104,35 @@ public class StageBossSetTests
         Assert.Equal(0, s.Count);
     }
 
+    // --- MaxMembers boundary (owner ruling 2026-08-13): the cap is a runaway brake against a bad
+    // boss-detection flag admitting a whole mob pack, NOT a fight-size assumption — a live dungeon
+    // (Foggy Sea Shadows) spawned 5-10 simultaneous bosses. Raised 8 -> 32 to match the upload
+    // schema's bosses[] maxItems bound; this pins the boundary itself so it can never silently
+    // regress back down. ---
+
+    [Fact]
+    public void Admit_fills_to_MaxMembers_then_refuses_the_next_and_Aggregate_stays_correct()
+    {
+        var s = new StageBossSet();
+        for (var i = 0; i < StageBossSet.MaxMembers; i++)
+            Assert.True(s.Admit(E(i + 1), 100000 + i));
+        Assert.Equal(StageBossSet.MaxMembers, s.Count);
+
+        // 33rd member refused — the set is full.
+        Assert.False(s.Admit(E(999), 999000));
+        Assert.Equal(StageBossSet.MaxMembers, s.Count);
+
+        // Aggregate still reflects all 32 correctly while every member is alive.
+        for (var i = 0; i < StageBossSet.MaxMembers; i++)
+            s.SetLiveness(E(i + 1), Alive);
+        Assert.Equal((true, false, false), s.Aggregate());
+
+        // Killing all 32 (not the refused 33rd) reports gone+dead for the full set.
+        for (var i = 0; i < StageBossSet.MaxMembers; i++)
+            s.SetLiveness(E(i + 1), Dead);
+        Assert.Equal((false, true, true), s.Aggregate());
+    }
+
     // --- Amendment-1 alloc-free surface: MemberAt indexed access mirrors MembersSnapshot() ---
 
     [Fact]
