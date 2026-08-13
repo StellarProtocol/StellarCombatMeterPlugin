@@ -47,6 +47,11 @@ public sealed partial class Plugin
         // sticky-latch fallback.
         LatchElites();
         _eliteSet.Clear();
+        // Appear-sourced imagine-cast novelty set (Plugin.Capture.cs, 2026-08-14): run-scoped like the
+        // trackers above, deliberately NOT in Clear() — a long-lived companion surviving a mid-run
+        // archive must stay "seen", or its next AOI blink after the archive would mint a phantom cast.
+        // CAPTURE ONLY — feeds nothing in AutoArchive/BossStatus/verdict paths.
+        _seenSummons.Clear();
         RecomputeUploadPolicyCache();   // new run ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
     }
 

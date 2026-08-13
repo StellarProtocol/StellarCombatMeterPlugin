@@ -281,6 +281,94 @@ public sealed partial class Plugin
         if (!sa.SummonerId.IsPlayer) return;
         _summonAppearMs[sa.SummonerId] = sa.TimestampMs;
         LogSummonAppeared(sa);
+        TryRecordImagineCastFromAppear(sa);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Others — appear-SOURCED cast recording (2026-08-14): companions that produce NO damage/heal wire
+    // events (buff-only imagines — Tina's haste companion et al.) are invisible to the damage-path
+    // detector above (ObserveResonanceCast), so their casts never recorded for OTHER players. The
+    // summon's APPEAR is the one wire signal such a cast still emits: resolve the summon entity's
+    // monster config id and probe its imagine identity via the framework's SANCTIONED NN=00 synthetic
+    // composite, GetImagineForSkill(configId * 100) — SkillAoyiTable's MonsterId column holds both
+    // monster-summon ids (10084 Celestial Flier) and companion "- Resonance" ids (3000033 Tina), so
+    // the one probe covers both (see the framework's ImagineAoyiRule class doc for the contract).
+    // Self stays on the authoritative LocalCooldowns begin-advance detector — never recorded here.
+    // ------------------------------------------------------------------------------------------------
+
+    // Summon entities already sighted this run — the novelty gate (see SeenSummonSet's doc: an AOI
+    // blink/re-entry of the SAME summon entity is never a new cast). Run-scoped: cleared by
+    // ResetRunScopedTrackers (Plugin.RunBoundary.cs), NOT by Clear().
+    private readonly SeenSummonSet _seenSummons = new();
+
+    // Why an appear may be recorded as a cast, or why it was skipped. Record is the only recording
+    // outcome; the rest are the pure gate's reject reasons (surfaced verbatim in the [img-appear]
+    // diagnostics line via AppearGateTag, Plugin.Diagnostics.cs).
+    internal enum AppearCastGate { Record, SelfSummoner, RepeatSummon, OwnerNotInCombat }
+
+    /// <summary>Pure record/skip decision for an appear-sourced imagine cast (repo pattern:
+    /// <see cref="ObserveBurstHit"/>, <see cref="ResolveImagineCastMs"/> — pinned headless, Plugin
+    /// cannot be instantiated in tests). In gate order:
+    /// <list type="bullet">
+    /// <item><c>summonerIsSelf</c> — self casts are recorded by the authoritative LocalCooldowns
+    /// begin-advance detector (press-time, pre-combat-capable); recording them here too would
+    /// double-count.</item>
+    /// <item><c>summonNovel</c> — the same summon ENTITY re-appearing (AOI blink/re-entry) is NEVER
+    /// a new cast; only a fresh entity uuid (a fresh spawn) is a candidate.</item>
+    /// <item><c>ownerIsKnownCombatant</c> — the AOI-entry phantom guard: a player walking INTO view
+    /// with an already-active companion fires an appear that is NOT a fresh cast. Requiring the
+    /// owner to already hold a _stats row (the cheapest existing signal: an O(1) hit on a dict the
+    /// combat path already maintains, populated only by the owner actually dealing/healing/taking
+    /// something this segment) kills that phantom. Accepted degradations, both failing toward a
+    /// MISSED cast, never an invented one: a genuine cast before the owner's first combat event is
+    /// skipped, and _stats clears per archive (Clear()), so a cast in the first instants after a
+    /// mid-run archive may be skipped too — a damaging imagine is still caught by the damage path.</item>
+    /// </list></summary>
+    internal static AppearCastGate DecideAppearCast(bool summonerIsSelf, bool summonNovel, bool ownerIsKnownCombatant)
+    {
+        if (summonerIsSelf) return AppearCastGate.SelfSummoner;
+        if (!summonNovel) return AppearCastGate.RepeatSummon;
+        if (!ownerIsKnownCombatant) return AppearCastGate.OwnerNotInCombat;
+        return AppearCastGate.Record;
+    }
+
+    /// <summary>Pure guard for the NN=00 synthetic probe: the config id must be positive and small
+    /// enough that <c>configId * 100</c> cannot overflow int. The largest real band is the 7-digit
+    /// companion one (3000033 * 100 = 300003300, fits comfortably); the guard is for garbage config
+    /// ids, not real table rows. Pinned headless.</summary>
+    internal static bool CanProbeImagineComposite(int configId)
+        => configId > 0 && configId <= int.MaxValue / 100;
+
+    // Appear-sourced record path. Called only for player-owned appears (gate above). Appears are
+    // rare (the framework raises EntitySummonAppeared once per appear, only for summoner-attributed
+    // entities), so a FRESH GetMonsterByEntity interop call is fine here — deliberately NOT routed
+    // through ResolveMonsterCandidate's _bossCheck cache (Plugin.BossDetection.cs): summon uuids
+    // churn with every cast and would spend slots of the bounded cache that exists to protect the
+    // boss/elite admission hot path. Same underlying service call either way.
+    // A null imagine probe is a graceful no-op: either the summon simply isn't an imagine's, OR the
+    // running framework predates the aoyi monster closure (<= 1.18.x GetImagineForSkill has no
+    // NN=00 composite path) — appear-sourced capture then degrades to recording nothing, and the
+    // damage-path detector above is unaffected.
+    // Recording happens ONLY after ObserveBurstHit says the (owner, base) key is quiet — which also
+    // PRIMES the key, so a DAMAGING imagine detected via its appear does not re-record on its first
+    // hit seconds later (and symmetrically, an appear arriving just after the first hit is deduped).
+    // Timestamp: the appear instant (press-time-ish) — same anchor ResolveImagineCastMs prefers.
+    private void TryRecordImagineCastFromAppear(CombatEvent.EntitySummonAppeared sa)
+    {
+        bool isSelf = sa.SummonerId.Value == _services.CombatSnapshot.LocalEntityId.Value;
+        bool novel = !isSelf && _seenSummons.MarkSeen(sa.SummonId);   // self never spends seen-set capacity
+        var gate = DecideAppearCast(isSelf, novel, _stats.ContainsKey(sa.SummonerId));
+        if (gate != AppearCastGate.Record) { LogAppearCastOutcome(sa, AppearGateTag(gate), 0, 0); return; }
+
+        int configId = _services.GameData.World.GetMonsterByEntity(sa.SummonId)?.Id ?? 0;
+        if (!CanProbeImagineComposite(configId)) { LogAppearCastOutcome(sa, "no-config", configId, 0); return; }
+        if (_services.ResonanceData.GetImagineForSkill(configId * 100) is not { } info)
+        { LogAppearCastOutcome(sa, "not-imagine", configId, 0); return; }
+        if (!ObserveBurstHit(_lastImagineHitMs, (sa.SummonerId, info.SkillId), sa.TimestampMs, ImagineRetriggerGapMs))
+        { LogAppearCastOutcome(sa, "burst-dedup", configId, info.SkillId); return; }
+
+        AddImagineCast(sa.SummonerId, info.SkillId, sa.TimestampMs);
+        LogAppearCastOutcome(sa, "recorded", configId, info.SkillId);
     }
 
     /// <summary>Picks the cast timestamp to record for a foreign player's imagine: a recent summon-appear

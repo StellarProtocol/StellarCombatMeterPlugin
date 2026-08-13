@@ -102,6 +102,36 @@ public sealed partial class Plugin
             $"[CombatMeter][img-summon] appeared summoner={sa.SummonerId.Value} summon={sa.SummonId.Value} ms={sa.TimestampMs}");
     }
 
+    // One line per appear-RESOLUTION outcome (recorded / rejected+reason) from the appear-sourced
+    // imagine-cast channel (Plugin.Capture.cs, TryRecordImagineCastFromAppear). This is the evidence
+    // line for the owner's one-shot in-game verification of the channel's load-bearing assumption —
+    // that buff-only companions (Tina et al.) carry summoner attribution on APPEAR at all: after a
+    // run with a companion-user in the party, grep "[img-appear]". A "recorded"/"not-imagine"/
+    // "no-config" line proves the appear fired WITH attribution (the framework only raises
+    // EntitySummonAppeared for summoner-attributed entities); no [img-appear]/[img-summon] line for
+    // the companion means the appear carried no summoner attrs and this channel cannot see it.
+    // "no-config" additionally isolates GetMonsterByEntity failing on the summon entity, and
+    // "not-imagine" isolates the composite probe (old framework without the aoyi closure, or a
+    // non-imagine summon). config/base read 0 for stages that never resolved them (fixed field
+    // count, same sentinel convention as LogArchiveOutcome's "n/a").
+    private void LogAppearCastOutcome(CombatEvent.EntitySummonAppeared sa, string outcome, int configId, int baseSkillId)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][img-appear] {outcome} summoner={sa.SummonerId.Value} summon={sa.SummonId.Value} " +
+            $"config={configId} base={baseSkillId} ms={sa.TimestampMs}");
+    }
+
+    // Const-string tag for the pure gate's reject reasons (precedent: ArchiveReasonTag,
+    // Plugin.History.cs) — no ToString() allocation on the (rare) appear path.
+    internal static string AppearGateTag(AppearCastGate gate) => gate switch
+    {
+        AppearCastGate.SelfSummoner => "self",
+        AppearCastGate.RepeatSummon => "repeat-summon",
+        AppearCastGate.OwnerNotInCombat => "owner-not-in-combat",
+        _ => "record",
+    };
+
     // Every SkillUsed event that either belongs to the local player or maps to a Battle Imagine. Kept
     // as an id-space probe: SkillUsed-Begin-based imagine detection was tried and matched ZERO real
     // casts (run 282346129222270976) — these lines show what ids/phases/casters the stream ACTUALLY

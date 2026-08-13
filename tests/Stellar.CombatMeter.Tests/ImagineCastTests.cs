@@ -173,4 +173,82 @@ public sealed class ImagineCastTests
     {
         Assert.Equal(5000, Plugin.ResolveImagineCastMs(hitMs: 5000, appearMs: 5000, maxWindowMs: 8000));
     }
+
+    // -------------------------------------------------------------------------
+    // Others: appear-SOURCED cast recording (buff-only companions, 2026-08-14).
+    // Plugin.DecideAppearCast is the pure record/skip gate TryRecordImagineCastFromAppear runs on;
+    // SeenSummonSet (novelty input) is pinned separately in SeenSummonSetTests.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Appear_gate_records_a_novel_foreign_summon_of_a_known_combatant()
+    {
+        Assert.Equal(Plugin.AppearCastGate.Record,
+            Plugin.DecideAppearCast(summonerIsSelf: false, summonNovel: true, ownerIsKnownCombatant: true));
+    }
+
+    [Fact]
+    public void Appear_gate_excludes_self()
+    {
+        // Self is on the authoritative LocalCooldowns begin-advance detector — recording from the
+        // appear too would double-count the same cast. Self wins over every other input.
+        Assert.Equal(Plugin.AppearCastGate.SelfSummoner,
+            Plugin.DecideAppearCast(summonerIsSelf: true, summonNovel: true, ownerIsKnownCombatant: true));
+    }
+
+    [Fact]
+    public void Appear_gate_rejects_a_reappearing_summon()
+    {
+        // AOI blink / re-entry of the SAME summon entity is never a new cast.
+        Assert.Equal(Plugin.AppearCastGate.RepeatSummon,
+            Plugin.DecideAppearCast(summonerIsSelf: false, summonNovel: false, ownerIsKnownCombatant: true));
+    }
+
+    [Fact]
+    public void Appear_gate_rejects_a_phantom_from_an_owner_not_yet_in_combat()
+    {
+        // A player walking INTO view with an already-active companion fires an appear that is NOT a
+        // fresh cast — without a _stats row for the owner, the appear must be skipped.
+        Assert.Equal(Plugin.AppearCastGate.OwnerNotInCombat,
+            Plugin.DecideAppearCast(summonerIsSelf: false, summonNovel: true, ownerIsKnownCombatant: false));
+    }
+
+    [Fact]
+    public void Composite_guard_accepts_real_monster_and_companion_config_ids()
+    {
+        Assert.True(Plugin.CanProbeImagineComposite(10084));      // Celestial Flier (monster band)
+        Assert.True(Plugin.CanProbeImagineComposite(3000033));    // Tina "- Resonance": *100 = 300003300 fits int
+        Assert.True(Plugin.CanProbeImagineComposite(int.MaxValue / 100));   // boundary inclusive
+    }
+
+    [Fact]
+    public void Composite_guard_rejects_zero_negative_and_overflowing_config_ids()
+    {
+        Assert.False(Plugin.CanProbeImagineComposite(0));
+        Assert.False(Plugin.CanProbeImagineComposite(-1));
+        Assert.False(Plugin.CanProbeImagineComposite(int.MaxValue / 100 + 1));   // *100 would overflow
+    }
+
+    [Fact]
+    public void Appear_record_primes_the_burst_key_so_the_first_hit_does_not_rerecord()
+    {
+        // A DAMAGING imagine detected via its appear: the appear-path record runs ObserveBurstHit
+        // first (returns true, PRIMES the (owner, base) key), so the summon's first hit seconds
+        // later — the damage path's own ObserveBurstHit call — reads as the same burst and is NOT a
+        // second cast. Only after a real silence gap does the key open again.
+        var seen = new Dictionary<(EntityId, int), long>();
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 1000, gapMs: Plugin.ImagineRetriggerGapMs));   // appear records
+        Assert.False(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 5000, gapMs: Plugin.ImagineRetriggerGapMs));  // first hit — deduped
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 5000 + Plugin.ImagineRetriggerGapMs, gapMs: Plugin.ImagineRetriggerGapMs));
+    }
+
+    [Fact]
+    public void Hit_recorded_first_dedupes_a_trailing_appear()
+    {
+        // Symmetric order: the damage path already recorded this burst; an appear event arriving
+        // moments later must be swallowed by the same key.
+        var seen = new Dictionary<(EntityId, int), long>();
+        Assert.True(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 1000, gapMs: Plugin.ImagineRetriggerGapMs));   // hit records
+        Assert.False(Plugin.ObserveBurstHit(seen, (PlayerA, ImagineX), ms: 1200, gapMs: Plugin.ImagineRetriggerGapMs));  // appear — deduped
+    }
 }
