@@ -92,6 +92,15 @@ internal static class PositionJsonWriter
             foreach (var b in doc.Bosses) WriteBossTrackDto(w, b);
             w.EndArray();
         }
+        // ELITE CAPTURE channel (owner ruling 2026-08-13): same BossTrackDto shape, own JSON key.
+        // CAPTURE ONLY — outside the canonical body like bosses/bossHp/playerHp above.
+        if (doc.Elites is { Count: > 0 })
+        {
+            w.Name("elites");
+            w.BeginArray();
+            foreach (var el in doc.Elites) WriteBossTrackDto(w, el);
+            w.EndArray();
+        }
         if (doc.PlayerHp is { Count: > 0 })
         {
             w.Name("playerHp");

@@ -16,15 +16,20 @@ namespace Stellar.CombatMeter;
 // decides WHICH entity the boss is and WHETHER a given event touches it.
 public sealed partial class Plugin
 {
-    // Boss observation cache: entity id -> (IsBoss, ConfigId), resolved at most once per distinct entity
-    // (mirrors _replayMonsterInfo's contains-guard, Plugin.Replay.cs:163-169). BOUNDED: hard cap
-    // + cleared by Clear() — the FPS-leak lesson (never an unbounded per-mob dict in the field).
+    // Monster observation cache: entity id -> (IsBoss, IsElite, ConfigId), resolved at most once per
+    // distinct entity (mirrors _replayMonsterInfo's contains-guard, Plugin.Replay.cs:163-169). BOUNDED:
+    // hard cap + cleared by Clear() — the FPS-leak lesson (never an unbounded per-mob dict in the field).
     // Important 3 (final review): ConfigId rides alongside IsBoss now — the SAME GetMonsterByEntity call
     // that resolves IsBoss already has it, so a later admission off a cache hit needs no second interop
     // call (CheckBossCandidate used to re-call GetMonsterByEntity on every boss-touching event just to
     // fetch the config id, even once IsBoss was already cached).
+    // IsElite added (ELITE CAPTURE channel, owner ruling 2026-08-13): the SAME GetMonsterByEntity call
+    // already carries MonsterType, so CheckEliteCandidate (Plugin.EliteDetection.cs) rides this SAME
+    // cache entry via the shared ResolveMonsterCandidate helper below — a distinct entity id costs
+    // exactly ONE interop call total regardless of whether the boss check or the elite check resolves it
+    // first (whichever runs first for a fresh id fills this one entry for both).
     private const int MaxBossCheckEntries = 512;
-    private readonly Dictionary<EntityId, (bool IsBoss, int ConfigId)> _bossCheck = new();
+    private readonly Dictionary<EntityId, (bool IsBoss, bool IsElite, int ConfigId)> _bossCheck = new();
 
     // Bosses whose fight has already been observed dead THIS RUN — a corpse must never re-open a boss
     // segment. Extracted to AutoArchive.KilledBossTracker (review round, 2026-07-26): the mark/consult/
@@ -244,23 +249,41 @@ public sealed partial class Plugin
         // dupe check below would just no-op), so skip the cache lookup AND the interop call entirely for
         // one — a cheap Count/MemberAt-bounded scan, no allocation.
         if (_stageBosses.Contains(id)) return;
-        if (!_bossCheck.TryGetValue(id, out var cached))
-        {
-            if (_bossCheck.Count >= MaxBossCheckEntries) return;   // runaway guard (field id churn)
-            var info = _services.GameData.World.GetMonsterByEntity(id);
-            var isBoss = info.HasValue && info.Value.IsBoss;       // ResolveBossEntity's exact test
-            // Cache the config id alongside isBoss — the SAME call already has it (caches live now,
-            // and the vitals/attr row is gone by the deferred BossKill archive, same reason
-            // _bossMonsterInfo used to be snapshotted early in ResolveBossEntity), so admission off a
-            // cache hit below never repeats this interop call.
-            cached = (isBoss, info?.Id ?? 0);
-            _bossCheck[id] = cached;
-        }
-        if (!ShouldAdoptBossCandidate(cached.IsBoss, _killedBosses.IsKilled(id))) return;
+        var cached = ResolveMonsterCandidate(id);
+        if (cached is null) return;   // runaway guard hit (MaxBossCheckEntries) — field id churn
+        if (!ShouldAdoptBossCandidate(cached.Value.IsBoss, _killedBosses.IsKilled(id))) return;
         // Admit into the set with the config id already resolved above: no-op if the stage is closed,
         // this id is already tracked, or the set is at MaxMembers.
-        _stageBosses.Admit(id, cached.ConfigId);
+        _stageBosses.Admit(id, cached.Value.ConfigId);
     }
+
+    /// <summary>Shared cache lookup/fill for <c>_bossCheck</c> — the ONE interop call site
+    /// (<c>GetMonsterByEntity</c>) for both boss admission (<see cref="CheckBossCandidate"/>) and elite
+    /// admission (<c>CheckEliteCandidate</c>, Plugin.EliteDetection.cs). Whichever check sees a fresh
+    /// entity id first pays the interop cost and fills the entry; the other always hits the cache.
+    /// Returns null when the runaway guard (<see cref="MaxBossCheckEntries"/>) is hit for a NEW id —
+    /// same fail-closed behavior <c>CheckBossCandidate</c> always had (one non-boss/non-elite id gets
+    /// re-resolved next time, never a stuck admission).</summary>
+    private (bool IsBoss, bool IsElite, int ConfigId)? ResolveMonsterCandidate(EntityId id)
+    {
+        if (_bossCheck.TryGetValue(id, out var cached)) return cached;
+        if (_bossCheck.Count >= MaxBossCheckEntries) return null;   // runaway guard (field id churn)
+        var info = _services.GameData.World.GetMonsterByEntity(id);
+        var isBoss  = info.HasValue && info.Value.IsBoss;                              // ResolveBossEntity's exact test
+        var isElite = info.HasValue && info.Value.MonsterType == MonsterTypeElite;
+        // Cache the config id alongside isBoss/isElite — the SAME call already has it (caches live now,
+        // and the vitals/attr row is gone by the deferred archive, same reason _bossMonsterInfo used to
+        // be snapshotted early in ResolveBossEntity), so admission off a cache hit below never repeats
+        // this interop call.
+        cached = (isBoss, isElite, info?.Id ?? 0);
+        _bossCheck[id] = cached;
+        return cached;
+    }
+
+    // EMonsterType.Elite = 1 (Abstractions' MonsterInfo only names the Boss=2 constant since only bosses
+    // were classified before the ELITE CAPTURE channel, owner ruling 2026-08-13). See MonsterInfo.cs's
+    // own doc: "0=Monster, 1=Elite, 2=Boss".
+    private const int MonsterTypeElite = 1;
 
     /// <summary>Pure decision: may this entity become the tracked boss? Only a boss-tagged entity that
     /// has not already been observed dead this run. Barring an already-killed boss is what stops the

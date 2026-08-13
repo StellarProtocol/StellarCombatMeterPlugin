@@ -338,6 +338,7 @@ public sealed partial class Plugin
         // loop used to read ONLY the live set, so the last member's death (which drains the set in the
         // SAME BossStatus call) never got its terminal MarkDead stamp.
         TickStageBossHpTracks(_hpSampler, _replay.CombatStartMs, nowMs);
+        TickEliteHpTracks(_hpSampler, _replay.CombatStartMs, nowMs);   // ELITE CAPTURE channel — CAPTURE ONLY, see Plugin.EliteDetection.cs
 
         _hpSampler.Tick(dtMs);
     }
@@ -425,6 +426,7 @@ public sealed partial class Plugin
             var boss = ResolveWindowBossFields(windowTracks, upperMs, msOffset);
             // Multi-boss (Task 4): every stage-set boss, windowed — feeds Bosses[] + the meta-id union.
             var windowBosses = BuildWindowBossMembers(windowTracks, upperMs, msOffset);
+            var windowElites = BuildWindowEliteMembers(windowTracks, upperMs, msOffset);   // ELITE CAPTURE channel — feeds Elites[] only, see PositionUploadDoc.Elites' doc
 
             var doc = PositionTrackAssembler.Assemble(
                 samplesByEntity: windowTracks,
@@ -448,6 +450,7 @@ public sealed partial class Plugin
                 BossHp       = boss.hp,
                 PlayerHp     = RebasePlayerHpTracks(SlicePlayerHpWindow(upperMs), msOffset),
                 Bosses       = ToBossTrackDtos(windowBosses),
+                Elites       = ToBossTrackDtos(windowElites),
             };
             return doc with { Sig = SignReplay(doc) };
         }

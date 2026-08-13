@@ -74,8 +74,11 @@ internal sealed class CombatLogAssembler
         // per-segment scalar did.
         var (stageBossId, stageBossKilled, bosses) = BossRepresentative.ResolveStageBosses(
             entry.StageBosses, entry.FallbackBossConfigId);
+        // ELITE CAPTURE channel (owner ruling 2026-08-13): plain map, entry-snapshot at archive time —
+        // NEVER a live read (see EliteRepresentative's own doc).
+        var elites = EliteRepresentative.ResolveElites(entry.Elites);
         var bossConfigId = stageBossId != 0 ? stageBossId : ResolveBossConfigId(entry);
-        var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), stageBossKilled, bosses);
+        var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), stageBossKilled, bosses, elites);
 
         // --- Uploader ---
         var localEntityId = _services.CombatSnapshot.LocalEntityId;
@@ -166,9 +169,15 @@ internal sealed class CombatLogAssembler
     /// Every boss the plugin SAW this segment (multi-boss per battle, Task 6) — null for the replay-doc
     /// call site (which has no use for it) and for a bossless segment. Additive/null on old uploads.
     /// </param>
+    /// <param name="elites">
+    /// ELITE CAPTURE channel (owner ruling 2026-08-13): every MonsterType==1 entity the plugin SAW this
+    /// segment — null for the replay-doc call site and for an eliteless segment. Additive/null on old
+    /// uploads. CAPTURE ONLY — no scalar representative (unlike bossConfigId/bossKilled above).
+    /// </param>
     internal static Encounter BuildEncounter(Plugin.EncounterHistoryEntry entry, int bossConfigId = 0,
                                             string? sceneDisplayName = null, bool bossKilled = false,
-                                            IReadOnlyList<BossRec>? bosses = null)
+                                            IReadOnlyList<BossRec>? bosses = null,
+                                            IReadOnlyList<EliteRec>? elites = null)
     {
         var sceneName = entry.SceneName ?? "";
         if (!int.TryParse(sceneName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sceneMapId))
@@ -205,7 +214,8 @@ internal sealed class CombatLogAssembler
             DefeatedCount:   entry.Defeated,
             PartyId:         entry.PartyId,
             BossKilled:      bossKilled,
-            Bosses:          bosses);
+            Bosses:          bosses,
+            Elites:          elites);
     }
 
     /// <summary>

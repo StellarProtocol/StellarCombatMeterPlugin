@@ -77,6 +77,9 @@ public sealed partial class Plugin
         // Plugin.Replay.cs), consumed by BossRepresentative.ResolveStageBosses (full rationale there)
         // only when StageBosses above is empty. 0 when the heuristic found nothing either.
         public int FallbackBossConfigId;
+        // ELITE CAPTURE channel — CAPTURE ONLY, mirrors StageBosses' shape (see Plugin.EliteDetection.cs).
+        public IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> Elites =
+            Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
         // NOTE: per-entry upload state (phase + run URL) is NOT stored on the entry — it persists as a
         // SIDECAR "uploadStates" key in the history config section (Plugin.HistoryStore.cs), keyed by the
         // stable (LevelUuid, ArchivedAtMs) composite, so the entry JSON stays byte-identical to what older
@@ -351,6 +354,7 @@ public sealed partial class Plugin
             Trigger          = ResolveTriggerTag(reason),
             StageBosses      = ResolveCurrentStageBosses(),
             FallbackBossConfigId = _bossMonsterInfo?.Id ?? 0,
+            Elites           = ResolveCurrentElites(),
         };
         ApplyAttrRanges(entry);
         ApplyClassSpans(entry);

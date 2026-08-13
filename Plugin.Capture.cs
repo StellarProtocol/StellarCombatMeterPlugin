@@ -49,6 +49,12 @@ public sealed partial class Plugin
         // Damage taken: accrue onto the TARGET's stats (so Taken-mode can rank/aggregate victims).
         if (!d.IsHeal && d.TargetId.IsPlayer) CaptureTaken(d);
 
+        // Elite capture (ELITE CAPTURE channel, owner ruling 2026-08-13, Plugin.EliteDetection.cs):
+        // TOGGLE-INDEPENDENT — no _autoArchive.BossEnabled gate, unlike MaybeCutForBossPhase's boss
+        // admission above (which only runs when Boss phase is on). Feeds ONLY the capture-only
+        // _eliteSet — never AutoArchive/BossStatus/verdict/bossId paths.
+        ObserveEliteCandidates(d.SourceId, d.TargetId);
+
         // Replay: note both source and target BEFORE the player-only early-out so boss/add target ids
         // (e.g. a mob being hit by a player) also enter the entity set for position tracking.
         // (Boss detection for the auto-archive trigger moved to MaybeCutForBossPhase above, which runs

@@ -84,12 +84,23 @@ internal sealed record Encounter(
     // Every boss the plugin SAW this segment (multi-boss per battle). Additive/null on old uploads.
     // The scalar BossId/BossKilled above stay as the FIRST-ADMITTED-member representative for old
     // readers (Task 6; amendment 4, 2026-08-12 review — no plugin-side raid-roster preference).
-    IReadOnlyList<BossRec>? Bosses = null);
+    IReadOnlyList<BossRec>? Bosses = null,
+    // ELITE CAPTURE channel (owner ruling 2026-08-13): every MonsterType==1 entity the plugin SAW this
+    // segment. Additive/null on old uploads or a segment with no elite captured. CAPTURE ONLY — unlike
+    // Bosses there is NO scalar EliteId/EliteKilled representative (nothing consumes one); NOT part of
+    // CanonicalPayload (signature-neutral, like Bosses/BossId/PartyId).
+    IReadOnlyList<EliteRec>? Elites = null);
 
 /// <summary>One boss engaged in a segment (multi-boss per battle, Spec A). configId = monster-table
 /// config id (e.g. 102800 Sunfire, 102801 Moonstrike); killed = observed dead / scripted-killed.
 /// Additive — omitted on old uploads; NOT part of CanonicalPayload (signature-neutral).</summary>
 internal sealed record BossRec(int ConfigId, bool Killed);
+
+/// <summary>One elite (MonsterType==1) engaged in a segment (ELITE CAPTURE channel, owner ruling
+/// 2026-08-13). Same shape as <see cref="BossRec"/> — configId = monster-table config id; killed =
+/// observed dead (plain Hp&lt;=0; no raid scripted-kill inference for elites). Additive — omitted on old
+/// uploads; NOT part of CanonicalPayload (signature-neutral).</summary>
+internal sealed record EliteRec(int ConfigId, bool Killed);
 
 // MasterScore: the uploader's CURRENT account master-mode score (SocialIdentity.MasterScore),
 // attached on every upload so the StellarLogs char page reflects a fresh dungeon clear promptly

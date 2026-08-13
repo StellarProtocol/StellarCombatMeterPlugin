@@ -115,8 +115,29 @@ public sealed partial class Plugin
         return list;
     }
 
-    // Converts BuildWindowBossMembers's window-filtered tuples to the Replay.BossTrackDto records carried
-    // on PositionUploadDoc.Bosses. Archive-time-only allocation (amendment 1) — never called per-tick.
+    // ELITE CAPTURE channel (owner ruling 2026-08-13): every elite (MonsterType==1) tracked this window,
+    // sliced+rebased — mirrors BuildWindowBossMembers exactly, sourced from BuildEliteHpTracks/
+    // ResolveCurrentElites (Plugin.EliteDetection.cs) instead of the stage-boss set. CAPTURE ONLY: feeds
+    // PositionUploadDoc.Elites and nothing else — no meta-id union, no scalar representative (see
+    // PositionUploadDoc.Elites' own doc for the full boundary).
+    private List<(EntityId id, int configId, HpTrack? hp)>? BuildWindowEliteMembers(
+        Dictionary<EntityId, PositionSample[]> windowTracks, long upperMs, int msOffset)
+    {
+        var members = BuildEliteHpTracks();
+        if (members.Count == 0) return null;
+        List<(EntityId, int, HpTrack?)>? list = null;
+        foreach (var (id, configId, track) in members)
+        {
+            var hp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            if (hp is null && !windowTracks.ContainsKey(id)) continue;   // absent from this window entirely
+            (list ??= new List<(EntityId, int, HpTrack?)>(members.Count)).Add((id, configId, hp));
+        }
+        return list;
+    }
+
+    // Converts BuildWindowBossMembers's (or BuildWindowEliteMembers's — same tuple shape) window-filtered
+    // tuples to the Replay.BossTrackDto records carried on PositionUploadDoc.Bosses/Elites. Archive-time-
+    // only allocation (amendment 1) — never called per-tick.
     private static List<BossTrackDto>? ToBossTrackDtos(List<(EntityId id, int configId, HpTrack? hp)>? members)
     {
         if (members is null) return null;

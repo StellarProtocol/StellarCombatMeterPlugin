@@ -158,6 +158,20 @@ internal static class CombatLogWriter
             }
             w.EndArray();
         }
+        // ELITE CAPTURE channel (owner ruling 2026-08-13): additive elites[] — same shape as bosses[]
+        // above, no scalar representative (CAPTURE ONLY; see Encounter.Elites' own doc).
+        if (e.Elites is { Count: > 0 } elites)
+        {
+            w.Name("elites"); w.BeginArray();
+            foreach (var el in elites)
+            {
+                w.BeginObject();
+                w.Name("configId").Number(el.ConfigId);
+                if (el.Killed) w.Name("killed").Bool(true);
+                w.EndObject();
+            }
+            w.EndArray();
+        }
         if (e.BossName != null) w.Name("bossName").Str(e.BossName);
         if (e.Difficulty != null) w.Name("difficulty").Str(e.Difficulty);
         w.Name("masterModeScore").Number(e.MasterModeScore);

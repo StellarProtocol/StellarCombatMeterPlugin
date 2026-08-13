@@ -32,11 +32,20 @@ namespace Stellar.CombatMeter.Replay;
 /// worker/site prefer <c>bosses[]</c> when present.
 /// </para>
 /// <para>
+/// ELITE CAPTURE channel (owner ruling 2026-08-13): <see cref="Elites"/> additively carries every
+/// MonsterType==1 entity captured this window — SAME <see cref="BossTrackDto"/> shape as
+/// <see cref="Bosses"/> (id, monster config id, sliced HP track), reused as-is rather than a duplicate
+/// DTO type. CAPTURE ONLY: unlike <see cref="Bosses"/> there is no scalar representative (no
+/// <c>EliteEntityId</c>/<c>EliteHp</c> pair) and it feeds nothing in AutoArchive/BossStatus/verdict
+/// paths — see <c>AutoArchive/EliteSet.cs</c>. Null on a bossless/eliteless run or when the channel
+/// never captured anything.
+/// </para>
+/// <para>
 /// Boss + playerHp are emitted only by the full <see cref="PositionJsonWriter.Write"/>
 /// output — NOT by <see cref="PositionJsonWriter.WriteBodyOnly"/>, which the worker's
 /// signature verification hashes and must match exactly
-/// <c>{hz,mapId,origin,scale,tracks,meta}</c>. <c>Bosses</c> is likewise excluded — signature-neutral,
-/// like <c>bossHp</c>/<c>playerHp</c>.
+/// <c>{hz,mapId,origin,scale,tracks,meta}</c>. <c>Bosses</c>/<c>Elites</c> are likewise excluded —
+/// signature-neutral, like <c>bossHp</c>/<c>playerHp</c>.
 /// </para>
 /// </summary>
 internal sealed record PositionUploadDoc(
@@ -56,7 +65,8 @@ internal sealed record PositionUploadDoc(
     string BossEntityId = "",
     HpTrack? BossHp = null,
     IReadOnlyDictionary<string, HpTrack>? PlayerHp = null,
-    IReadOnlyList<BossTrackDto>? Bosses = null);
+    IReadOnlyList<BossTrackDto>? Bosses = null,
+    IReadOnlyList<BossTrackDto>? Elites = null);
 
 /// <summary>
 /// One stage boss's id/config/HP timeline, carried in <see cref="PositionUploadDoc.Bosses"/>

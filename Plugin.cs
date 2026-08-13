@@ -407,6 +407,7 @@ public sealed partial class Plugin : IStellarPlugin
         // reset it here, AFTER BuildHistoryEntry already read it for THIS archive, so it never bleeds
         // into the next one (mirrors the retired _segmentBossKilled's own per-archive Clear() reset).
         _segmentStageBosses = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        _segmentElites = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();   // mirrors the line above (ELITE CAPTURE channel, EliteSet.cs)
     }
 
     private double EncounterElapsedSeconds()

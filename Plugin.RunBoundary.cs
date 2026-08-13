@@ -39,6 +39,14 @@ public sealed partial class Plugin
         LatchStageBosses();
         _stageBosses.Clear();
         _memberLastHpFrac.Clear();
+        // Elite capture channel (owner ruling 2026-08-13): same run/scene-boundary reset as the stage-
+        // boss set above — CAPTURE ONLY, feeds nothing in AutoArchive/BossStatus/verdict paths (see
+        // AutoArchive/EliteSet.cs). Latch BEFORE clearing (mirrors LatchStageBosses/_stageBosses.Clear())
+        // so the scene archive's deferred BuildHistoryEntry — which runs AFTER this reset, via
+        // BankRunBoundary below — still resolves this run's elites through ResolveCurrentElites's
+        // sticky-latch fallback.
+        LatchElites();
+        _eliteSet.Clear();
         RecomputeUploadPolicyCache();   // new run ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
     }
 
@@ -73,6 +81,10 @@ public sealed partial class Plugin
         // headless. The invariant it restores — empty live set + empty latch yields no bosses — is pinned
         // by PreferLiveStageBosses_both_empty_returns_the_empty_live_set (AutoArchiveContentGuardTests.cs).
         _segmentStageBosses = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        // Elite capture channel: same staleness fix as _segmentStageBosses above (2026-08-13) — a
+        // dropped/skip-empty/suppressed archive attempt must not leave this latch pinned past its own
+        // run boundary. CAPTURE ONLY either way — no engine/verdict impact.
+        _segmentElites = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
     }
 
     // The ONE run-boundary bank+reset block (spec §3 COMMIT), composed of the two halves above. Called
