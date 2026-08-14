@@ -83,7 +83,7 @@ public sealed partial class Plugin
 
             new SeparatorElement(),
             new TextElement(() => "History", Emphasis: true),
-            CountPillRow("Keep runs", () => HistoryRetention, v => HistoryRetention = v, MinRetention, 100, 150, 200, MaxRetention),
+            HistoryRetentionRow(),
             new TextElement(() => "   How many past archives the local list keeps. Higher = more history, bigger config.", MutedCol),
 
             new SeparatorElement(),
@@ -324,19 +324,32 @@ public sealed partial class Plugin
         _                           => 56f,
     };
 
-    // Count pills (owner 2026-08-15): like PillRow but the values are RUN COUNTS, so no "s" suffix. Used for
-    // the local-history retention setting (Plugin.HistoryStore.cs). Kept separate rather than generalising
-    // PillRow so the archive timeout rows' measured layout is untouched.
-    private HudElement CountPillRow(string label, Func<int> get, Action<int> set, params int[] counts)
+    // Local-history retention (owner 2026-08-15): a DROPDOWN, not pills — five values (50..250) clipped the
+    // fixed-width settings row (owner screenshot), and a select fits any count in fixed width. Options are
+    // run COUNTS (no "s"). A hand-edited value outside the presets snaps the closed dropdown to its nearest.
+    private static readonly int[] RetentionOptions = { MinRetention, 100, 150, 200, MaxRetention };
+    private static readonly string[] RetentionOptionLabels = { "50", "100", "150", "200", "250" };
+
+    private HudElement HistoryRetentionRow() => new RowElement(new HudElement[]
     {
-        var kids = new List<HudElement> { new SpacerElement(Width: 8f), new TextElement(() => label, MutedCol, Width: 96f) };
-        foreach (var c in counts)
-        {
-            var count = c;
-            kids.Add(new ButtonElement(() => count.ToString(), () => set(count),
-                Active: () => get() == count, Enabled: () => true, Width: 48f));
-        }
-        return new RowElement(kids.ToArray(), Gap: 6f);
+        new SpacerElement(Width: 8f),
+        new TextElement(() => "Keep runs", MutedCol, Width: 96f),
+        new DropdownElement(
+            () => IndexOfRetention(HistoryRetention),
+            () => RetentionOptionLabels,
+            i => { if (i >= 0 && i < RetentionOptions.Length) HistoryRetention = RetentionOptions[i]; },
+            Width: 72f),
+    }, Gap: 6f);
+
+    // Closed-dropdown selection: the exact preset, else the nearest preset at or below the current value
+    // (a hand-edited 130 shows as 100), never -1. Pure/static — pinned by HistorySearchAndRetentionTests.
+    internal static int IndexOfRetention(int value)
+    {
+        var idx = 0;
+        for (var i = 0; i < RetentionOptions.Length; i++)
+            if (RetentionOptions[i] == value) return i;
+            else if (RetentionOptions[i] <= value) idx = i;
+        return idx;
     }
 
     private HudElement PillRow(string label, Func<int> get, Action<int> set, params int[] seconds)

@@ -24,6 +24,19 @@ public class HistorySearchAndRetentionTests
         Assert.Equal(250, Plugin.ClampRetention(1000));  // above max → max (config-size ceiling)
     }
 
+    // ── Retention dropdown index (closed-select selection) ──────────────────────────────────────────
+
+    [Fact]
+    public void IndexOfRetention_selects_the_exact_preset_or_the_nearest_below()
+    {
+        Assert.Equal(0, Plugin.IndexOfRetention(50));    // 50/100/150/200/250 → indices 0..4
+        Assert.Equal(1, Plugin.IndexOfRetention(100));
+        Assert.Equal(4, Plugin.IndexOfRetention(250));
+        Assert.Equal(1, Plugin.IndexOfRetention(130));   // hand-edited between presets → nearest below (100)
+        Assert.Equal(4, Plugin.IndexOfRetention(999));   // above all → last
+        Assert.Equal(0, Plugin.IndexOfRetention(10));    // below all → first (never -1)
+    }
+
     // ── TrimToCapacity now takes the capacity ───────────────────────────────────────────────────────
 
     [Fact]
