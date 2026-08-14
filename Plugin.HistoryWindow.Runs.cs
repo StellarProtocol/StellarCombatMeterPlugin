@@ -35,6 +35,11 @@ public sealed partial class Plugin
             var dur = FormatDurationWithTenths(RealDurationMs(
                 _history[run.Segments[0]].EnteredAtMs, _history[run.Segments[^1]].ArchivedAtMs));
             var map = ResolveSceneName(primary.SceneName);
+            // Search filter (owner 2026-08-15): match the query against "mapName verdict clock". A filtered-out
+            // row is simply not added; the selected run's DETAIL pane still shows (via _selectedSession below),
+            // so a search never deselects — it only narrows the list.
+            if (!HistoryRowMatches($"{map} {primary.Result} {FormatSessionClock(primary.ArchivedAtMs)}", _historySearch))
+                continue;
             // The trigger tag is per-ARCHIVE, so it only means something on a single-archive row; a grouped
             // row shows the archive count instead.
             var tail = run.Segments.Length > 1 ? "" : TriggerSuffix(primary.Trigger);
@@ -51,6 +56,21 @@ public sealed partial class Plugin
         else { _selectedSession = null; _historyIndex = -1; _chartedSources.Clear(); _chartSourcesVersion++; }
         RebuildSessionRows();
     }
+
+    // Live history search (owner 2026-08-15): filters the grouped run rows by map/verdict/clock as-you-type
+    // (RebuildHistorySnapshots runs every shown frame, so setting this in OnChange reflows the list).
+    private string _historySearch = "";
+
+    /// <summary>The "Search" input above the session list — a live filter, hidden when the list is empty.
+    /// Lives here (not in Plugin.HistoryWindow.cs) beside the filter it drives, and to keep that file off
+    /// the 500-LoC threshold.</summary>
+    private HudElement BuildHistorySearchRow() => new ConditionalElement(() => _history.Count > 0,
+        new RowElement(new HudElement[]
+        {
+            new TextElement(() => "Search", MutedCol, Width: 52f),
+            new InputElement(() => _historySearch, _ => { }, 180f, OnChange: s => _historySearch = s),
+        }, Gap: 4f));
+
     /// <summary>One run's archives. <see cref="Segments"/> is oldest-first (so chip 1 is the run's first
     /// archive); <see cref="Primary"/> is the archive the row opens.</summary>
     internal readonly struct RunGroup

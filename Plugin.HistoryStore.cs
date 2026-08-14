@@ -40,7 +40,7 @@ public sealed partial class Plugin
         }
         // Enforce the cap BEFORE hydrating so evicted runs are never rooted by _uploadStatus; the Forget loop
         // matches the archive path (ManualArchive) and stays correct even if hydration order ever changes.
-        foreach (var evicted in TrimToCapacity(_history)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }
+        foreach (var evicted in TrimToCapacity(_history, HistoryRetention)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }
         HydrateUploadStatesFromSidecar();   // restore "✓ Uploaded" + URL for the surviving entries
         SweepOrphanReUploads();   // belt-and-braces: drop any container left by a crash mid-evict
         if (skipped > 0) _services.Log.Info($"[CombatMeter] history: skipped {skipped} malformed entr{(skipped == 1 ? "y" : "ies")} on load");
@@ -72,13 +72,35 @@ public sealed partial class Plugin
                 _uploadStatus.Set(e, rec.Phase, rec.Url);
     }
 
-    // Cap the history to HistoryCapacity, evicting oldest-first (front of the list). Single source of truth for
+    // Local-history retention (owner 2026-08-15): a SETTING, not a fixed cap. Clamped to [Min,Max] — Min is
+    // the old fixed cap (never fewer), Max is the config-size ceiling (each entry carries full per-actor
+    // stats/gear/skills; ~50 entries ≈ 1.7 MB, so 250 ≈ ~8 MB parsed on load / rewritten per archive).
+    internal const int MinRetention = 50;
+    internal const int MaxRetention = 250;
+    internal const int DefaultRetention = 100;
+    private const string PrefHistoryRetention = "history.retention";
+
+    /// <summary>Clamp a requested retention to <see cref="MinRetention"/>..<see cref="MaxRetention"/>.
+    /// Pure — pinned by HistorySearchAndRetentionTests.</summary>
+    internal static int ClampRetention(int value)
+        => value < MinRetention ? MinRetention : value > MaxRetention ? MaxRetention : value;
+
+    /// <summary>The current retention (how many past archives the local list keeps), read from prefs and
+    /// clamped. Setter persists. The slot pool is sized to <see cref="MaxRetention"/> so this can change at
+    /// runtime without rebuilding the window (MaxSessionSlots).</summary>
+    internal int HistoryRetention
+    {
+        get => ClampRetention(_prefs.Get(PrefHistoryRetention, DefaultRetention));
+        set { _prefs.Set(PrefHistoryRetention, ClampRetention(value)); _prefs.Save(); }
+    }
+
+    // Cap the history to `capacity`, evicting oldest-first (front of the list). Single source of truth for
     // the cap so load and archive evict identically; testable without a live host. Returns the evicted entries
     // (oldest-first) so the caller can drop their upload status — otherwise they'd be rooted by _uploadStatus.
-    internal static List<EncounterHistoryEntry> TrimToCapacity(List<EncounterHistoryEntry> history)
+    internal static List<EncounterHistoryEntry> TrimToCapacity(List<EncounterHistoryEntry> history, int capacity)
     {
         List<EncounterHistoryEntry>? evicted = null;
-        while (history.Count > HistoryCapacity)
+        while (history.Count > capacity)
         {
             (evicted ??= new List<EncounterHistoryEntry>()).Add(history[0]);
             history.RemoveAt(0);
@@ -87,6 +109,16 @@ public sealed partial class Plugin
     }
 
     private static readonly List<EncounterHistoryEntry> EmptyEntries = new();
+
+    /// <summary>The history-list search filter: true when <paramref name="query"/> (trimmed) is empty, or a
+    /// case-insensitive substring of <paramref name="searchableText"/> (a run row's "mapName verdict clock").
+    /// Pure — pinned by HistorySearchAndRetentionTests.</summary>
+    internal static bool HistoryRowMatches(string searchableText, string query)
+    {
+        var q = query?.Trim();
+        if (string.IsNullOrEmpty(q)) return true;
+        return searchableText.IndexOf(q, System.StringComparison.OrdinalIgnoreCase) >= 0;
+    }
 
     // Serialize the whole _history list + the upload-state sidecar and persist them. Called after
     // archive/eviction, after any clear, and (via PersistUploadStateIfDirty) once an async upload settles.
