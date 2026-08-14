@@ -23,7 +23,7 @@ public enum VerticalBarMode
 public sealed class MeterElementToggles
 {
     public bool Rank, Crest, Spec, Primary, Total, Share, Imagine, ImagineCooldown, LeaderFlag;
-    public bool ClassName, AbilityScore, VoiceIcon;
+    public bool ClassName, AbilityScore, IllusionBreak, VoiceIcon;
     public VerticalBarMode VerticalBar;
     public bool MainBarIsHp;
     public float SpineWidth;
@@ -37,7 +37,7 @@ public sealed class MeterElementToggles
     {
         Rank = true, Crest = true, Spec = true, VerticalBar = VerticalBarMode.Hp, MainBarIsHp = false, SpineWidth = 3f,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
-        ClassName = false, AbilityScore = false, VoiceIcon = true,
+        ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true,
         ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight,
     };
 
@@ -52,7 +52,7 @@ public sealed class MeterElementToggles
 
     /// <summary>Resolved per-element visibility for one row.</summary>
     public readonly record struct Resolved(
-        bool Rank, bool Crest, bool Spec, bool ClassName, bool AbilityScore,
+        bool Rank, bool Crest, bool Spec, bool ClassName, bool AbilityScore, bool IllusionBreak,
         bool Primary, bool Total, bool Share, bool Imagine, bool ImagineCooldown,
         bool LeaderFlag, bool VoiceIcon);
 
@@ -69,6 +69,7 @@ public sealed class MeterElementToggles
             Spec:            Spec  && wideEnoughSpec,
             ClassName:       ClassName && wideEnoughSpec,
             AbilityScore:    AbilityScore,
+            IllusionBreak:   IllusionBreak,
             Primary:         Primary,
             Total:           Total && wideEnoughSpec,
             Share:           Share && wideEnoughShare,
@@ -100,6 +101,7 @@ public sealed class MeterElementToggles
         d.LeaderFlag      = cfg.Get($"{prefix}.show.leaderFlag",      defaults.LeaderFlag);
         d.ClassName       = cfg.Get($"{prefix}.show.className",       defaults.ClassName);
         d.AbilityScore    = cfg.Get($"{prefix}.show.abilityScore",    defaults.AbilityScore);
+        d.IllusionBreak   = cfg.Get($"{prefix}.show.illusionBreak",   defaults.IllusionBreak);
         d.VoiceIcon       = cfg.Get($"{prefix}.show.voiceIcon",       defaults.VoiceIcon);
         d.ImagineSize     = (ImagineSize)cfg.Get($"{prefix}.imagine.size",     (int)defaults.ImagineSize);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
@@ -123,6 +125,7 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.leaderFlag",      LeaderFlag);
         cfg.Set($"{prefix}.show.className",       ClassName);
         cfg.Set($"{prefix}.show.abilityScore",    AbilityScore);
+        cfg.Set($"{prefix}.show.illusionBreak",   IllusionBreak);
         cfg.Set($"{prefix}.show.voiceIcon",       VoiceIcon);
         cfg.Set($"{prefix}.imagine.size",         (int)ImagineSize);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);

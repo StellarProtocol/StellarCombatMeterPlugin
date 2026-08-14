@@ -138,6 +138,7 @@ public sealed partial class Plugin
             _loadoutCapture.ResetForRun();
             _attrRange.ResetForRun();
             _classSpans.ResetForRun();
+            _memberSeasonStrength.Clear();   // Illusion-Breaking Strength cache — per-run, same lifecycle as _classSpans
             _lastPolledProfession = 0;
         }
         _loadoutRunId = runId;

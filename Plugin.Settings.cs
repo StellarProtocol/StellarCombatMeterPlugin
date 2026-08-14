@@ -90,9 +90,10 @@ public sealed partial class Plugin
 
             new SpacerElement(Height: 10f),
             SectionLabel("Other"),
-            ToggleRow("Leader flag",   () => t.LeaderFlag,   v => t.LeaderFlag = v),
-            ToggleRow("Ability score", () => t.AbilityScore, v => t.AbilityScore = v),
-            ToggleRow("Voice icon",    () => t.VoiceIcon,    v => t.VoiceIcon = v),
+            ToggleRow("Leader flag",        () => t.LeaderFlag,    v => t.LeaderFlag = v),
+            ToggleRow("Ability score",      () => t.AbilityScore,  v => t.AbilityScore = v),
+            ToggleRow("Illusion-Break Str", () => t.IllusionBreak, v => t.IllusionBreak = v),
+            ToggleRow("Voice icon",         () => t.VoiceIcon,     v => t.VoiceIcon = v),
 
             new SpacerElement(Height: 10f),
             new TextElement(() => "Self · leader · dead · offline states are styled automatically.", MutedCol),

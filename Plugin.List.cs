@@ -122,7 +122,7 @@ public sealed partial class Plugin
             Name             = label,
             ClassName        = vis.ClassName ? GetClassLine(id) : "",
             Spec             = vis.Spec ? SpecLine(id) : "",
-            AbilityScore     = vis.AbilityScore && _services.CombatLookup.GetFightPoint(id) is var fp && fp > 0 ? fp.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "",
+            AbilityScore     = FormatAbilityScore(_services.CombatLookup.GetFightPoint(id), SeasonStrengthOf(id), vis.AbilityScore, vis.IllusionBreak),
             RoleColor        = toggles.MainBarIsHp ? hpColor   : roleColor,
             HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? roleColor : hpColor,
             NameColor        = ReadyVoteColor(id),
@@ -145,7 +145,7 @@ public sealed partial class Plugin
             ShowCrest        = vis.Crest,
             ShowSpec         = vis.Spec,
             ShowClassName    = vis.ClassName,
-            ShowAbilityScore = vis.AbilityScore,
+            ShowAbilityScore = vis.AbilityScore || vis.IllusionBreak,
             ShowHpBar        = toggles.VerticalBar != VerticalBarMode.Off,
             SpineWidth       = toggles.SpineWidth,
             ShowPrimary      = vis.Primary,
@@ -159,6 +159,24 @@ public sealed partial class Plugin
             Imagine0         = imagine0,
             Imagine1         = imagine1,
         };
+    }
+
+    /// <summary>The row's Ability Score / Illusion-Breaking Strength cell text. Ability Score is the game
+    /// FightPoint; <paramref name="seasonStrength"/> is attr 11440 (AttrSeasonStrength). Owner format
+    /// (2026-08-15): <c>51,931 (+2,504)</c> when both are shown and the season value is known — matching
+    /// EntityInspector's <c>AbilityScoreLine</c>. A zero/unknown FightPoint omits the score (today's
+    /// behaviour); a zero/unknown season value never renders <c>(+0)</c>. Pure/static — pinned by
+    /// AbilityScoreFormatTests.</summary>
+    internal static string FormatAbilityScore(long fightPoint, long seasonStrength, bool showAbility, bool showIllusion)
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var hasAbility  = showAbility  && fightPoint    > 0;
+        var hasIllusion = showIllusion && seasonStrength > 0;
+        if (hasAbility && hasIllusion)
+            return $"{fightPoint.ToString("N0", ci)} (+{seasonStrength.ToString("N0", ci)})";
+        if (hasAbility)  return fightPoint.ToString("N0", ci);
+        if (hasIllusion) return seasonStrength.ToString("N0", ci);
+        return "";
     }
 
     // Dead = HP known AND zero. Distinguish from "no HP data" (unknown ⇒ alive) so a vitals-less row isn't
