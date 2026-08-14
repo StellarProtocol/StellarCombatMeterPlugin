@@ -182,10 +182,8 @@ public sealed partial class Plugin
             bool evicted = !v.IsKnown;
 
             // UPLOAD-ONLY: remember this member's last LIVE HP fraction for the scripted-kill inference
-            // below. Does NOT feed the (present,gone,dead) tuple, so the engine's cut timing/count is
-            // byte-identical (invariants 6/8). Kept here even though ObserveBossKillState already wrote it
-            // THIS tick (they run one after the other in TickBossStatus) so BossStatus stays correct on
-            // its own terms — the write is the same value.
+            // below (deliberately re-writing the SAME value ObserveBossKillState wrote this tick — see its
+            // doc). Does NOT feed the (present,gone,dead) tuple, so cut timing/count is byte-identical.
             if (v.HasHpObservation && v.MaxHp > 0) _memberLastHpFrac[id] = (float)v.Hp / v.MaxHp;
             var lastFrac = _memberLastHpFrac.TryGetValue(id, out var f) ? f : -1f;
 
