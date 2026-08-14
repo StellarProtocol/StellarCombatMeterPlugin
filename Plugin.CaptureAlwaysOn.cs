@@ -15,11 +15,13 @@ namespace Stellar.CombatMeter;
 // the same reason, and a replay that stops noting entities mid-run is the replay-clip P0 shape.
 //
 // The split, and why each side sits where it does:
-//   CAPTURE (here, always) — boss ADMISSION, elite candidates, replay entity noting. All three only
-//     RECORD what the wire already showed; none of them can bank an archive, move a number the user
-//     reads, or change a verdict. Boss admission's downstream consumers are all transitively gated on
-//     _bossSegmentActive (traced in full on ObserveAutoArchiveBoss, Plugin.BossDetection.cs), which
-//     only the CUT can set — so admitting while paused decides nothing.
+//   CAPTURE (here, always) — boss ADMISSION, elite candidates, replay entity noting, and the summon
+//     NOVELTY mark (ObserveSummonNovelty, added by review Minor 1 — it rides a different event so it is
+//     dispatched on its own). All four only RECORD what the wire already showed; none of them can bank
+//     an archive, move a number the user reads, or change a verdict. Boss admission's downstream
+//     consumers are all transitively gated on _bossSegmentActive (traced in full on
+//     ObserveAutoArchiveBoss, Plugin.BossDetection.cs), which only the CUT can set — so admitting while
+//     paused decides nothing.
 //   DECISIONS + ACCUMULATION (Plugin.Capture.cs, past the pause gate) — the inline boss CUT
 //     (MaybeCutForBossPhase), EnsureCombatStarted's combat/run-id/clear latches, _agg, per-source
 //     stats, timelines and the per-boss/elite buckets. A cut firing while paused would BANK the frozen
@@ -97,5 +99,40 @@ public sealed partial class Plugin
         // stop this — an unsampled stretch of a run is an unrecoverable replay gap (P0: dungeon entry →
         // run end).
         NoteReplayEntity(d.SourceId, d.TargetId);
+    }
+
+    /// <summary>The <c>EntitySummonAppeared</c> event's pause split — the sibling of
+    /// <see cref="ObserveAlwaysOnCapture"/> for the other event type <c>OnCombatEvent</c> dispatches.
+    /// The novelty mark below runs THROUGH pause; everything past <paramref name="accrue"/> records a
+    /// displayed/uploaded cast, so it stays gated (numbers stop). The record half's own data
+    /// (<c>_summonAppearMs</c>, <c>TryRecordImagineCastFromAppear</c>) lives in Plugin.Capture.cs.</summary>
+    private void ObserveSummonAppeared(CombatEvent.EntitySummonAppeared sa, bool accrue)
+    {
+        if (!sa.SummonerId.IsPlayer) return;
+        var (isSelf, novel) = ObserveSummonNovelty(sa);
+        if (!accrue) return;
+        _summonAppearMs[sa.SummonerId] = sa.TimestampMs;
+        LogSummonAppeared(sa);
+        TryRecordImagineCastFromAppear(sa, isSelf, novel);
+    }
+
+    /// <summary>The FOURTH always-on capture channel: mark this summon ENTITY as sighted this run.
+    /// <para><b>Review Minor 1, 2026-08-14</b> — same ruling, same shape. <c>SeenSummonSet</c> is a
+    /// run-scoped TRACKER, not a number: it exists so the SAME summon entity re-appearing (an AOI blink,
+    /// the owner running back into view) is never mistaken for a fresh cast. The mark used to sit past
+    /// <c>OnCombatEvent</c>'s pause gate, inside <c>TryRecordImagineCastFromAppear</c> — so a companion
+    /// that spawned while the meter was paused was never marked, and its first re-appear AFTER the
+    /// unpause then read as NOVEL and recorded a PHANTOM cast for that player. Marking through pause is
+    /// also the only reading of the ruling that holds: the cast happened while numbers were stopped, so
+    /// it must be LOST, never deferred into the next segment.</para>
+    /// <para>Returns the two facts <see cref="DecideAppearCast"/> needs so the pure gate is untouched and
+    /// the mark still happens EXACTLY ONCE per appear — calling <c>MarkSeen</c> again from the record
+    /// path would make every appear read as a repeat and kill the channel outright. <c>isSelf</c>
+    /// short-circuits the mark exactly as before (a self summon never spends the bounded set's capacity;
+    /// self casts come from the authoritative LocalCooldowns detector).</para></summary>
+    private (bool isSelf, bool novel) ObserveSummonNovelty(CombatEvent.EntitySummonAppeared sa)
+    {
+        bool isSelf = sa.SummonerId.Value == _services.CombatSnapshot.LocalEntityId.Value;
+        return (isSelf, !isSelf && _seenSummons.MarkSeen(sa.SummonId));
     }
 }

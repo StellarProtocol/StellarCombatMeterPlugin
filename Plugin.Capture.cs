@@ -17,10 +17,10 @@ public sealed partial class Plugin
         // PAUSE = numbers stop, TRACKING CONTINUES (owner ruling 2026-08-14). The always-on capture
         // channels live past the DamageDealt narrowing below, in ObserveAlwaysOnCapture
         // (Plugin.CaptureAlwaysOn.cs — read its file header for the full split and its rationale).
-        // The two cast-log channels here are display/derived numbers, so they keep their pause gate.
+        // SkillUsed logging is a displayed number and stays gated; the summon channel splits internally.
         var (capture, accrue) = ResolveCombatEventWork(_paused);
         if (evt is CombatEvent.SkillUsed su) { if (accrue) LogSkillUsed(su); return; }
-        if (evt is CombatEvent.EntitySummonAppeared sa) { if (accrue) ObserveSummonAppeared(sa); return; }
+        if (evt is CombatEvent.EntitySummonAppeared sa) { ObserveSummonAppeared(sa, accrue); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
         // Run-boundary combat-belt (Task 4, Plugin.RunBoundary.cs): MUST run before ObserveAlwaysOnCapture
@@ -63,9 +63,6 @@ public sealed partial class Plugin
 
         // Damage taken: accrue onto the TARGET's stats (so Taken-mode can rank/aggregate victims).
         if (!d.IsHeal && d.TargetId.IsPlayer) CaptureTaken(d);
-
-        // (Elite candidates + replay entity noting used to sit HERE. They are capture, not accrual, so
-        // fix 4 moved them up into ObserveAlwaysOnCapture — see Plugin.CaptureAlwaysOn.cs.)
 
         // Per-source stats/timeline: PLAYERS ONLY — mirror the _agg guard above. Mob sources are never
         // shown (live rows come from _agg, which discards non-players; History/SkillBreakdown are
@@ -346,14 +343,6 @@ public sealed partial class Plugin
 
     private readonly Dictionary<EntityId, long> _summonAppearMs = new();
 
-    private void ObserveSummonAppeared(CombatEvent.EntitySummonAppeared sa)
-    {
-        if (!sa.SummonerId.IsPlayer) return;
-        _summonAppearMs[sa.SummonerId] = sa.TimestampMs;
-        LogSummonAppeared(sa);
-        TryRecordImagineCastFromAppear(sa);
-    }
-
     // ------------------------------------------------------------------------------------------------
     // Others — appear-SOURCED cast recording (2026-08-14): companions that produce NO damage/heal wire
     // events (buff-only imagines — Tina's haste companion et al.) are invisible to the damage-path
@@ -423,10 +412,11 @@ public sealed partial class Plugin
     // PRIMES the key, so a DAMAGING imagine detected via its appear does not re-record on its first
     // hit seconds later (and symmetrically, an appear arriving just after the first hit is deduped).
     // Timestamp: the appear instant (press-time-ish) — same anchor ResolveImagineCastMs prefers.
-    private void TryRecordImagineCastFromAppear(CombatEvent.EntitySummonAppeared sa)
+    // isSelf/novel are resolved by the ALWAYS-ON ObserveSummonNovelty (Plugin.CaptureAlwaysOn.cs) and
+    // passed in — re-deriving `novel` here would call MarkSeen a second time and read every appear as a
+    // repeat, killing the channel. The pure gate below is unchanged.
+    private void TryRecordImagineCastFromAppear(CombatEvent.EntitySummonAppeared sa, bool isSelf, bool novel)
     {
-        bool isSelf = sa.SummonerId.Value == _services.CombatSnapshot.LocalEntityId.Value;
-        bool novel = !isSelf && _seenSummons.MarkSeen(sa.SummonId);   // self never spends seen-set capacity
         var gate = DecideAppearCast(isSelf, novel, _stats.ContainsKey(sa.SummonerId));
         if (gate != AppearCastGate.Record) { LogAppearCastOutcome(sa, AppearGateTag(gate), 0, 0); return; }
 
