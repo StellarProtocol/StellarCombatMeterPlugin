@@ -1,3 +1,4 @@
+using System;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter;
 using Xunit;
@@ -103,18 +104,141 @@ public class AutoArchiveContentGuardTests
         Assert.False(Plugin.ShouldArchiveTrashForBoss(priorCombat: false));  // direct engage: no spurious archive
     }
 
-    // ── Inline boss cut is considered only when enabled, NO segment active, AND in an instanced run ──
-    // (recut-fix, 2026-07-21). Keying on segment-active (NOT "boss already known") is what makes a
+    // ── Inline boss cut is considered only when the MASTER Auto-archive toggle AND the "Boss phase" ──
+    // sub-toggle are on, NO segment active, AND we are in an instanced run (recut-fix, 2026-07-21;
+    // master term added 2026-08-14). Keying on segment-active (NOT "boss already known") is what makes a
     // re-detect cut again capped once UpdateLatches re-arms the latch. The inRun gate keeps the cut out
     // of the open world.
 
     [Fact]
-    public void ShouldConsiderInlineBossCut_requires_enabled_no_active_segment_and_in_run()
+    public void ShouldConsiderInlineBossCut_requires_master_and_boss_enabled_no_active_segment_and_in_run()
     {
-        Assert.True(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: true));   // fresh OR re-detect → cut (capped)
-        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: false, bossSegmentActive: false, inRun: true));  // boss auto-archive off
-        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: true,  inRun: true));  // segment running → fast-exit
-        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
+        Assert.True(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true,  bossSegmentActive: false, inRun: true));   // fresh OR re-detect → cut (capped)
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: false, bossSegmentActive: false, inRun: true));  // boss auto-archive off
+        // PINNED (Critical fix, 2026-08-12 review): the CUT stays gated on an active segment — this must
+        // STILL be false after decoupling admission from the cut. Only ADMISSION (below) dropped the
+        // bossSegmentActive term; the cut decision itself is untouched.
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true,  bossSegmentActive: true,  inRun: true));  // segment running → fast-exit
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
+    }
+
+    // ── FIX 1 (owner ruling 2026-08-14): a DECISION may not escape the master gate ────────────────────
+    //
+    // The inline boss cut is the ONE auto trigger that does not ride TickAutoArchiveTriggers — it fires
+    // inline off OnCombatEvent (MaybeCutForBossPhase), so it never passed that method's
+    // `if (!_autoArchive.Enabled) …` gate. The master term was lost when the cut moved inline
+    // (2026-07-21, Task 7), leaving a master-OFF install with "Boss phase" still on banking its pre-boss
+    // trash at the first boss hit — directly contradicting the archive-flow fact table
+    // (docs/recon/combatmeter-archive-flow.md: every auto trigger is "master ON + <sub-toggle>").
+    //
+    // The scenario this pins, in the owner's terms: master Auto-archive OFF, Boss phase ON, a trash→boss
+    // transition (priorCombat = true, no segment yet, in a dungeon) — the exact input tuple that used to
+    // cut — must now produce NO cut. ShouldArchiveTrashForBoss(priorCombat: true) is deliberately still
+    // true; it is unreachable because this guard returns false FIRST, which is where the fix belongs
+    // (the trash-bank decision itself is unchanged).
+    //
+    // The pre-emption branch (ShouldPreemptPendingForBoss) is unreachable with the master off for a
+    // SECOND, independent reason: a pending archive reason can only be armed by TickAutoArchiveTriggers,
+    // which nulls it the moment the master toggle goes off. This guard is the belt on that suspenders.
+    [Fact]
+    public void ShouldConsiderInlineBossCut_master_off_never_cuts_even_with_boss_phase_on()
+    {
+        // Master OFF + sub ON + trash→boss transition (no segment, in a run) → NO cut.
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: false, bossEnabled: true, bossSegmentActive: false, inRun: true));
+        // Differential: the SAME tuple with the master ON still cuts — master-ON behaviour is untouched.
+        Assert.True(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true, bossSegmentActive: false, inRun: true));
+        // Both off — no cut either (and no double-negative surprise).
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: false, bossEnabled: false, bossSegmentActive: false, inRun: true));
+    }
+
+    // ── Admission is a SEPARATE, less-strict gate than the cut ────────────────────────────────────────
+    //
+    // RE-PINNED 2026-08-14 (owner ruling — this test previously pinned the OLD, stricter gating and now
+    // pins the ruling that superseded it; agent-process-rules § 9 corollary: when a fix deliberately
+    // changes a pinned contract, RE-PIN in the same commit with the rationale in the test comment).
+    //
+    // History, in two rounds — each round DELETED one term from this guard, and each deletion IS the fix:
+    //
+    //   Round 1 (Critical fix, 2026-08-12 review) removed `bossSegmentActive`. The ONLY call path into
+    //   StageBossSet.Admit was MaybeCutForBossPhase, gated by ShouldConsiderInlineBossCut — which
+    //   fast-exits the instant bossSegmentActive is true (the first boss-touching event sets it via
+    //   TryBeginBossSegmentCut). So a co-boss engaged AFTER the first hit was NEVER admitted; the set
+    //   could never exceed one member in a real simultaneous fight, defeating the multi-boss spec (§3.2:
+    //   "admit every IsBoss-flagged, not-already-killed entity while the stage is open").
+    //
+    //   Round 2 (OWNER RULING 2026-08-14, verbatim intent: "boss tracking is supposed to be a default
+    //   feature") removed `bossEnabled`. Boss-set ADMISSION must be always-on during an instanced run,
+    //   independent of the "Boss phase" auto-archive sub-toggle — exactly like elite capture (owner
+    //   ruling 2026-08-13). This extends protected archive-flow invariant 5 ("boss detection is
+    //   always-on; the toggle gates only per-boss archive CUTS") from the retired single bossId latch to
+    //   the multi-boss SET. The OLD assertion here — `ShouldConsiderBossAdmission(bossEnabled: false,
+    //   inRun: true)` is false — was the pin the ruling overturned; it is deliberately GONE, replaced by
+    //   its exact inverse below. The second half of the ruling (the toggle STILL gates cuts) is pinned by
+    //   ShouldConsiderInlineBossCut's test above, which keeps its bossEnabled term, and end-to-end at the
+    //   engine by AutoArchiveEngineTests.Boss_readings_are_inert_while_boss_disabled.
+    //
+    // What survives both rounds is a single term: inRun. Admission is now the LEAST strict of the three
+    // boss guards, and the parameter list itself is the proof — a re-added term would not compile here.
+    [Fact]
+    public void ShouldConsiderBossAdmission_is_always_on_in_a_run_regardless_of_toggle_or_segment()
+    {
+        // In an instanced run admission ALWAYS runs — the guard has no bossEnabled term and no
+        // bossSegmentActive term left to block it (owner ruling 2026-08-14 / Critical fix 2026-08-12).
+        Assert.True(Plugin.ShouldConsiderBossAdmission(inRun: true));
+        // Open world — the ONLY remaining gate, unchanged by either round.
+        Assert.False(Plugin.ShouldConsiderBossAdmission(inRun: false));
+    }
+
+    // ── The per-frame kill-state POLL is always-on too (owner ruling 2026-08-14, second half) ────────
+    //
+    // The admission ruling above (commit dce10a1) filled _stageBosses with the "Boss phase" sub-toggle
+    // off — but the poll that turns membership into KILLED STATE (BossStatus → StageBossSet.SetLiveness
+    // → sticky Killed → bosses[]/bossKilled, plus the _killedBosses marks, _memberLastHpFrac and
+    // TickStageBossHpTracks' MarkDead stamp) was reachable ONLY from BuildAutoArchiveInputs, i.e. past
+    // TickAutoArchiveTriggers' `if (!_autoArchive.Enabled) return;`. With the MASTER Auto-archive toggle
+    // OFF the set therefore filled and never updated — the CAVEAT the archive-flow doc carried on
+    // protected invariant 5. Owner ruling: boss kill-state tracking is a DEFAULT FEATURE, so the poll
+    // moved to its own always-reached call site (TickBossStatus, called from Plugin.OnUpdate beside
+    // TrackClearLatch) and BuildAutoArchiveInputs now consumes the cached aggregate.
+    //
+    // The guard's PARAMETER LIST is the pin: there is no autoArchiveEnabled term, so re-gating the poll
+    // on the master toggle cannot compile at the call site. The one term that remains is exactly a skip
+    // the old engine-path call already had — see ShouldPollBossStatus' doc for why the archivePending one
+    // is load-bearing (BossStatus DRAINS the set on the all-gone tick while the engine consumes BossDead
+    // as a one-tick pulse and skips Evaluate entirely while a reason is pending: polling through a settle
+    // window would lose the BossKill for that fight).
+    //
+    // FIX 3 (owner ruling 2026-08-14, later the same day): the `paused` term is GONE too — its omission
+    // is the fix and its parameter is not there to re-add. The justification it used to carry ("nothing
+    // is being captured while paused, so there is no liveness to keep") stopped being true when fix 4
+    // made boss admission / elite candidates / replay entity noting run THROUGH pause; boss + elite HP
+    // tracks never had a pause gate at all (they ride the replay tick). Keeping it meant a boss KILLED
+    // while the meter was paused read killed:false forever, which on a raid loses the derived CLEAR
+    // verdict (it is computed from the killed SET — docs/recon/raid-clear-and-multiboss.md).
+    [Fact]
+    public void ShouldPollBossStatus_is_not_gated_on_the_master_auto_archive_toggle_or_on_pause()
+    {
+        // The ordinary tick — polls regardless of ANY auto-archive toggle (no such parameter exists).
+        Assert.True(Plugin.ShouldPollBossStatus(archivePending: false));
+        // A deferred archive is waiting out its settle window — preserved from the pre-move call path.
+        Assert.False(Plugin.ShouldPollBossStatus(archivePending: true));
+    }
+
+    // FIX 3's owner-facing case, spelled out: a boss killed while the meter is PAUSED must still have its
+    // killed state recorded. There is no `paused` parameter to pass any more, so the poll a paused frame
+    // makes is bit-for-bit the poll an unpaused frame makes — that identity IS the pin. (The IL2CPP half
+    // — BossStatus's vitals read → StageBossSet.SetLiveness → sticky Killed → bosses[]/bossKilled — is
+    // the documented headless glue gap; its set-level rules are pinned by StageBossSetTests and its
+    // marking by KilledBossTrackerTests.)
+    [Fact]
+    public void A_boss_killed_while_paused_still_gets_polled()
+    {
+        // Paused or not, the same (and only) input decides — an unpaused tick and a paused tick agree.
+        Assert.True(Plugin.ShouldPollBossStatus(archivePending: false));
+        // And the pause ruling composes with the capture split: capture runs, accrual does not.
+        var (capture, accrue) = Plugin.ResolveCombatEventWork(paused: true);
+        Assert.True(capture);
+        Assert.False(accrue);
     }
 
     // ---- killed-boss marks (2026-07-26): the corpse-readoption loop that produced the sliver spam ----
@@ -213,5 +337,52 @@ public class AutoArchiveContentGuardTests
         var healer        = new EntityId(1);
         var downedAlly    = new EntityId(2);
         Assert.False(Plugin.EventInvolvesBoss(healer, downedAlly, survivingBoss));
+    }
+
+    // ---- Final review, Critical 1: kill archives were shipping empty bosses[] ----
+    // Plugin.BossDetection.cs's BossStatus() drains _stageBosses on the SAME tick the last member
+    // dies/is scripted-killed, and Plugin.RunBoundary.cs's ResetRunScopedTrackers clears it again before
+    // the always-firing scene archive banks — both BEFORE a deferred BuildHistoryEntry (Plugin.History.cs)
+    // gets to read it. PreferLiveStageBosses is the pure preference rule BuildHistoryEntry/BuildBossHpTracks
+    // apply via ResolveCurrentStageBosses (an IL2CPP-adjacent instance method, unreachable headlessly
+    // without a live Plugin — "Plugin can't be instantiated in tests"). This pins the rule itself: prefer
+    // the live set, fall back to the latch ONLY when live is empty — never the other way around.
+    private static readonly (EntityId Id, int ConfigId, bool Killed) LiveOnly =
+        (new EntityId(10), 102800, true);
+    private static readonly (EntityId Id, int ConfigId, bool Killed) LatchedOnly =
+        (new EntityId(11), 102801, false);
+
+    [Fact]
+    public void PreferLiveStageBosses_prefers_live_when_non_empty()
+    {
+        var live    = new[] { LiveOnly };
+        var latched = new[] { LatchedOnly };
+
+        var result = Plugin.PreferLiveStageBosses(live, latched);
+
+        Assert.Same(live, result);
+    }
+
+    [Fact]
+    public void PreferLiveStageBosses_falls_back_to_latch_when_live_is_empty()
+    {
+        // The exact shape a deferred kill/scene archive hits: the live set already drained/reset.
+        var live    = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        var latched = new[] { LatchedOnly };
+
+        var result = Plugin.PreferLiveStageBosses(live, latched);
+
+        Assert.Same(latched, result);
+    }
+
+    [Fact]
+    public void PreferLiveStageBosses_both_empty_returns_the_empty_live_set()
+    {
+        var live    = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        var latched = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+
+        var result = Plugin.PreferLiveStageBosses(live, latched);
+
+        Assert.Empty(result);
     }
 }

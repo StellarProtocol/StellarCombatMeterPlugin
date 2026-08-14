@@ -311,7 +311,7 @@ public sealed partial class Plugin
     private AutoArchiveInputs BuildAutoArchiveInputs()
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
-        var (bossPresent, bossGone, bossDead) = BossStatus();
+        var (bossPresent, bossGone, bossDead) = _bossStatus;   // TickBossStatus polled it THIS tick (always-on 2026-08-14)
         // A fresh CLEAR is present when this encounter's settlement newly resolves to "kill" — the SAME
         // gate ManualArchive uses to bank the clear marker (IsFreshKill + ResolveVerdict). Lets the engine
         // fire the run-end stage archive through the HasStats + cooldown gates on a fast kill (see Evaluate).
@@ -394,25 +394,50 @@ public sealed partial class Plugin
     /// headless.</summary>
     internal static bool ShouldPreemptPendingForBoss(bool hasPending) => hasPending;
 
-    /// <summary>Pure guard: should the inline boss cut even CONSIDER this event — i.e. detect the boss
-    /// + (maybe) cut? Only when boss auto-archive is enabled, NO boss segment is currently active, AND
-    /// we are in an instanced run. Keying on <c>bossSegmentActive</c> (NOT "boss already known") is the
-    /// recut-fix (2026-07-21, run sea/U051Yv8lf2): once an archive closes the segment (<see
-    /// cref="AutoArchiveEngine.OnArchived"/>, any reason except BossPhase) or a run/scene boundary clears
-    /// it (<see cref="AutoArchiveEngine.UpdateLatches"/>), the inline cut must fire AGAIN — capped at
-    /// firstHit − keepBefore — even if <c>_autoArchiveBossId</c> is still set. A transient eviction (boss
-    /// gone but not confirmed dead) re-arms nothing on its own. The old "boss already known" gate skipped
-    /// the re-detect, and the engine's now-removed boss branch fired an UNCAPPED archive at the tick "now"
-    /// instead (keep-before boundary at 0:55 vs 0:48). The <c>inRun</c> gate keeps
-    /// <c>_autoArchiveBossId</c> + the cut out of the open world. When a segment IS active the fight is
-    /// running and this fast-exits (hot-path). Unit-tested headless.</summary>
-    internal static bool ShouldConsiderInlineBossCut(bool bossEnabled, bool bossSegmentActive, bool inRun)
-        => bossEnabled && !bossSegmentActive && inRun;
+    /// <summary>Pure guard: should the inline boss CUT even consider this event (admission is now a
+    /// SEPARATE gate — see <see cref="ShouldConsiderBossAdmission"/>)? Only when the MASTER Auto-archive
+    /// toggle AND "Boss phase" are both on, NO boss segment is active, AND we are in an instanced run.
+    /// Keying on <c>bossSegmentActive</c> (NOT "boss already known") is the recut-fix (2026-07-21, run
+    /// sea/U051Yv8lf2): once an archive closes the segment (<see cref="AutoArchiveEngine.OnArchived"/>,
+    /// any reason except BossPhase) or a run/scene boundary clears it (<see
+    /// cref="AutoArchiveEngine.UpdateLatches"/>), the inline cut must fire AGAIN — capped at firstHit −
+    /// keepBefore — even if <c>_autoArchiveBossId</c> is still set. A transient eviction (boss gone but
+    /// not confirmed dead) re-arms nothing on its own. The old "boss already known" gate skipped the
+    /// re-detect, and the engine's now-removed boss branch fired an UNCAPPED archive at the tick "now"
+    /// instead (keep-before boundary at 0:55 vs 0:48). The <c>inRun</c> gate keeps <c>_autoArchiveBossId</c>
+    /// + the cut out of the open world. When a segment IS active the fight is running and this fast-exits
+    /// (hot-path).
+    /// <para><b>MASTER GATE (fix 1, owner ruling 2026-08-14 — capture is always-on, GATES DECIDE ONLY).</b>
+    /// <paramref name="masterEnabled"/> is the master "Auto-archive" toggle (<c>AutoArchiveEngine.Enabled</c>)
+    /// and it is REQUIRED here: this is the ONE auto cut that does NOT ride
+    /// <see cref="TickAutoArchiveTriggers"/> — it fires inline off <c>OnCombatEvent</c>, so it never passed
+    /// that method's <c>if (!_autoArchive.Enabled) …</c> gate. The term was lost when the boss cut moved
+    /// inline (2026-07-21, Task 7); until this fix a master-OFF install with "Boss phase" left on still
+    /// banked its trash at the first boss hit, contradicting the archive-flow fact table
+    /// (docs/recon/combatmeter-archive-flow.md: every auto trigger reads "master ON + …"). DECISION gate
+    /// only — admission, kill-state polling and HP/movement capture all stay always-on
+    /// (<see cref="ShouldConsiderBossAdmission"/>, <see cref="ShouldPollBossStatus"/>): a master-off run
+    /// still records its bosses, it just never CUTS for them. Invariants 1/4 untouched — the scene archive
+    /// is a separate always-firing path and the kill verdict rides the <c>_clearedThisRun</c> latch.</para>
+    /// Unit-tested headless.</summary>
+    internal static bool ShouldConsiderInlineBossCut(
+        bool masterEnabled, bool bossEnabled, bool bossSegmentActive, bool inRun)
+        => masterEnabled && bossEnabled && !bossSegmentActive && inRun;
+
+    // NOTE (2026-08-12, multi-boss plan Task 2; narrowed 2026-08-14): ShouldConsiderInlineBossCut's doc
+    // and MaybeCutForBossPhase's comments below still narrate the fix history via the retired single
+    // _autoArchiveBossId latch (Plugin.BossDetection.cs now carries the SET, _stageBosses). The
+    // reasoning — why the CUT is keyed on bossSegmentActive, why a blink must not re-arm it — is
+    // unchanged and still load-bearing at the SET level, so that prose is left intact.
 
     // Inline boss-phase cut (2026-07-21). Called from OnCombatEvent (Plugin.Capture.cs) on every
-    // DamageDealt, BEFORE that event is accumulated — the SOLE boss-cut path. On the first boss combat
-    // event of a fresh (or re-armed) boss segment, when enabled and no segment is active, cuts
-    // IMMEDIATELY:
+    // DamageDealt, BEFORE that event is accumulated and only when the meter is NOT paused — the SOLE
+    // boss-cut path. CUT ONLY since 2026-08-14: boss ADMISSION moved OUT of this method to the
+    // always-on capture block (ObserveAlwaysOnCapture, Plugin.CaptureAlwaysOn.cs) so it keeps running
+    // through pause; this method is now purely a DECISION and is gated accordingly (master toggle +
+    // Boss phase + not paused). Admission still happens strictly BEFORE this call for the same event,
+    // so the first boss hit still opens its own segment. On the first boss combat event of a fresh (or
+    // re-armed) boss segment, when enabled and no segment is active, cuts IMMEDIATELY:
     //   • pre-emption (a deferred archive is still pending): open the NEW segment FIRST via
     //     TryBeginBossSegmentCutAcrossPreemption (finding 2, 2026-07-27), THEN commit the old pending —
     //     a one-shot engine guard stops that commit's OnArchived from closing the segment just opened.
@@ -422,21 +447,26 @@ public sealed partial class Plugin
     //   • direct engage (!priorCombat, no pending): NO archive — mark the segment active and backdate
     //     the combat clock by keepBefore.
     // Re-cuts fire here too (CAPPED) once an archive or run/scene boundary re-arms the segment latch.
-    // Hot-path safe: O(1), no allocation once a segment is active or boss auto-archive is off.
+    // Hot-path safe: O(1), alloc-free once the _bossCheck cache is warm (admission) and once a segment
+    // is active (cut).
     private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
     {
-        // Fast-exit: boss auto-archive off, a segment is already active, or not in an instanced run.
-        if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchive.BossSegmentActive, IsInstancedRun())) return;
-        ObserveAutoArchiveBoss(src, tgt);   // adopts _autoArchiveBossId on this run's first sighting of the boss (no-op if already tracked)
+        // Fast-exit for the CUT only — admission already ran (unconditionally, and even while paused)
+        // in ObserveAlwaysOnCapture before this call. _autoArchive.Enabled is the MASTER toggle: this
+        // inline path does not ride TickAutoArchiveTriggers, so the master gate has to be applied HERE
+        // (fix 1, owner ruling 2026-08-14 — see ShouldConsiderInlineBossCut's doc).
+        if (!ShouldConsiderInlineBossCut(
+                _autoArchive.Enabled, _autoArchive.BossEnabled, _autoArchive.BossSegmentActive,
+                IsInstancedRun())) return;
         // Critical A / Important B (review round 2026-07-27, second pass): an EXPLICIT "does this event
-        // touch the boss" test, not the old `_autoArchiveBossId.Value == 0` proxy. The proxy was only
-        // valid the instant ObserveAutoArchiveBoss had just set the id from THIS event — once the id
-        // survives past that (a still-alive boss after a wipe archive, or — before Critical A's fix — a
-        // stale id pinned past its own fight), the proxy read "a boss is tracked at all" as "this event
-        // is about the boss", so an unrelated event (a rez heal between two players on the wipe→retry
-        // run-back) reached the cut below and opened a spurious boss segment over trash. See
-        // EventInvolvesBoss (Plugin.BossDetection.cs) for the pinned cases.
-        if (!EventInvolvesBoss(src, tgt, _autoArchiveBossId)) return;
+        // touch a tracked boss" test, not a bare "a boss is tracked at all" proxy. The proxy was only
+        // valid the instant ObserveAutoArchiveBoss had just set the id from THIS event — once the id (or,
+        // now, any set member) survives past that (a still-alive boss after a wipe archive, or — before
+        // Critical A's fix — a stale id pinned past its own fight), the proxy read "a boss is tracked" as
+        // "this event is about the boss", so an unrelated event (a rez heal between two players on the
+        // wipe→retry run-back) reached the cut below and opened a spurious boss segment over trash. See
+        // EventInvolvesBoss / EventInvolvesAnyStageBoss (Plugin.BossDetection.cs) for the pinned cases.
+        if (!EventInvolvesAnyStageBoss(src, tgt)) return;
 
         long keepBeforeMs = BossKeepBeforeMs;
         bool preempting = ShouldPreemptPendingForBoss(_pendingArchiveReason is not null);

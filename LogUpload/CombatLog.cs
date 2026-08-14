@@ -23,7 +23,35 @@ internal sealed record Derived(
     SeriesBlock Series,
     // Imagine casts with TRUE timestamps (all players) — the raw event ring truncates on
     // long fights, so the web timeline builds its bubbles from this instead. Optional.
-    IReadOnlyList<ImagineCastRec>? ImagineCasts = null);
+    IReadOnlyList<ImagineCastRec>? ImagineCasts = null,
+    // PER-TARGET-BUCKET statistics (Spec B, docs/superpowers/specs/2026-08-14-per-boss-statistics-design.md
+    // §4.2). Outer key = uid string (same keys as PerActor above); inner key = the boss/elite monster
+    // config id as a string, or the literal "other" for damage not attributed to a tracked target.
+    // ALL SIX ARE NULL when the plugin captured no buckets (old plugin / bossless segment) — absent,
+    // never empty, so a stored derived block from before Spec B reads byte-identically (§7.5). Boss and
+    // elite live in SEPARATE maps and are never merged (owner ruling 2026-08-13: elites never reach boss
+    // surfaces). Σ buckets per (uid, channel) == the PerActor total above (§7.1, pinned by
+    // DerivedBucketsTests). Taken is totals-only by design (§3.2); healing is never bucketed (§2).
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, BucketDealt>>? PerActorBossDealt = null,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, BucketTaken>>? PerActorBossTaken = null,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, BucketSeries>>? PerActorBossSeries = null,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, BucketDealt>>? PerActorEliteDealt = null,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, BucketTaken>>? PerActorEliteTaken = null,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, BucketSeries>>? PerActorEliteSeries = null);
+
+/// <summary>Damage one player dealt to one target bucket: total + the per-skill breakdown in the
+/// whole-fight <see cref="SkillAgg"/> shape (luckys/critLuckys/top/min are 0 — the bucket store keeps
+/// only total/hits/crits, spec §3.2).</summary>
+internal sealed record BucketDealt(long Total, IReadOnlyList<SkillAgg> Skills);
+
+/// <summary>Damage one player took FROM one target bucket. Totals-only by design (spec §3.2 — the
+/// whole-fight taken-skill drill stays whole-fight).</summary>
+internal sealed record BucketTaken(long Total);
+
+/// <summary>One bucket's dealt/taken series, normalized to the derived block's single
+/// <see cref="SeriesBlock.BucketMs"/> and anchored at combat start — like-for-like with the
+/// whole-fight <see cref="ActorSeries"/> so the site can swap chart sources.</summary>
+internal sealed record BucketSeries(IReadOnlyList<long> Dealt, IReadOnlyList<long> Taken);
 
 /// <summary>One battle-imagine cast: epoch ms, caster entity-id string, base imagine skill id.</summary>
 internal sealed record ImagineCastRec(long Ms, string Src, int Skill);
@@ -75,7 +103,32 @@ internal sealed record Encounter(
     int DefeatedCount = 0,
     // Party id (GrpcTeam team_id) frozen at run-start (B1). Emitted as a STRING; additive —
     // 0/omitted when solo/unknown.
-    long PartyId = 0);
+    long PartyId = 0,
+    // Per-segment boss-kill flag (raid per-stage clear derivation). Additive — false/omitted when the
+    // segment's tracked boss was not observed killed. NOT part of CanonicalPayload (signature-neutral,
+    // like bossId/partyId). The worker aggregates the killed set across a run's segments vs. the raid
+    // roster to derive the CLEAR verdict server-side.
+    bool BossKilled = false,
+    // Every boss the plugin SAW this segment (multi-boss per battle). Additive/null on old uploads.
+    // The scalar BossId/BossKilled above stay as the FIRST-ADMITTED-member representative for old
+    // readers (Task 6; amendment 4, 2026-08-12 review — no plugin-side raid-roster preference).
+    IReadOnlyList<BossRec>? Bosses = null,
+    // ELITE CAPTURE channel (owner ruling 2026-08-13): every MonsterType==1 entity the plugin SAW this
+    // segment. Additive/null on old uploads or a segment with no elite captured. CAPTURE ONLY — unlike
+    // Bosses there is NO scalar EliteId/EliteKilled representative (nothing consumes one); NOT part of
+    // CanonicalPayload (signature-neutral, like Bosses/BossId/PartyId).
+    IReadOnlyList<EliteRec>? Elites = null);
+
+/// <summary>One boss engaged in a segment (multi-boss per battle, Spec A). configId = monster-table
+/// config id (e.g. 102800 Sunfire, 102801 Moonstrike); killed = observed dead / scripted-killed.
+/// Additive — omitted on old uploads; NOT part of CanonicalPayload (signature-neutral).</summary>
+internal sealed record BossRec(int ConfigId, bool Killed);
+
+/// <summary>One elite (MonsterType==1) engaged in a segment (ELITE CAPTURE channel, owner ruling
+/// 2026-08-13). Same shape as <see cref="BossRec"/> — configId = monster-table config id; killed =
+/// observed dead (plain Hp&lt;=0; no raid scripted-kill inference for elites). Additive — omitted on old
+/// uploads; NOT part of CanonicalPayload (signature-neutral).</summary>
+internal sealed record EliteRec(int ConfigId, bool Killed);
 
 // MasterScore: the uploader's CURRENT account master-mode score (SocialIdentity.MasterScore),
 // attached on every upload so the StellarLogs char page reflects a fresh dungeon clear promptly

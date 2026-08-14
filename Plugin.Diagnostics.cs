@@ -102,6 +102,36 @@ public sealed partial class Plugin
             $"[CombatMeter][img-summon] appeared summoner={sa.SummonerId.Value} summon={sa.SummonId.Value} ms={sa.TimestampMs}");
     }
 
+    // One line per appear-RESOLUTION outcome (recorded / rejected+reason) from the appear-sourced
+    // imagine-cast channel (Plugin.Capture.cs, TryRecordImagineCastFromAppear). This is the evidence
+    // line for the owner's one-shot in-game verification of the channel's load-bearing assumption —
+    // that buff-only companions (Tina et al.) carry summoner attribution on APPEAR at all: after a
+    // run with a companion-user in the party, grep "[img-appear]". A "recorded"/"not-imagine"/
+    // "no-config" line proves the appear fired WITH attribution (the framework only raises
+    // EntitySummonAppeared for summoner-attributed entities); no [img-appear]/[img-summon] line for
+    // the companion means the appear carried no summoner attrs and this channel cannot see it.
+    // "no-config" additionally isolates GetMonsterByEntity failing on the summon entity, and
+    // "not-imagine" isolates the composite probe (old framework without the aoyi closure, or a
+    // non-imagine summon). config/base read 0 for stages that never resolved them (fixed field
+    // count, same sentinel convention as LogArchiveOutcome's "n/a").
+    private void LogAppearCastOutcome(CombatEvent.EntitySummonAppeared sa, string outcome, int configId, int baseSkillId)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][img-appear] {outcome} summoner={sa.SummonerId.Value} summon={sa.SummonId.Value} " +
+            $"config={configId} base={baseSkillId} ms={sa.TimestampMs}");
+    }
+
+    // Const-string tag for the pure gate's reject reasons (precedent: ArchiveReasonTag,
+    // Plugin.History.cs) — no ToString() allocation on the (rare) appear path.
+    internal static string AppearGateTag(AppearCastGate gate) => gate switch
+    {
+        AppearCastGate.SelfSummoner => "self",
+        AppearCastGate.RepeatSummon => "repeat-summon",
+        AppearCastGate.OwnerNotInCombat => "owner-not-in-combat",
+        _ => "record",
+    };
+
     // Every SkillUsed event that either belongs to the local player or maps to a Battle Imagine. Kept
     // as an id-space probe: SkillUsed-Begin-based imagine detection was tried and matched ZERO real
     // casts (run 282346129222270976) — these lines show what ids/phases/casters the stream ACTUALLY
@@ -173,7 +203,8 @@ public sealed partial class Plugin
     // HP<=0 at all, so without this the ungated line alone could not tell the two apart on the next
     // field diagnosis. Reads "n/a" for every non-BossKill reason (the field is meaningless there — a
     // fixed sentinel, same pattern quietMs already uses, so the line's field COUNT never varies).
-    private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs)
+    private void LogArchiveOutcome(AutoArchive.ArchiveReason reason, string outcome, int statsCount, long durMs,
+                                   IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)>? entryBosses = null)
     {
         var now = _services.CombatSnapshot.ServerNowMs;
         var quietMsText = _lastDamageMs == 0 ? "n/a" : (now - _lastDamageMs).ToString();
@@ -190,10 +221,62 @@ public sealed partial class Plugin
         // WHICH states actually fire in real content — which is what the per-stage settings need in order
         // to pick a default rather than guess. Read at archive time: the stage archive commits within
         // ~15-20ms of arming (see armedMs), so this is the arming state in practice.
+        // The FULL stage-boss SET, DIAGNOSTICS-gated (2026-08-12 review, amendment 5 — replaces the
+        // single-representative "segBoss=" mirror retired by Task 6): lists every member as
+        // configId:killed:hpFrac so an accept run catches BOTH admission risks a single scalar could
+        // hide — a co-boss NOT IsBoss-flagged (never admitted, so simply absent here) and an
+        // IsBoss-flagged add joining the set (an extra pair appears, delaying the all-gone cut). Off in
+        // production so the [archive] line's cost is unchanged; the base line stays ungated as before.
+        // A BANKED archive passes its ENTRY's latched StageBosses (owner pre-production checklist
+        // 2026-08-13, item 3): by the time a deferred boss-kill archive logs, BossStatus's
+        // DrainIfAllGone has already emptied the live set (and a scene archive runs AFTER
+        // ResetRunScopedTrackers), so formatting the live set printed bosses=[] while the entry it
+        // just banked carried the real members — the exact drain the entry's own sticky-latch
+        // snapshot exists to survive (Plugin.BossDetection.cs, _segmentStageBosses).
+        var segText = !StellarDiagnostics.IsEnabled ? ""
+            : $" bosses={(entryBosses is null ? FormatStageBosses() : FormatStageBosses(entryBosses, _memberLastHpFrac))}";
         _services.Log.Info(
             $"[CombatMeter][archive] {outcome} reason={ArchiveReasonTag(reason)} stats={statsCount} durMs={durMs} " +
             $"quietMs={quietMsText} armedMs={armedMs} settle={_archiveSettleMs} cause={causeText} " +
-            $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}");
+            $"flow={_services.Dungeon.CurrentFlowState}#{_services.Dungeon.FlowStateVersion}{segText}");
+    }
+
+    // Diagnostics-only formatter for the [archive] line's "bosses=" field (amendment 5). Never called
+    // outside the StellarDiagnostics.IsEnabled gate above, so its Count/MemberAt loop + string building
+    // is not a hot-path cost. hpFrac reads the SAME per-member map BossStatus feeds
+    // (_memberLastHpFrac); -1 means the member was never seen with a valid HP reading.
+    private string FormatStageBosses()
+    {
+        if (_stageBosses.Count == 0) return "[]";
+        var sb = new System.Text.StringBuilder("[");
+        for (var i = 0; i < _stageBosses.Count; i++)
+        {
+            var (id, configId, killed) = _stageBosses.MemberAt(i);
+            var hpFrac = _memberLastHpFrac.TryGetValue(id, out var f) ? f : -1f;
+            if (i > 0) sb.Append(',');
+            sb.Append(configId).Append(':').Append(killed).Append(':').Append(hpFrac.ToString("0.###"));
+        }
+        return sb.Append(']').ToString();
+    }
+
+    // ENTRY-list overload: formats an archived entry's latched StageBosses (see the banked-line note
+    // in LogArchiveOutcome above). hpFrac still reads the live per-member map — a member already
+    // pruned at drain/reset reads -1 (killed:True is the meaningful field on such lines). Internal
+    // static (pure) so the tests pin the format headless, same pattern as the tracker/guard tests.
+    internal static string FormatStageBosses(
+        IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> members,
+        IReadOnlyDictionary<EntityId, float> lastHpFrac)
+    {
+        if (members.Count == 0) return "[]";
+        var sb = new System.Text.StringBuilder("[");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var (id, configId, killed) = members[i];
+            var hpFrac = lastHpFrac.TryGetValue(id, out var f) ? f : -1f;
+            if (i > 0) sb.Append(',');
+            sb.Append(configId).Append(':').Append(killed).Append(':').Append(hpFrac.ToString("0.###"));
+        }
+        return sb.Append(']').ToString();
     }
 
     // Remembers the last flow version SEEN here, so only real transitions log (this runs per tick).
@@ -216,6 +299,27 @@ public sealed partial class Plugin
         _loggedFlowVersion = version;
         if (previous < 0) return;   // first observation adopts silently, matching the engine's own rule
         _services.Log.Info($"[CombatMeter][flow] {state}#{version} (was #{previous})");
+    }
+
+    // One line per run-boundary COMMIT (rb-task-3, spec 2026-08-12-combatmeter-run-boundary-design.md):
+    // which layer fired (scene = OnSceneChanged's always-firing scene archive; poll-runid =
+    // PollRunBoundary's missed-scene-event heal via RunBoundaryCore, now B-mode-live post rb-task-4;
+    // combat-belt = Plugin.Capture.cs's OnCombatEvent resolving an already-ARMed boundary the instant a
+    // real combat event proves the load already resolved, ahead of the next poll tick) and the old/new
+    // run id it committed across. Deliberately UNGATED Info, same reasoning as LogArchiveOutcome: a run boundary
+    // is a rare per-run lifecycle event and its evidence trail (which path banked the outgoing run,
+    // under which id) is exactly what field diagnosis of a merged/split run needs — gating it behind
+    // StellarDiagnostics.IsEnabled would leave the owner's normal log with zero record of which layer
+    // fired. Reuses FormatStageBosses() (added by the multi-boss Task 6) when the stage-boss set is
+    // non-empty. MINOR 8 (final review): both callers now log BEFORE their respective reset clears
+    // _stageBosses — PollRunBoundary already did (Plugin.RunBoundary.cs, before RunBoundaryCore's
+    // ResetRunScopedTrackers); OnSceneChanged (Plugin.History.cs) now does too, so a scene-sourced line
+    // can carry bosses= exactly like poll-runid, instead of always logging an already-emptied set.
+    private void LogRunBoundary(string source, long oldId, long newId, int statsCount)
+    {
+        var bossesText = _stageBosses.Count > 0 ? $" bosses={FormatStageBosses()}" : "";
+        _services.Log.Info(
+            $"[CombatMeter][boundary] source={source} old={oldId} new={newId} stats={statsCount}{bossesText}");
     }
 
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one

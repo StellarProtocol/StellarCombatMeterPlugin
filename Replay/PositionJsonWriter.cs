@@ -85,6 +85,22 @@ internal static class PositionJsonWriter
             if (doc.BossHp != null)
                 WriteHpTrack(w, "bossHp", doc.BossHp);
         }
+        if (doc.Bosses is { Count: > 0 })
+        {
+            w.Name("bosses");
+            w.BeginArray();
+            foreach (var b in doc.Bosses) WriteBossTrackDto(w, b);
+            w.EndArray();
+        }
+        // ELITE CAPTURE channel (owner ruling 2026-08-13): same BossTrackDto shape, own JSON key.
+        // CAPTURE ONLY — outside the canonical body like bosses/bossHp/playerHp above.
+        if (doc.Elites is { Count: > 0 })
+        {
+            w.Name("elites");
+            w.BeginArray();
+            foreach (var el in doc.Elites) WriteBossTrackDto(w, el);
+            w.EndArray();
+        }
         if (doc.PlayerHp is { Count: > 0 })
         {
             w.Name("playerHp");
@@ -158,6 +174,18 @@ internal static class PositionJsonWriter
         w.Name("kind");         w.Str(dto.Kind);
         w.Name("name");         w.Str(dto.Name);
         w.Name("professionId"); w.Int(dto.ProfessionId);
+        w.EndObject();
+    }
+
+    // Multi-boss (Task 4): one Bosses[] element — {entityId, configId, hp?}. hp is omitted (not even a
+    // null token) when this boss has no sampled HP in the window, mirroring how the scalar bossHp key
+    // itself is only emitted when non-null.
+    private static void WriteBossTrackDto(PosWriter w, BossTrackDto b)
+    {
+        w.BeginObject();
+        w.Name("entityId"); w.Str(b.EntityId);
+        w.Name("configId"); w.Int(b.ConfigId);
+        if (b.Hp != null) WriteHpTrack(w, "hp", b.Hp);
         w.EndObject();
     }
 

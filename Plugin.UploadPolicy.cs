@@ -31,7 +31,10 @@ public sealed partial class Plugin
     // MaybeCaptureForLog runs per combat event and TickReplayCapture per frame, so neither may touch
     // prefs or re-resolve a kind.
     private ContentKind _currentKind = ContentKind.Other;
-    private bool _captureForLogEnabled;
+    // Both default TRUE and are only ever re-assigned true (owner ruling 2026-08-14 / 2026-07-29):
+    // capture runs from construction, before the first RecomputeUploadPolicyCache, so a fight that
+    // starts before any scene change is still recorded. See EventCaptureEnabled below.
+    private bool _captureForLogEnabled = true;
     private bool _replayCaptureEnabled = true;
 
     /// <summary>Parses a stored scene name to a mapId. Mirrors
@@ -101,6 +104,29 @@ public sealed partial class Plugin
         return false;
     }
 
+    /// <summary>Pure seam for the RAW-EVENT capture gate — <b>always <c>true</c></b> (owner ruling
+    /// 2026-08-14: capture/tracking is always-on by default; flags and toggles gate only DECISIONS,
+    /// here the SEND). Exact mirror of the replay ruling already implemented as
+    /// <c>_replayCaptureEnabled = true</c> in <see cref="RecomputeUploadPolicyCache"/>, and it fixes the
+    /// same class of bug on the other artifact: this used to read the LIVE content kind's
+    /// <c>stats</c> cell, so a kind whose stats cell was <c>off</c>/<c>manual</c> buffered NOTHING and a
+    /// later hand-push had nothing to send — a raw-event stream is not reconstructible after the fact
+    /// (the exact shape of the owner's Giant Golem Crusade "0 events in 0 chunk(s)"). Worse, the LIVE
+    /// kind and the ARCHIVED entry's kind are resolved from different scenes, so a live-kind capture gate
+    /// could withhold events the upload gate then wants. Upload policy still refuses the SEND at archive
+    /// time — unchanged, in <c>MaybeUploadLog</c>/<c>TierAllowsUpload</c> (Plugin.LogUpload.cs), which is
+    /// the ONLY place it belongs.
+    /// <para>The cost is bounded by construction: <c>CombatEventBuffer</c> is a fixed-size RING —
+    /// 128,000 damage/skill events (32 × 4,000-event chunks) + 2,000 buff events, oldest overwritten,
+    /// never grown — so always-on capture cannot leak memory however long the client runs.</para>
+    /// <para>The parameters are kept deliberately: they are exactly the inputs a re-gate would reach
+    /// for, so the pin (<c>PauseCaptureTests.Raw_event_capture_ignores_the_stats_cell_entirely</c>) can
+    /// hand this an all-<c>off</c> table and assert capture still runs — while the same test asserts the
+    /// SEND for that cell is still refused. Pure static because Plugin cannot be instantiated
+    /// headless.</para>
+    /// </summary>
+    internal static bool EventCaptureEnabled(UploadPolicyTable policy, ContentKind kind) => true;
+
     internal UploadPolicyState UploadPolicyFor(ContentKind kind, UploadArtifact artifact)
         => _uploadPolicy[kind, artifact];
 
@@ -124,6 +150,9 @@ public sealed partial class Plugin
 
     private void InitUploadPolicy()
     {
+        // FIRST — resolves the effective upload API base. Must precede MaybeRefreshContentKinds() below
+        // (which reads LogUploader.ApiBase) and any upload, so nothing can hit the wrong backend.
+        InitUploadApiBase();
         LoadOrMigrateUploadPolicy();
         NormalizeReplayManualToOff();
         _contentKinds = ContentKindMap.FromIds(
@@ -273,11 +302,14 @@ public sealed partial class Plugin
     private void RecomputeUploadPolicyCache()
     {
         _currentKind = _contentKinds.KindOf(ParseMapId(_services.ClientState.CurrentSceneName));
-        // D3: raw-event buffering keeps today's semantics — only when this kind auto-uploads stats.
-        // Fail-open on an empty map, same rule as EffectivePolicy: otherwise other=off would silently
-        // stop raw-event capture on a fresh install before the taxonomy ever arrives.
-        _captureForLogEnabled = _contentKinds.IsEmpty
-            || _uploadPolicy[_currentKind, UploadArtifact.Stats] == UploadPolicyState.Auto;
+        // RAW-EVENT CAPTURE IS UNCONDITIONAL (owner ruling 2026-08-14 — capture is always-on, gates
+        // decide only). This used to be `_contentKinds.IsEmpty || <live kind>.stats == Auto`, i.e. the
+        // live content's stats cell decided whether raw events were even BUFFERED — the same
+        // destroy-instead-of-withhold bug the replay line below already fixed, on the other artifact.
+        // The ring is bounded (CombatEventBuffer: 128,000 dmg/skill + 2,000 buff, oldest overwritten),
+        // so always-on capture is memory-safe; the SEND stays gated at archive time by MaybeUploadLog /
+        // TierAllowsUpload (Plugin.LogUpload.cs). See EventCaptureEnabled's doc for the full rationale.
+        _captureForLogEnabled = EventCaptureEnabled(_uploadPolicy, _currentKind);
         // REPLAY CAPTURE IS UNCONDITIONAL. Owner ruling, restated repeatedly and finally 2026-07-29:
         // "it suppose to store all replay even flag mark off" — the upload flag decides whether a replay
         // is SENT, never whether it is RECORDED. The ONLY thing that stops recording is open field, and

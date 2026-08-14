@@ -3,6 +3,9 @@ using Xunit;
 
 namespace Stellar.CombatMeter.Tests;
 
+// Reads the process-wide LogUploader.ApiBase — shares UploadApiBaseTests' collection so it can never
+// observe that test's temporary override.
+[Collection(ApiBaseCollection.Name)]
 public class RawUploadUrlTests
 {
     [Fact]

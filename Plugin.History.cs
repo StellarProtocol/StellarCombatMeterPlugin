@@ -26,7 +26,7 @@ public sealed partial class Plugin
     private readonly List<EncounterHistoryEntry> _history = new();
     private string? _lastSceneName;
 
-    internal sealed class EncounterHistoryEntry
+    internal sealed partial class EncounterHistoryEntry   // BossBuckets/EliteBuckets: Plugin.BucketStats.cs
     {
         public string?  SceneName;
         public long     EnteredAtMs;
@@ -59,6 +59,27 @@ public sealed partial class Plugin
         public int       Defeated;
         // Why this segment was archived ("manual"|"scene"|"wipe"|"boss"|"idle"|"stage") — v10.
         public string   Trigger = "manual";
+        // Multi-boss per battle (Task 6): every boss the stage set had ADMITTED when this segment
+        // archived — via ResolveCurrentStageBosses() (Plugin.BossDetection.cs: live set, or the sticky
+        // latch when the live set already drained/reset — final review, Critical 1), snapshotted HERE
+        // (additive; NOT persisted to history JSON — read synchronously at archive-time upload only, so
+        // no history-format change / rollback risk per process-rules §6).
+        // NEVER re-read the live _stageBosses at upload time: an upload (a manual re-upload from
+        // history, or even the same-tick assemble call) must describe THIS segment's set as it stood at
+        // archive, not whatever the live set has become since (drained by the next stage, or reset by a
+        // scene change). Empty for a bossless segment / boss-phase detection off. Replaces the retired
+        // SegmentBossConfigId/BossKilled scalars (Task 2 stopgap) — CombatLogAssembler derives the
+        // scalar representative (first-admitted, index 0) and the whole list becomes Encounter.Bosses.
+        public IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> StageBosses =
+            Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        // Boss-phase-OFF fallback (fix 2026-08-13, invariant 5 regression from 957c12f): archive-time
+        // snapshot of the standalone boss-HP heuristic's pick (_bossMonsterInfo?.Id ?? 0,
+        // Plugin.Replay.cs), consumed by BossRepresentative.ResolveStageBosses (full rationale there)
+        // only when StageBosses above is empty. 0 when the heuristic found nothing either.
+        public int FallbackBossConfigId;
+        // ELITE CAPTURE channel — CAPTURE ONLY, mirrors StageBosses' shape (see Plugin.EliteDetection.cs).
+        public IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> Elites =
+            Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
         // NOTE: per-entry upload state (phase + run URL) is NOT stored on the entry — it persists as a
         // SIDECAR "uploadStates" key in the history config section (Plugin.HistoryStore.cs), keyed by the
         // stable (LevelUuid, ArchivedAtMs) composite, so the entry JSON stays byte-identical to what older
@@ -71,22 +92,16 @@ public sealed partial class Plugin
         // Arm the replay-probe settle gate (Plugin.Replay.cs): a scene change = a mass entity
         // teardown/rebuild, during which probing a live transform can hit a freed IL2CPP model.
         _lastSceneChangeMs = _services.CombatSnapshot.ServerNowMs;
-        // New scene = new run: forget which bosses died in the previous one, so the same boss template
-        // in the next run cuts normally. Deliberately NOT in Clear() — that runs on every archive.
-        _killedBosses.Clear();
-        // Critical A (review round 2026-07-27, second pass): the tracked boss id gets a per-run reset
-        // here too. Before this fix, a run that ended without the tracked boss ever being observed at
-        // hp<=0 (wipe-and-leave — the owner's normal loop, an abandoned pull, a fail-out, the boss
-        // despawning on reset) left _autoArchiveBossId pinned to a dead-and-gone entity for the REST OF
-        // THE SESSION: ObserveAutoArchiveBoss's `!= 0` early-out then blocks every later boss — in this
-        // run or the next one — from ever being adopted again, so no BossKill ever fires again. Scoping
-        // this to the scene boundary is what makes a fresh dungeon in the same session detect its own
-        // boss normally. (A sibling _settleBossId used to get the same reset here — retired with the
-        // rest of finding 3's boss-only settle clock, owner ruling 2026-07-28; see
-        // Plugin.AutoArchive.cs's retired-SettleClockMs note.)
-        _autoArchiveBossId = default;
-        RecomputeUploadPolicyCache();   // new scene ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
-        if (_lastSceneName is null)
+        var isFirstObservation = _lastSceneName is null;
+        // MINOR 8 fix (final review): log BEFORE the reset below clears _stageBosses, so a scene-sourced
+        // boundary line can carry bosses= too (see LogRunBoundary's doc, Plugin.Diagnostics.cs).
+        if (!isFirstObservation)
+            LogRunBoundary("scene", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+        // 3fd7559 ran these resets (incl. RecomputeUploadPolicyCache) UNCONDITIONALLY, before the guard
+        // below (review fix, rb-task-2 finding 2 — a prior extraction had silently skipped the cache
+        // recompute on the very first scene observation); only the archive half stays conditional.
+        ResetRunScopedTrackers();
+        if (isFirstObservation)
         {
             _lastSceneName = newScene;
             return;
@@ -97,22 +112,18 @@ public sealed partial class Plugin
         var archived = _stats.Count > 0;
         var samplesAtReset = _replay?.TotalSamples ?? 0;
 
-        // Auto-archive on scene change. ManualArchive() is the single source of
-        // truth for the snapshot-and-clear flow; the Archive button calls it too.
-        ManualArchive(AutoArchive.ArchiveReason.SceneChange);
-        // The outgoing run is now archived under its OWN latched id (LevelUuid = _lastRunId) — clear the
-        // latch so a later archive (an empty scene hop, or the next floor before its own combat
-        // re-latches) can't reuse this run's id. The next run re-latches _lastRunId at its combat start
-        // (Plugin.Capture.EnsureCombatStarted).
-        _lastRunId = 0;
+        // Auto-archive on scene change — the archive half of the shared bank+reset block (the reset +
+        // boundary log already ran above); RunBoundaryCore composes both for the poll-driven commit.
+        BankRunBoundary(AutoArchive.ArchiveReason.SceneChange);
+        // The poll-driven tracker must adopt this already-handled boundary's new id, or its next Observe
+        // would see the same runId change and double-commit (invariant 6: one entry per boundary).
+        _runBoundary.NotifySceneBoundaryHandled(_services.Dungeon.CurrentRunId);
 
         // Scene-boundary replay reset — now CONDITIONAL (spec 2026-07-19): the provisional
-        // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps
-        // the buffer so the lobby movement survives into the run's replay. Every other
-        // boundary resets, preserving the 93:53 cross-scene-carryover protection: entering a
-        // candidate from town starts fresh, leaving to town discards, and committed runs keep
-        // per-segment archives. When the outgoing scene HAD combat, ManualArchive above
-        // already uploaded + reset — this is then a harmless no-op either way.
+        // candidate->candidate hop (raid lobby -> boss room before the run-id latches) keeps the buffer
+        // so the lobby movement survives into the run's replay. Every other boundary resets, preserving
+        // the 93:53 cross-scene-carryover protection. When the outgoing scene HAD combat, ManualArchive
+        // above already uploaded + reset — this is then a harmless no-op either way.
         var incomingCandidate = ResolveSceneCandidate(newScene);
         var reset = ReplayCaptureGate.ShouldResetOnSceneChange(
             _services.Dungeon.CurrentRunId, _sceneIsCandidate, incomingCandidate);
@@ -210,7 +221,8 @@ public sealed partial class Plugin
         SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
 
         var summaryFired = FinalizeAndMaybeUploadReplay(entry, replayUpperCapServerMs);
-        LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs);
+        LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs,
+                          entryBosses: entry.StageBosses);
         if (reason == AutoArchive.ArchiveReason.Manual) NotifyManualArchived(entry.CombatDurationMs);
 
         _autoArchive.OnArchived(_services.CombatSnapshot.ServerNowMs, reason);
@@ -341,9 +353,12 @@ public sealed partial class Plugin
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome, _clearedThisRun),
             Defeated         = _services.Dungeon.LastDefeatedCount,
             Trigger          = ResolveTriggerTag(reason),
+            StageBosses      = ResolveCurrentStageBosses(),
+            FallbackBossConfigId = _bossMonsterInfo?.Id ?? 0,
+            Elites           = ResolveCurrentElites(),
         };
-        ApplyAttrRanges(entry);
-        ApplyClassSpans(entry);
+        // Post-build appliers, one per feature partial (last: Spec B buckets, Plugin.BucketStats.cs).
+        ApplyAttrRanges(entry); ApplyClassSpans(entry); ApplyBucketStats(entry);
         return entry;
     }
 
@@ -355,6 +370,7 @@ public sealed partial class Plugin
         AutoArchive.ArchiveReason.Idle        => "idle",
         AutoArchive.ArchiveReason.StageChange => "stage",
         AutoArchive.ArchiveReason.BossKill    => "bosskill",
+        AutoArchive.ArchiveReason.RunBoundary => "boundary",
         _                                     => "manual",
     };
 

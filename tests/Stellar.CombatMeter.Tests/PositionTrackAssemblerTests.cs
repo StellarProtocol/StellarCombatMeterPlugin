@@ -374,4 +374,102 @@ public class PositionTrackAssemblerTests
         Assert.Null(doc.BossHp);
         Assert.Equal("", doc.BossEntityId);
     }
+
+    // ── multi-boss (Task 4): Bosses[] carries every stage boss's id+configId+HP ─────────────────────
+    // PositionTrackAssembler.Assemble itself never touches Bosses (it is composed downstream in
+    // PrepareReplayDoc via a with-expression, exactly like BossEntityId/BossHp/PlayerHp already are —
+    // see DeltaOverload_EmitsBossMetaRow_ForABossWithNoPositionTrack above for the same pattern).
+
+    [Fact]
+    public void ComposedWithBossesArray_CarriesEveryBossIdConfigIdAndHpTrack()
+    {
+        var samplesByEntity = new Dictionary<EntityId, PositionSample[]>
+        {
+            [new EntityId(7)] = new[] { new PositionSample(0, 1f, 2f, 3f, 0f) },   // a player w/ positions
+        };
+        var meta = new Dictionary<EntityId, PositionMetaDto>
+        {
+            [new EntityId(7)]  = new PositionMetaDto("player", "P", 0),
+            [new EntityId(42)] = new PositionMetaDto("boss", "Sunfire", 0),
+            [new EntityId(43)] = new PositionMetaDto("add", "Moonstrike", 0),
+        };
+
+        var doc = PositionTrackAssembler.Assemble(
+            samplesByEntity, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f, meta: meta);
+
+        // PrepareReplayDoc composes the additive Bosses[] the same way it composes BossEntityId/BossHp.
+        var composed = doc with
+        {
+            BossEntityId = "42",
+            BossHp       = new HpTrack(1000, new[] { 80, 40 }),
+            Bosses = new[]
+            {
+                new BossTrackDto("42", 102800, new HpTrack(1000, new[] { 80, 40 })),
+                new BossTrackDto("43", 102801, new HpTrack(1000, new[] { 60, 0 })),
+            },
+        };
+
+        Assert.NotNull(composed.Bosses);
+        Assert.Equal(2, composed.Bosses!.Count);
+
+        Assert.Equal("42", composed.Bosses[0].EntityId);
+        Assert.Equal(102800, composed.Bosses[0].ConfigId);
+        Assert.NotNull(composed.Bosses[0].Hp);
+
+        Assert.Equal("43", composed.Bosses[1].EntityId);
+        Assert.Equal(102801, composed.Bosses[1].ConfigId);
+        Assert.NotNull(composed.Bosses[1].Hp);
+        Assert.Equal(0, composed.Bosses[1].Hp!.Pct[^1]);   // the co-boss reaches 0% on kill too
+
+        // The scalar representative stays populated for old readers, unaffected by the array.
+        Assert.Equal("42", composed.BossEntityId);
+        Assert.NotNull(composed.BossHp);
+    }
+
+    [Fact]
+    public void Write_FullDoc_EmitsBossesArray_ExcludedFromBodyOnly()
+    {
+        var tracks = new Dictionary<EntityId, PositionTrack>
+        {
+            [new EntityId(1)] = MakeTrack((0, 0f, 0f, 0f, 0f))
+        };
+
+        var assembled = PositionTrackAssembler.Assemble(
+            tracks: tracks, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f);
+
+        var doc = assembled with
+        {
+            LogId = "log-1", LevelUuid = 1, LocalUid = 1, StartMs = 0, EndMs = 1000,
+            Nonce = "n", Sig = "s",
+            Bosses = new[]
+            {
+                new BossTrackDto("42", 102800, new HpTrack(0, new[] { 100, 0 })),
+                new BossTrackDto("43", 102801, null),   // no HP sampled in this window yet
+            },
+        };
+
+        var full = PositionJsonWriter.Write(doc);
+        Assert.Contains(
+            "\"bosses\":[{\"entityId\":\"42\",\"configId\":102800,\"hp\":{\"ms0\":0,\"pct\":[100,0]}}," +
+            "{\"entityId\":\"43\",\"configId\":102801}]",
+            full);
+
+        // Worker signature parity: bosses[] is signature-neutral, same as bossHp/playerHp.
+        var body = PositionJsonWriter.WriteBodyOnly(doc);
+        Assert.DoesNotContain("bosses", body);
+    }
+
+    [Fact]
+    public void Write_OmitsBossesKey_WhenNullOrEmpty()
+    {
+        var tracks = new Dictionary<EntityId, PositionTrack>
+        {
+            [new EntityId(1)] = MakeTrack((0, 0f, 0f, 0f, 0f))
+        };
+        var doc = PositionTrackAssembler.Assemble(tracks, hz: 2, mapId: 1, origin: (0f, 0f), scale: 0.1f);
+
+        Assert.DoesNotContain("bosses", PositionJsonWriter.Write(doc));
+        Assert.DoesNotContain("bosses",
+            PositionJsonWriter.Write(doc with { Bosses = System.Array.Empty<BossTrackDto>() }));
+    }
 }

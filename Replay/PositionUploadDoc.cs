@@ -22,10 +22,30 @@ namespace Stellar.CombatMeter.Replay;
 /// carries per-player HP% timelines keyed by entity id (as decimal string).
 /// </para>
 /// <para>
+/// Multi-boss (2026-08-12, multi-boss-per-battle plan Task 4): <see cref="Bosses"/> additively
+/// carries EVERY boss the stage's <c>StageBossSet</c> knows this window — id, monster config id, and
+/// its own sliced HP track — for a stage with more than one boss (e.g. a raid's two-co-boss phase).
+/// <see cref="BossEntityId"/>/<see cref="BossHp"/> stay populated too, as the FIRST-ADMITTED member's
+/// representative (else today's single-boss behavior when the stage set is empty) — old readers that
+/// only understand the scalar pair keep working unchanged. <c>Bosses</c> is null on a bossless run or
+/// when boss-phase detection never populated the set. Downstream (Plan A2/A3, not this plugin): the
+/// worker/site prefer <c>bosses[]</c> when present.
+/// </para>
+/// <para>
+/// ELITE CAPTURE channel (owner ruling 2026-08-13): <see cref="Elites"/> additively carries every
+/// MonsterType==1 entity captured this window — SAME <see cref="BossTrackDto"/> shape as
+/// <see cref="Bosses"/> (id, monster config id, sliced HP track), reused as-is rather than a duplicate
+/// DTO type. CAPTURE ONLY: unlike <see cref="Bosses"/> there is no scalar representative (no
+/// <c>EliteEntityId</c>/<c>EliteHp</c> pair) and it feeds nothing in AutoArchive/BossStatus/verdict
+/// paths — see <c>AutoArchive/EliteSet.cs</c>. Null on a bossless/eliteless run or when the channel
+/// never captured anything.
+/// </para>
+/// <para>
 /// Boss + playerHp are emitted only by the full <see cref="PositionJsonWriter.Write"/>
 /// output — NOT by <see cref="PositionJsonWriter.WriteBodyOnly"/>, which the worker's
 /// signature verification hashes and must match exactly
-/// <c>{hz,mapId,origin,scale,tracks,meta}</c>.
+/// <c>{hz,mapId,origin,scale,tracks,meta}</c>. <c>Bosses</c>/<c>Elites</c> are likewise excluded —
+/// signature-neutral, like <c>bossHp</c>/<c>playerHp</c>.
 /// </para>
 /// </summary>
 internal sealed record PositionUploadDoc(
@@ -44,7 +64,21 @@ internal sealed record PositionUploadDoc(
     long EndMs = 0,
     string BossEntityId = "",
     HpTrack? BossHp = null,
-    IReadOnlyDictionary<string, HpTrack>? PlayerHp = null);
+    IReadOnlyDictionary<string, HpTrack>? PlayerHp = null,
+    IReadOnlyList<BossTrackDto>? Bosses = null,
+    IReadOnlyList<BossTrackDto>? Elites = null);
+
+/// <summary>
+/// One stage boss's id/config/HP timeline, carried in <see cref="PositionUploadDoc.Bosses"/>
+/// alongside the scalar <see cref="PositionUploadDoc.BossEntityId"/>/<see cref="PositionUploadDoc.BossHp"/>
+/// representative (multi-boss per battle, Spec A / Task 4). <see cref="EntityId"/> is the decimal
+/// entity-id string (same encoding as <see cref="PositionUploadDoc.BossEntityId"/>/Tracks/Meta keys).
+/// <see cref="ConfigId"/> is the monster-table config id (e.g. 102800 Sunfire, 102801 Moonstrike)
+/// snapshotted at admission — master data (names) is resolved server/site-side; the plugin sends ids
+/// only. <see cref="Hp"/> is null when this boss has no sampled HP in the current window
+/// (position-only presence this window). Additive: old readers ignore it.
+/// </summary>
+internal sealed record BossTrackDto(string EntityId, int ConfigId, HpTrack? Hp);
 
 /// <summary>
 /// HP% timeline sampled at the replay capture cadence (2 Hz). Used for the boss

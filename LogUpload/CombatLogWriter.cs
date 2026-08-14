@@ -9,7 +9,7 @@ using System.Text;
 namespace Stellar.CombatMeter.LogUpload;
 
 /// <summary>Hand-rolled, reflection-free (IL2CPP-safe) JSON writer for a <see cref="CombatLog"/>.</summary>
-internal static class CombatLogWriter
+internal static partial class CombatLogWriter   // Spec B bucket half: CombatLogWriter.Buckets.cs
 {
     internal static string Write(CombatLog log)
     {
@@ -41,6 +41,7 @@ internal static class CombatLogWriter
             w.EndArray();
         }
         w.Name("series"); WriteSeries(w, d.Series);
+        WriteDerivedBuckets(w, d);   // Spec B per-boss/elite buckets — all six keys conditional
         w.EndObject();
     }
 
@@ -67,20 +68,9 @@ internal static class CombatLogWriter
     private static void WriteSkillMap(JsonWriter w, IReadOnlyDictionary<string, IReadOnlyList<SkillAgg>> m)
     {
         w.BeginObject();
-        foreach (var kv in m)
-        {
-            w.Name(kv.Key); w.BeginArray();
-            foreach (var s in kv.Value)
-            {
-                w.BeginObject();
-                w.Name("skillId").Number(s.SkillId); w.Name("total").Number(s.Total);
-                w.Name("hits").Number(s.Hits); w.Name("crits").Number(s.Crits);
-                w.Name("luckys").Number(s.Luckys); w.Name("critLuckys").Number(s.CritLuckys);
-                w.Name("top").Number(s.Top); w.Name("min").Number(s.Min);
-                w.EndObject();
-            }
-            w.EndArray();
-        }
+        // Row shape lives in WriteSkillRows (CombatLogWriter.Buckets.cs) — shared with the Spec B
+        // per-bucket skill rows so the two can never drift apart.
+        foreach (var kv in m) { w.Name(kv.Key); WriteSkillRows(w, kv.Value); }
         w.EndObject();
     }
 
@@ -145,6 +135,33 @@ internal static class CombatLogWriter
         w.Name("lineId").Number(e.LineId);
         if (e.Name != null) w.Name("name").Str(e.Name);
         w.Name("bossId").Number(e.BossId);
+        if (e.BossKilled) w.Name("bossKilled").Bool(true);
+        if (e.Bosses is { Count: > 0 } bosses)
+        {
+            w.Name("bosses"); w.BeginArray();
+            foreach (var b in bosses)
+            {
+                w.BeginObject();
+                w.Name("configId").Number(b.ConfigId);
+                if (b.Killed) w.Name("killed").Bool(true);
+                w.EndObject();
+            }
+            w.EndArray();
+        }
+        // ELITE CAPTURE channel (owner ruling 2026-08-13): additive elites[] — same shape as bosses[]
+        // above, no scalar representative (CAPTURE ONLY; see Encounter.Elites' own doc).
+        if (e.Elites is { Count: > 0 } elites)
+        {
+            w.Name("elites"); w.BeginArray();
+            foreach (var el in elites)
+            {
+                w.BeginObject();
+                w.Name("configId").Number(el.ConfigId);
+                if (el.Killed) w.Name("killed").Bool(true);
+                w.EndObject();
+            }
+            w.EndArray();
+        }
         if (e.BossName != null) w.Name("bossName").Str(e.BossName);
         if (e.Difficulty != null) w.Name("difficulty").Str(e.Difficulty);
         w.Name("masterModeScore").Number(e.MasterModeScore);

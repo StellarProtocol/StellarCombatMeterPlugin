@@ -119,14 +119,14 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Feeds the raw event into the log buffer when upload is enabled.
-    /// Called on every combat event BEFORE the existing processing path; zero-allocation
-    /// when disabled (the buffer add is an O(1) list append).
+    /// Feeds the raw event into the log buffer — on every combat event, BEFORE the existing processing
+    /// path, while the meter is PAUSED, and whatever the upload policy says (owner ruling 2026-08-14:
+    /// capture is always-on; policy gates the SEND, at archive time). O(1) ring append, no allocation.
     /// </summary>
     internal void MaybeCaptureForLog(CombatEvent evt)
     {
-        // D3: only buffer raw events when the CURRENT content auto-uploads stats — today's semantics.
-        // Reads one cached bool (RecomputeUploadPolicyCache); never prefs, never a kind resolution.
+        // One cached bool (RecomputeUploadPolicyCache) — never prefs, never a kind resolution. TRUE
+        // unconditionally since the ruling; see Plugin.UploadPolicy.cs's EventCaptureEnabled for why.
         if (!_captureForLogEnabled) return;
         _logBuffer.Add(evt);
     }
@@ -173,7 +173,18 @@ public sealed partial class Plugin
             RetainWithoutUpload(entry, replayDoc);
             return false;
         }
-        if (!RegionKnownOrWarn()) { _logBuffer.Clear(); return false; }
+        if (!RegionKnownOrWarn())
+        {
+            // Fix 2026-08-14: this branch used to `_logBuffer.Clear()` — destroying the captured events
+            // and writing NO container, so the prepared replay doc's only custody was the one-shot
+            // positions POST in FinalizeAndMaybeUploadReplay (a failure there = permanent loss). Retain
+            // exactly like the policy-off / tier paths above so the run's true bodies survive locally
+            // for a later manual push. (The retained summary bakes region "unknown" — a verbatim push
+            // before environment.region is configured will be refused server-side, but the bytes are
+            // no longer destroyed.)
+            RetainWithoutUpload(entry, replayDoc);
+            return false;
+        }
         if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
         {                           // path; uploading would collide every field fight on run:0
             _logBuffer.Clear();
@@ -288,8 +299,26 @@ public sealed partial class Plugin
             LogUploadRefusal(kind, UploadArtifact.Replay, UploadTrigger.Manual, state);
             return;
         }
-        PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions!);
+        PositionUploader.PostRawFireAndForget(payload.Region, payload.LevelUuid, payload.Positions!, (ok, status, err) =>
+        {
+            // Outcome-logging parity with the live path's positions OK/FAILED lines (UploadReplayDoc,
+            // Plugin.Replay.cs). This leg used to pass NO callback, so a failed manual positions re-send
+            // was silent both ways — the user had no signal the replay never landed (fix 2026-08-14).
+            // Thread-pool thread: log calls only, never uGUI.
+            var line = ReUploadPositionsOutcomeLine(ok, status, err, payload.LevelUuid);
+            if (ok) _services.Log.Info(line);
+            else    _services.Log.Warning(line);
+        });
     }
+
+    /// <summary>Outcome line for the manual re-upload positions leg — same OK/FAILED shape as the live
+    /// path's lines (<c>UploadReplayDoc</c>, Plugin.Replay.cs). Pure so the logging decision pins
+    /// headless (<c>ReUploadPositionsOutcomeTests</c>): BOTH outcomes must produce a line — this leg
+    /// used to log nothing either way (fix 2026-08-14).</summary>
+    internal static string ReUploadPositionsOutcomeLine(bool ok, int status, string? err, long levelUuid)
+        => ok
+            ? $"[CombatMeter.SP1] Re-upload positions OK (HTTP {status}) levelUuid={levelUuid}"
+            : $"[CombatMeter.SP1] Re-upload positions FAILED (HTTP {status}) levelUuid={levelUuid}: {err}";
 
     // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
     // auto, empty for manual) and the truncation flag. Never throws into the (main-thread) caller.
@@ -318,6 +347,15 @@ public sealed partial class Plugin
                 if (events.Count == 0)
                 {
                     _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
+                    // Fix 2026-08-14: this early return used to skip PersistReUpload below, so a banked
+                    // zero-events archive (e.g. a clear marker with capture off) got NO .replaydoc
+                    // container and its prepared replay doc's only custody was the one-shot positions
+                    // POST in FinalizeAndMaybeUploadReplay. Retain (summary + positions, zero chunks)
+                    // so a failed/withheld positions send is recoverable by a manual push. The return
+                    // value stays false — the caller still owns the direct positions hand-off
+                    // (FinalizeUploadDecoupleTests' semantics are unchanged).
+                    if (ShouldRetainUnsentArchive(entry.LevelUuid))
+                        RetainAssembled(entry, events, truncatedEvents, replayDoc);
                     return false;
                 }
             }
@@ -326,9 +364,10 @@ public sealed partial class Plugin
             // an empty list, so Chunk() naturally yields zero chunks and eventChunks: 0).
             var chunks = EventChunker.Chunk(events!);
 
-            // Pass the capture-time boss config id so the assembler doesn't re-resolve from
-            // wiped entity caches (ResetEntities fires before archive on scene change).
-            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, _bossMonsterInfo?.Id ?? 0, chunks.Count, InstallKeyInstance);
+            // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
+            // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
+            // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
+            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, chunks.Count, InstallKeyInstance);
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
@@ -463,11 +502,40 @@ public sealed partial class Plugin
     {
         try
         {
-            if (entry.LevelUuid == 0) { _logBuffer.Clear(); return; }   // field fight: nothing addressable to retain
+            if (!ShouldRetainUnsentArchive(entry.LevelUuid)) { _logBuffer.Clear(); return; }   // field fight: nothing addressable to retain
             var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
             var events = _logBuffer.Flush();
+            RetainAssembled(entry, events, truncated, replayDoc);
+        }
+        catch (Exception ex)
+        {
+            _logBuffer.Clear();
+            _services.Log.Warning($"[CombatMeter.SP1] retain-without-upload failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Custody rule (fix 2026-08-14): a banked archive whose auto path fires NO summary upload
+    /// (zero events flushed, unknown region, policy/tier refusal) must STILL write its retained
+    /// .replaydoc container whenever the run is addressable — the container is the only durable custody
+    /// of the prepared replay doc; without it the one-shot positions POST is the sole owner and a failed
+    /// POST is permanent loss. A field fight (levelUuid 0) has nothing addressable to retain (the
+    /// container is keyed by LevelUuid — same rule <see cref="RetainWithoutUpload"/> always had). Pure
+    /// so it pins headless (<c>RetainUnsentArchiveTests</c>).</summary>
+    internal static bool ShouldRetainUnsentArchive(long levelUuid) => levelUuid != 0;
+
+    /// <summary>Shared retention core (fix 2026-08-14, extracted from <see cref="RetainWithoutUpload"/>):
+    /// assembles the summary exactly as an upload would and persists the .replaydoc container
+    /// (summary + chunk envelopes + positions). Also called directly by the zero-events early return in
+    /// <see cref="AssembleAndUpload"/>, whose events are already flushed (and empty — zero chunks).
+    /// Never throws: a retention fault must not surface as <c>UploadPhase.Failed</c> on the entry
+    /// (AssembleAndUpload's outer catch does exactly that) — it only warns, like the persist path.</summary>
+    private void RetainAssembled(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent> events,
+                                 bool truncated, PositionUploadDoc? replayDoc)
+    {
+        try
+        {
             var chunks = EventChunker.Chunk(events);
-            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, _bossMonsterInfo?.Id ?? 0, chunks.Count, InstallKeyInstance);
+            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, chunks.Count, InstallKeyInstance);
             PersistReUpload(entry, log, chunks, replayDoc);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
@@ -475,7 +543,6 @@ public sealed partial class Plugin
         }
         catch (Exception ex)
         {
-            _logBuffer.Clear();
             _services.Log.Warning($"[CombatMeter.SP1] retain-without-upload failed: {ex.Message}");
         }
     }

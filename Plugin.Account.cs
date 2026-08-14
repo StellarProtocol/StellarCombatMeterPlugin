@@ -18,14 +18,19 @@ public sealed partial class Plugin
 {
     private static readonly HttpClient AccountHttp = new() { Timeout = TimeSpan.FromSeconds(15) };
 
-    // The claim endpoint base. Defaults to prod (LogUploader.ApiBase); overridable via the
+    // The claim endpoint base. Defaults to prod (LogUploader.DefaultApiBase); overridable via the
     // "stellarlogs.claimApiBase" config key so the owner can point the claim flow at STAGING for
     // in-game verification before the account backend ships to prod. Contained to the claim path —
     // the protected upload base (LogUploader/ChunkUploader/PositionUploader) is unchanged.
+    //
+    // DELIBERATELY pinned to DefaultApiBase, not the effective LogUploader.ApiBase: the claim base is a
+    // SEPARATE knob with its own key. A staging-pointed UPLOAD build must not silently drag the account
+    // claim flow (which mints real, account-linking credentials) onto staging as a side effect — point
+    // it there explicitly via claimApiBase or not at all.
     private string ClaimApiBase()
     {
         var v = _prefs.Get("stellarlogs.claimApiBase", "");
-        return string.IsNullOrWhiteSpace(v) ? LogUploader.ApiBase : v!.TrimEnd('/');
+        return string.IsNullOrWhiteSpace(v) ? LogUploader.DefaultApiBase : v!.TrimEnd('/');
     }
 
     private IWindowControl _accountWindow = null!;

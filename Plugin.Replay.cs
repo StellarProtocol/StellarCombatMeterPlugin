@@ -226,11 +226,11 @@ public sealed partial class Plugin
         foreach (var m in _services.PartyRoster.Members) _replay.NoteEntity(m.EntityId);
     }
 
-    // Called from OnCombatEvent BEFORE the player-only early-out so boss/add targets enter the set.
-    // Gated on IsInstancedRun(): replay only ever records inside dungeon/raid runs (TickReplayCapture
-    // line ~102 sets Active from the same predicate), but this method used to allocate a ~72 KB
-    // PositionTrack per distinct mob id in the OPEN WORLD too — where no reset path (scene change /
-    // archive) ever fires during long farming sessions. That was the primary GC-pressure FPS leak.
+    // Called from ObserveAlwaysOnCapture (always-on capture half: runs through pause, 2026-08-14)
+    // BEFORE the player-only early-out so boss/add targets enter the set. Gated on IsInstancedRun():
+    // replay only records inside dungeon/raid runs (TickReplayCapture sets Active from the same
+    // predicate), but this method used to allocate a ~72 KB PositionTrack per distinct mob id in the
+    // OPEN WORLD too — no reset path (scene change / archive) fires there: the GC-pressure FPS leak.
     private void NoteReplayEntity(EntityId src, EntityId tgt)
     {
         if (_replay is null || !IsInstancedRun()) return;
@@ -277,6 +277,17 @@ public sealed partial class Plugin
     /// <summary>
     /// Registers the boss (lazily, once identified) and every player track with the
     /// HP sampler, then advances it. All timelines share the 500 ms cadence.
+    ///
+    /// Multi-boss (2026-08-12 review, Task 3 of the multi-boss plan): the block below ALSO
+    /// Tracks/MarkDeads every member of <see cref="_stageBosses"/> — not just the single
+    /// highest-MaxHp entity <see cref="ResolveBossEntity"/> lazily resolves. The scalar
+    /// <see cref="_bossEntityId"/>/<see cref="_bossMonsterInfo"/> path is left running
+    /// unchanged on purpose: <c>ResolveWindowBossFields</c>/<c>WindowMetaIds</c>/
+    /// <c>ResolveBossUploadFields</c> (Plugin.ReplayWindow.cs / this file) and the DPS-log
+    /// <c>_bossMonsterInfo?.Id</c> read (Plugin.LogUpload.cs) still consume it — Task 4/6 of the
+    /// multi-boss plan rewire those to the set and retire the scalar. Until then both mechanisms
+    /// coexist; <c>Track</c> is idempotent so re-tracking the same entity from both blocks is a
+    /// harmless no-op.
     /// </summary>
     private void TickHpTimelines(int nowMs, float dtMs)
     {
@@ -317,6 +328,17 @@ public sealed partial class Plugin
                 _bossDeathMarked = true;
             }
         }
+
+        // Multi-boss (Task 3): every boss the stage set knows gets its OWN HP track. MarkDead is driven
+        // by the set's STICKY `killed` flag (amendment 3), never a raw Hp<=0 read here: a scripted-killed
+        // raid co-boss never reads 0, it just vanishes, so gating on Hp<=0 would leave that boss's HP
+        // line never terminating (the boss-hp-never-reaches-zero class; 0%-on-death precedent d1c8fbb).
+        // Important 2 fix (final review): extracted to Plugin.BossDetection.cs's TickStageBossHpTracks,
+        // which falls back to the sticky latch once the live set has drained same-tick-as-death — this
+        // loop used to read ONLY the live set, so the last member's death (which drains the set in the
+        // SAME BossStatus call) never got its terminal MarkDead stamp.
+        TickStageBossHpTracks(_hpSampler, _replay.CombatStartMs, nowMs);
+        TickEliteHpTracks(_hpSampler, _replay.CombatStartMs, nowMs);   // ELITE CAPTURE channel — CAPTURE ONLY, see Plugin.EliteDetection.cs
 
         _hpSampler.Tick(dtMs);
     }
@@ -402,6 +424,9 @@ public sealed partial class Plugin
             var msOffset = _replay.CombatStartMs - (int)encounter.StartMs;
 
             var boss = ResolveWindowBossFields(windowTracks, upperMs, msOffset);
+            // Multi-boss (Task 4): every stage-set boss, windowed — feeds Bosses[] + the meta-id union.
+            var windowBosses = BuildWindowBossMembers(windowTracks, upperMs, msOffset);
+            var windowElites = BuildWindowEliteMembers(windowTracks, upperMs, msOffset);   // ELITE CAPTURE channel — feeds Elites[] only, see PositionUploadDoc.Elites' doc
 
             var doc = PositionTrackAssembler.Assemble(
                 samplesByEntity: windowTracks,
@@ -410,7 +435,8 @@ public sealed partial class Plugin
                 origin: (0f, 0f),
                 scale:  0.1f,
                 msOffset: msOffset,
-                meta:   BuildReplayMeta(WindowMetaIds(windowTracks, boss.inWindow), boss.idStr, boss.info));
+                meta:   BuildReplayMeta(
+                    WindowMetaIds(windowTracks, boss.id, boss.inWindow, windowBosses), boss.idStr, boss.info));
 
             doc = doc with
             {
@@ -423,6 +449,8 @@ public sealed partial class Plugin
                 BossEntityId = boss.idStr,
                 BossHp       = boss.hp,
                 PlayerHp     = RebasePlayerHpTracks(SlicePlayerHpWindow(upperMs), msOffset),
+                Bosses       = ToBossTrackDtos(windowBosses),
+                Elites       = ToBossTrackDtos(windowElites),
             };
             return doc with { Sig = SignReplay(doc) };
         }
@@ -473,7 +501,9 @@ public sealed partial class Plugin
     /// Uses <see cref="_bossMonsterInfo"/> (snapshotted in <see cref="ResolveBossEntity"/>
     /// while caches were live) — <b>not</b> a fresh <c>GetMonsterByEntity</c> call, because
     /// <c>ResetEntities()</c> wipes the attr/vitals caches before archive fires.
-    /// Returns (empty, null) when no boss was identified during capture.
+    /// Returns (empty, null) when no boss was identified during capture. Multi-boss (Task 4): now the
+    /// LEGACY fallback only — <c>ResolveBossRepresentative</c> (Plugin.ReplayWindow.cs) calls this when
+    /// <see cref="_stageBosses"/> is empty; a non-empty set resolves its representative from itself.
     /// </summary>
     private (string bossEntityIdStr, MonsterInfo? info) ResolveBossUploadFields()
     {
@@ -483,16 +513,40 @@ public sealed partial class Plugin
         return (bossIdStr, _bossMonsterInfo);
     }
 
-    private HpTrack? BuildBossHpTrack()
-        => _bossEntityId.Value != 0 ? _hpSampler?.GetTrack(_bossEntityId.Value) : null;
+    /// <summary>
+    /// Per-member HP-track builder (multi-boss plan Task 3): every current stage-set boss's id,
+    /// monster config id, and sampled HP track (null if the sampler has no samples for it yet).
+    /// Consumed by <c>BuildWindowBossMembers</c> (Task 4, Plugin.ReplayWindow.cs), which slices+rebases
+    /// each member's track to the upload window and feeds both the additive
+    /// <see cref="Replay.PositionUploadDoc.Bosses"/> array and the meta-id union. Critical 1 fix (final
+    /// review): reads <c>ResolveCurrentStageBosses()</c> (Plugin.BossDetection.cs) — the live set, or the
+    /// sticky latch when the live set already drained/reset before this ran — instead of the live set
+    /// directly, so a window built after the boss died/the run boundary fired still carries it. This
+    /// allocates a list of size Count either way, which is fine here (archive/window-assembly time,
+    /// never per-tick).
+    /// </summary>
+    private IReadOnlyList<(EntityId id, int configId, HpTrack? track)> BuildBossHpTracks()
+    {
+        var members = ResolveCurrentStageBosses();
+        var list = new List<(EntityId, int, HpTrack?)>(members.Count);
+        for (var i = 0; i < members.Count; i++)
+        {
+            var (id, configId, _) = members[i];
+            list.Add((id, configId, _hpSampler?.GetTrack(id.Value)));
+        }
+        return list;
+    }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
-    // Meta covers the entities PRESENT IN THIS WINDOW (ids = the windowed track keys), per the
-    // delta-window design — a boss present across windows is described in each; the site's
-    // first-write-wins name capture + per-segment bossId mapping already handle the repetition.
+    // Meta covers the entities PRESENT IN THIS WINDOW (ids = the windowed track keys, plus any boss
+    // carried via WindowMetaIds's HP-only union — Task 4 extends that union to every stage boss, not
+    // just the representative), per the delta-window design — a boss present across windows is
+    // described in each; the site's first-write-wins name capture + per-segment bossId mapping already
+    // handle the repetition. A non-representative boss's MonsterInfo still resolves correctly below via
+    // the plain _replayMonsterInfo branch (kind reads "add" for it — Bosses[] is the multi-boss carrier).
     private Dictionary<EntityId, PositionMetaDto> BuildReplayMeta(
         ICollection<EntityId> ids, string bossEntityIdStr, MonsterInfo? bossMonsterInfo)
     {
