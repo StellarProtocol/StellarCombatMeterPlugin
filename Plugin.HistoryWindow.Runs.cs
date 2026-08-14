@@ -61,9 +61,16 @@ public sealed partial class Plugin
 
     /// <summary>Groups history into runs, newest run first, each run's segments oldest first.
     ///
-    /// <para>Key is <c>LevelUuid</c> — the runId every archive of a run shares. A FIELD fight carries
-    /// <c>LevelUuid == 0</c> and is deliberately ungroupable: those get a unique negative key so each stays
-    /// its own row rather than all collapsing into one bogus "run 0".</para></summary>
+    /// <para>Key is <c>(LevelUuid, DungeonStartMs/1000)</c> — the SERVER's canonical run key
+    /// (<c>levelUuid-dungeonStartMs/1000</c>). <c>LevelUuid</c> ALONE is <b>not</b> run-unique: the game
+    /// reuses the level-instance id when the same party re-enters the same dungeon (CLAUDE.md hard
+    /// requirement), so two separate runs can share a <c>LevelUuid</c> (prod sea/XCNEJMFvLt +
+    /// sea/rw3OyTj58G, Tina's Mindrealm master, 42 min apart). The per-run start
+    /// (<c>DungeonStartMs</c>, latched per run since 2.1.1) is what separates them, so each local row maps
+    /// 1:1 to a server session / short id instead of collapsing two runs (two boss kills) into one row.
+    /// The <c>/1000</c> matches the server's SECOND granularity, tolerating sub-second start jitter within
+    /// one run. A FIELD fight carries <c>LevelUuid == 0</c> and is deliberately ungroupable: those get a
+    /// unique negative key so each stays its own row rather than all collapsing into one bogus "run 0".</para></summary>
     private List<RunGroup> GroupHistoryByRun() => GroupByRun(_history);
 
     /// <inheritdoc cref="GroupHistoryByRun"/>
@@ -71,12 +78,14 @@ public sealed partial class Plugin
     /// instance overload above only binds _history, so tests exercise the SAME code the window runs.</remarks>
     internal static List<RunGroup> GroupByRun(IReadOnlyList<EncounterHistoryEntry> history)
     {
-        var order = new List<long>();
-        var groups = new Dictionary<long, List<int>>();
+        var order = new List<(long uuid, long startS)>();
+        var groups = new Dictionary<(long uuid, long startS), List<int>>();
         for (var i = history.Count - 1; i >= 0; i--)      // newest first, so runs come out newest first
         {
             var uuid = history[i].LevelUuid;
-            var key = uuid != 0 ? uuid : -(i + 1);         // field fight: unique key => never grouped
+            // (levelUuid, dungeonStartMs/1000) — the server's run identity; a reused levelUuid stays split
+            // by its per-run start. Field fight (uuid==0): unique negative key => never grouped.
+            var key = uuid != 0 ? (uuid, history[i].DungeonStartMs / 1000) : (-(long)(i + 1), 0L);
             if (!groups.TryGetValue(key, out var list)) { list = new List<int>(); groups[key] = list; order.Add(key); }
             list.Add(i);
         }
