@@ -17,7 +17,7 @@ public sealed partial class Plugin
     internal event Action<EntityId, EncounterHistoryEntry>? OnSkillBreakdownRequested;
     internal event Action<EntityId, EncounterHistoryEntry>? OnInspectRequested;
 
-    private const int MaxSessionSlots = HistoryCapacity;   // session list bound
+    private const int MaxSessionSlots = MaxRetention;   // slot pool sized to the max retention (setting can change at runtime)
     private const int MaxSourceSlots  = 24;                 // detail rows bound
     private const float HistListHeight   = 300f;
     private const float HistDetailHeight = 260f;
@@ -96,14 +96,14 @@ public sealed partial class Plugin
         {
             new ConditionalElement(() => _history.Count == 0,
                 new TextElement(() => "No archived encounters yet.", MutedCol)),
+            BuildHistorySearchRow(),
             new ConditionalElement(() => _history.Count > 0,
                 new ScrollElement(new ListElement(() => _historyView.Count, slots), HistListHeight)),
             BuildClearAllRow(),
         }, Gap: 4f);
     }
 
-    // Footer of the session pane: the 2-click "Clear all" confirm. Hidden when there's nothing to clear. The
-    // armed label warns explicitly so a second click is a deliberate confirmation, not a repeat misclick.
+    // Footer: the 2-click "Clear all" confirm (hidden when empty); the armed label warns before the 2nd click.
     private HudElement BuildClearAllRow() => new ConditionalElement(() => _history.Count > 0,
         new RowElement(new HudElement[]
         {

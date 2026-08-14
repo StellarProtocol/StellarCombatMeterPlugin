@@ -494,7 +494,7 @@ public sealed class HistoryStoreTests
         for (var i = 0; i < 60; i++)
             history.Add(new Plugin.EncounterHistoryEntry { MemberCount = i });   // i = age marker (0 = oldest)
 
-        var evicted = Plugin.TrimToCapacity(history);
+        var evicted = Plugin.TrimToCapacity(history, 50);
 
         Assert.Equal(50, history.Count);
         // Oldest (0..9) evicted from the front; newest (10..59) retained in order.
@@ -511,7 +511,7 @@ public sealed class HistoryStoreTests
     {
         var history = new List<Plugin.EncounterHistoryEntry>();
         for (var i = 0; i < 5; i++) history.Add(new Plugin.EncounterHistoryEntry());
-        var evicted = Plugin.TrimToCapacity(history);
+        var evicted = Plugin.TrimToCapacity(history, 50);
         Assert.Equal(5, history.Count);
         Assert.Empty(evicted);   // nothing evicted under the cap
     }
