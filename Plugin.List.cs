@@ -122,7 +122,7 @@ public sealed partial class Plugin
             Name             = label,
             ClassName        = vis.ClassName ? GetClassLine(id) : "",
             Spec             = vis.Spec ? SpecLine(id) : "",
-            AbilityScore     = FormatAbilityScore(_services.CombatLookup.GetFightPoint(id), SeasonStrengthOf(id), vis.AbilityScore, vis.IllusionBreak),
+            AbilityScore     = FormatAbilityScore(_services.CombatLookup.GetFightPoint(id), _services.EntityDetail.GetAttribute(id, AttrSeasonStrengthId), vis.AbilityScore, vis.IllusionBreak),
             RoleColor        = toggles.MainBarIsHp ? hpColor   : roleColor,
             HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? roleColor : hpColor,
             NameColor        = ReadyVoteColor(id),
@@ -160,6 +160,11 @@ public sealed partial class Plugin
             Imagine1         = imagine1,
         };
     }
+
+    // Illusion-Breaking Strength = attr 11440 (AttrSeasonStrength). Read per row via the framework's cheap
+    // single-attr getter IEntityDetail.GetAttribute (the GetFightPoint-equivalent) — on demand, any entity,
+    // out of combat, no dict copy, no cache (owner: use the same reliable path as Ability Score).
+    private const int AttrSeasonStrengthId = 11440;
 
     /// <summary>The row's Ability Score / Illusion-Breaking Strength cell text. Ability Score is the game
     /// FightPoint; <paramref name="seasonStrength"/> is attr 11440 (AttrSeasonStrength). Owner format
