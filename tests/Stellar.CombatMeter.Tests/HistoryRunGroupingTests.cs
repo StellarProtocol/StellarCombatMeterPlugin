@@ -22,6 +22,69 @@ public class HistoryRunGroupingTests
     private static Plugin.EncounterHistoryEntry Entry(long levelUuid, long durMs, long archivedAt) =>
         new() { LevelUuid = levelUuid, CombatDurationMs = durMs, ArchivedAtMs = archivedAt, EnteredAtMs = archivedAt - durMs };
 
+    // Same, plus the per-run start (dungeonStartMs, ms) — the run-start dimension the grouping key must
+    // include so a REUSED levelUuid does not merge two runs.
+    private static Plugin.EncounterHistoryEntry EntryS(long levelUuid, long dungeonStartMs, long durMs, long archivedAt) =>
+        new() { LevelUuid = levelUuid, DungeonStartMs = dungeonStartMs, CombatDurationMs = durMs, ArchivedAtMs = archivedAt, EnteredAtMs = archivedAt - durMs };
+
+    // REGRESSION (prod sea/XCNEJMFvLt + sea/rw3OyTj58G, 2026-08-14): the same 5-player party re-entered
+    // Tina's Mindrealm master 42 min apart and the GAME REUSED the level-instance id (levelUuid is NOT
+    // run-unique — CLAUDE.md hard requirement). The server keys run identity on levelUuid + dungeonStartMs/1000
+    // and split them into TWO sessions / short ids; the local list grouped on levelUuid ALONE and collapsed
+    // both runs into ONE row showing two boss kills. The key must include the run-start so the local rows
+    // match the server's sessions 1:1.
+    [Fact]
+    public void Two_reentries_of_a_reused_levelUuid_are_two_rows_not_one_merged_run()
+    {
+        const long reusedUuid = 31250736096477184L;
+        var history = new List<Plugin.EncounterHistoryEntry>
+        {
+            EntryS(reusedUuid, 1786724439000L, 4000, 1_000),   // run 1 (fight)         index 0
+            EntryS(reusedUuid, 1786724439000L, 0,    6_000),   // run 1 tail            index 1
+            EntryS(reusedUuid, 1786726952000L, 5000, 60_000),  // run 2 (fight, +42min) index 2
+            EntryS(reusedUuid, 1786726952000L, 0,    66_000),  // run 2 tail            index 3
+        };
+        var runs = Plugin.GroupByRun(history);
+
+        Assert.Equal(2, runs.Count);                    // TWO runs, not one merged row with two boss kills
+        Assert.Equal(new[] { 2, 3 }, runs[0].Segments); // newest run (run 2) first
+        Assert.Equal(new[] { 0, 1 }, runs[1].Segments); // older run, chronological within
+    }
+
+    // The complement — a REAL single run must still be ONE row. Every archive of one run shares the SAME
+    // latched dungeonStartMs (2.1.1 "latch DungeonStartMs per run"), so adding the start dimension must not
+    // over-split a genuine run into per-archive rows.
+    [Fact]
+    public void One_run_with_a_stable_dungeon_start_stays_a_single_row()
+    {
+        const long uuid = 646464646464L, start = 1786700000000L;
+        var history = new List<Plugin.EncounterHistoryEntry>
+        {
+            EntryS(uuid, start, 4438, 1_000), EntryS(uuid, start, 0, 6_000), EntryS(uuid, start, 0, 25_000),
+        };
+        var runs = Plugin.GroupByRun(history);
+
+        Assert.Single(runs);
+        Assert.Equal(3, runs[0].Segments.Length);
+    }
+
+    // Sub-second jitter within one run must not split it: the key uses dungeonStartMs/1000 (SECONDS), the
+    // exact granularity the server's canonicalRunKey (levelUuid-dungeonStartMs/1000) uses, so a row maps
+    // 1:1 to a server session.
+    [Fact]
+    public void Sub_second_start_jitter_within_a_run_does_not_split_it()
+    {
+        const long uuid = 55L;
+        var history = new List<Plugin.EncounterHistoryEntry>
+        {
+            EntryS(uuid, 1786700000123L, 4000, 1_000), EntryS(uuid, 1786700000876L, 0, 6_000),  // same SECOND
+        };
+        var runs = Plugin.GroupByRun(history);
+
+        Assert.Single(runs);
+        Assert.Equal(2, runs[0].Segments.Length);
+    }
+
     [Fact]
     public void The_owners_six_archives_collapse_to_two_rows()
     {

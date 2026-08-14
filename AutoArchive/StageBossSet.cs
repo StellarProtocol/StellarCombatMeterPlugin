@@ -129,6 +129,22 @@ internal sealed class StageBossSet
         }
     }
 
+    /// <summary>Sticky-mark a member Killed WITHOUT touching its <c>Present</c> flag — the
+    /// observation-pass counterpart to <see cref="SetLiveness"/> (which owns <c>Present</c>, the engine's
+    /// aggregate input). Plugin.ObserveBossKillState calls this on a REAL <c>Hp&lt;=0</c> read seen through
+    /// a settle window / pause, where the engine-facing <see cref="SetLiveness"/> path is suppressed: the
+    /// kill fact must be captured the instant it is observed, but <c>Present</c> stays the engine's to set
+    /// on the resume tick. No-op for an unknown id. Idempotent — <c>Killed</c> is sticky.</summary>
+    internal void MarkKilled(EntityId id)
+    {
+        for (var i = 0; i < _members.Count; i++)
+        {
+            if (_members[i].Id != id) continue;
+            _members[i].Killed = true;
+            return;
+        }
+    }
+
     /// <summary>present = ANY member present; gone = set non-empty AND NO member present; dead = set
     /// non-empty AND ALL members killed.</summary>
     internal (bool present, bool gone, bool dead) Aggregate()

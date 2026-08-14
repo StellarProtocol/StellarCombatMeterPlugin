@@ -103,7 +103,56 @@ public sealed partial class Plugin
     /// The call-order guarantee itself is headless-untestable; this comment IS the guard.</summary>
     private void TickBossStatus()
     {
+        ObserveBossKillState();
         if (!ShouldPollBossStatus(_pendingArchiveReason is not null)) return;
         _bossStatus = BossStatus();
+    }
+
+    /// <summary>The read-only boss-kill OBSERVATION pass — runs EVERY tick, THROUGH settle windows and
+    /// pause, and is the split half of the raid kill-miss fix (2026-08-15, run sea/CvCyokazcx —
+    /// docs/recon/raid-clear-and-multiboss.md § "Raid kill-miss root cause").
+    /// <para><b>The bug it fixes.</b> <see cref="BossStatus"/> — which reads vitals, keeps
+    /// <c>_memberLastHpFrac</c> fresh, and marks kills — was reachable ONLY past
+    /// <see cref="ShouldPollBossStatus"/>, so while an archive was pending the WHOLE poll stopped. On the
+    /// first 2.1.1 raid a settle window stayed open through boss 102901's death: the plugin's own 2 Hz
+    /// replay HP sampler (Plugin.Replay.cs, ungated) banked <c>5,3,2,1,0</c>, but this poll never ran, so
+    /// <c>_memberLastHpFrac</c> froze ABOVE the 15% scripted floor and no <c>Hp&lt;=0</c> was ever read —
+    /// all three clients uploaded <c>killed=false</c> and the worker derived <c>partial</c>.</para>
+    /// <para><b>What this pass does — and only this.</b> For each stage member it keeps
+    /// <c>_memberLastHpFrac</c> FRESH (so the scripted-vanish rule in <see cref="BossStatus"/> sees the
+    /// real ~1% at eviction instead of a frozen pre-window value) and sticky-marks Killed on a REAL
+    /// <see cref="IsRealBossDeath"/> read — <b>NO low-HP inference</b> (owner: wipes happen at 0.01% with
+    /// the boss alive). It never touches <c>Present</c>, the drain, the one-tick BossDead pulse or the
+    /// cached <c>_bossStatus</c> <b>directly</b> — those are the engine-facing half, whose
+    /// <c>archivePending</c> / <c>paused</c> suppression is deliberately left UNTOUCHED (it protects the
+    /// pulse + cut model — PauseCaptureTests / protected archive-flow invariant 5). The sticky Killed it
+    /// sets IS what <c>StageBossSet.Aggregate().dead</c> reads on the next un-pending tick — that is
+    /// precisely the delivery mechanism, and it is safe because during a pending window the engine reads
+    /// only the frozen <c>_bossStatus</c>, never <c>Aggregate()</c> live. Marking via
+    /// <see cref="StageBossSet.MarkKilled"/> (Present untouched) rather than <c>SetLiveness</c> is what
+    /// keeps this pass from disturbing the <c>present</c>/<c>gone</c> the drain keys on: on the resume tick
+    /// <see cref="BossStatus"/> re-reads Present itself, aggregates, drains, and delivers the pulse.</para>
+    /// <para><b>Deliberately redundant with <see cref="BossStatus"/> on an un-pending tick</b> — both read
+    /// vitals and both write the SAME <c>_memberLastHpFrac</c> value / the SAME Killed mark
+    /// (<see cref="KilledBossTracker.MarkKilled"/> and <c>StageBossSet.Killed</c> are both idempotent and
+    /// <c>!IsKilled</c>-guarded, so no double log, no changed decision). Keeping <see cref="BossStatus"/>
+    /// byte-identical is the point: a poll over a handful of members at ~10 Hz costs nothing, and the
+    /// protected engine half stays exactly as its wedge tests pin it. Capture-side only — nothing here can
+    /// start an archive. The call-order guarantee (before the <see cref="ShouldPollBossStatus"/> gate) is
+    /// headless-untestable; this comment IS the guard. The split is pinned by RaidKillMissTests.</summary>
+    private void ObserveBossKillState()
+    {
+        for (var i = 0; i < _stageBosses.Count; i++)
+        {
+            var (id, _, _) = _stageBosses.MemberAt(i);
+            var v = _services.CombatLookup.GetVitals(id);
+            // Keep the scripted-vanish fraction FRESH through the settle window / pause.
+            if (v.HasHpObservation && v.MaxHp > 0) _memberLastHpFrac[id] = (float)v.Hp / v.MaxHp;
+            // Sticky-mark Killed on a REAL Hp<=0 read only — no low-HP inference.
+            if (!IsRealBossDeath(v)) continue;
+            if (!_killedBosses.IsKilled(id) && _killedBosses.MarkKilled(id) is { } evictedBossId)
+                LogKilledBossEviction(evictedBossId, id);
+            _stageBosses.MarkKilled(id);   // Present is the engine half's to set on the resume tick
+        }
     }
 }
