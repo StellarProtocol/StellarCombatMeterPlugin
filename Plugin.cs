@@ -107,6 +107,23 @@ public sealed partial class Plugin : IStellarPlugin
     private long _lastDamageMs;
     private long _lastRunId;   // THIS run's id, latched at combat start; the archive stamps it (LevelUuid). Reset ONLY at a confirmed run boundary (scene change / OnSceneChanged, or the RunBoundaryTracker poll's commit — Plugin.RunBoundary.cs) — NOT by Clear() — so mid-run archives keep the run's own id
     private long _lastTeamId;  // party id (GrpcTeam team_id) latched at combat start; 0 = solo/unformed
+    // Per-run dungeon-start timestamp, latched ONCE per run (sibling of _lastRunId; the archive stamps it
+    // as DungeonStartMs). Root cause (owner-verified on prod sea/YvLLO3YSc8 + sea/yVfTrPylk7, levelUuid
+    // 366250583092363264): the archive used to stamp DungeonStartMs from the LIVE _services.Dungeon.
+    // RunTimerStartMs per banked segment. At run end (Victory/settlement — the "~5s before jump" phase)
+    // the GAME re-stamps its run timer (measured 680000 → 802000), so a post-kill boundary/tail segment
+    // read a bogus "start"; the server keys run identity on <levelUuid>-<dungeonStartMs/1000>, so ONE run
+    // split into TWO pages (a ~15s all-zero kill phantom appeared on the boards). LevelUuid did NOT split
+    // because it uses the latched _lastRunId; DungeonStartMs was the last field still read live.
+    // Fix: latch like _lastRunId, with ONE critical difference — LATCH ONCE PER RUN, never re-latch per
+    // combat start. RunTimerStartMs is UNSTABLE (re-stamped at run end), so a post-kill tail's own combat
+    // start would otherwise read the reset value and re-split; the once-per-run latch (0-retry until
+    // nonzero, in EnsureCombatStarted) pins the run's original start. Reset to 0 ONLY at a confirmed run
+    // boundary (BankRunBoundary, beside _lastRunId = 0) — NEVER by Clear(). 0 = never latched (open-world
+    // has no dungeon timer) → the archive falls back to the live RunTimerStartMs. OUT OF SCOPE: the
+    // mid-dungeon-relaunch split (docs/recon/run-identity-relaunch-split.md) is a separate, unrelated
+    // runStartS-changes-on-relaunch issue this latch does not address.
+    private long _lastRunStartMs;
     private int  _difficultyAtCombatStart;  // Master N level latched at combat start — CurrentDifficulty resets to 0 on a
                                             // run-id change (e.g. a fail-out to a new scene) that can precede archive.
     private bool _combatActive;

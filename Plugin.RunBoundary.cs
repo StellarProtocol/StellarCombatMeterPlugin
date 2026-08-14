@@ -75,6 +75,12 @@ public sealed partial class Plugin
         // re-latches) can't reuse this run's id. The next run re-latches _lastRunId at its combat start
         // (Plugin.Capture.EnsureCombatStarted).
         _lastRunId = 0;
+        // Reset the once-per-run dungeon-start latch alongside _lastRunId, at the SAME confirmed run
+        // boundary and NOWHERE else (never in Clear()) — so the NEXT run re-latches its own start fresh at
+        // its first combat event and cannot inherit this run's start. Keeping it non-zero across the
+        // boundary would re-key the next run under this run's DungeonStartMs. See _lastRunStartMs's doc
+        // (Plugin.cs) + LatchRunStartMs (Plugin.History.cs).
+        _lastRunStartMs = 0;
         // New finding (re-review, 2026-08-13) — stage-boss latch staleness: _segmentStageBosses
         // (Plugin.BossDetection.cs) is otherwise only reset by Clear(), which ManualArchive's skip-empty
         // (Plugin.History.cs, `_stats.Count == 0` early return) and suppressed-junk (ShouldSuppressAutoArchive
