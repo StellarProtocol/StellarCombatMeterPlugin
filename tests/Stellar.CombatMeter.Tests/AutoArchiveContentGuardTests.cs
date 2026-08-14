@@ -104,21 +104,51 @@ public class AutoArchiveContentGuardTests
         Assert.False(Plugin.ShouldArchiveTrashForBoss(priorCombat: false));  // direct engage: no spurious archive
     }
 
-    // ── Inline boss cut is considered only when enabled, NO segment active, AND in an instanced run ──
-    // (recut-fix, 2026-07-21). Keying on segment-active (NOT "boss already known") is what makes a
+    // ── Inline boss cut is considered only when the MASTER Auto-archive toggle AND the "Boss phase" ──
+    // sub-toggle are on, NO segment active, AND we are in an instanced run (recut-fix, 2026-07-21;
+    // master term added 2026-08-14). Keying on segment-active (NOT "boss already known") is what makes a
     // re-detect cut again capped once UpdateLatches re-arms the latch. The inRun gate keeps the cut out
     // of the open world.
 
     [Fact]
-    public void ShouldConsiderInlineBossCut_requires_enabled_no_active_segment_and_in_run()
+    public void ShouldConsiderInlineBossCut_requires_master_and_boss_enabled_no_active_segment_and_in_run()
     {
-        Assert.True(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: true));   // fresh OR re-detect → cut (capped)
-        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: false, bossSegmentActive: false, inRun: true));  // boss auto-archive off
+        Assert.True(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true,  bossSegmentActive: false, inRun: true));   // fresh OR re-detect → cut (capped)
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: false, bossSegmentActive: false, inRun: true));  // boss auto-archive off
         // PINNED (Critical fix, 2026-08-12 review): the CUT stays gated on an active segment — this must
         // STILL be false after decoupling admission from the cut. Only ADMISSION (below) dropped the
         // bossSegmentActive term; the cut decision itself is untouched.
-        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: true,  inRun: true));  // segment running → fast-exit
-        Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true,  bossSegmentActive: true,  inRun: true));  // segment running → fast-exit
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
+    }
+
+    // ── FIX 1 (owner ruling 2026-08-14): a DECISION may not escape the master gate ────────────────────
+    //
+    // The inline boss cut is the ONE auto trigger that does not ride TickAutoArchiveTriggers — it fires
+    // inline off OnCombatEvent (MaybeCutForBossPhase), so it never passed that method's
+    // `if (!_autoArchive.Enabled) …` gate. The master term was lost when the cut moved inline
+    // (2026-07-21, Task 7), leaving a master-OFF install with "Boss phase" still on banking its pre-boss
+    // trash at the first boss hit — directly contradicting the archive-flow fact table
+    // (docs/recon/combatmeter-archive-flow.md: every auto trigger is "master ON + <sub-toggle>").
+    //
+    // The scenario this pins, in the owner's terms: master Auto-archive OFF, Boss phase ON, a trash→boss
+    // transition (priorCombat = true, no segment yet, in a dungeon) — the exact input tuple that used to
+    // cut — must now produce NO cut. ShouldArchiveTrashForBoss(priorCombat: true) is deliberately still
+    // true; it is unreachable because this guard returns false FIRST, which is where the fix belongs
+    // (the trash-bank decision itself is unchanged).
+    //
+    // The pre-emption branch (ShouldPreemptPendingForBoss) is unreachable with the master off for a
+    // SECOND, independent reason: a pending archive reason can only be armed by TickAutoArchiveTriggers,
+    // which nulls it the moment the master toggle goes off. This guard is the belt on that suspenders.
+    [Fact]
+    public void ShouldConsiderInlineBossCut_master_off_never_cuts_even_with_boss_phase_on()
+    {
+        // Master OFF + sub ON + trash→boss transition (no segment, in a run) → NO cut.
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: false, bossEnabled: true, bossSegmentActive: false, inRun: true));
+        // Differential: the SAME tuple with the master ON still cuts — master-ON behaviour is untouched.
+        Assert.True(Plugin.ShouldConsiderInlineBossCut(masterEnabled: true, bossEnabled: true, bossSegmentActive: false, inRun: true));
+        // Both off — no cut either (and no double-negative surprise).
+        Assert.False(Plugin.ShouldConsiderInlineBossCut(masterEnabled: false, bossEnabled: false, bossSegmentActive: false, inRun: true));
     }
 
     // ── Admission is a SEPARATE, less-strict gate than the cut ────────────────────────────────────────
@@ -172,21 +202,43 @@ public class AutoArchiveContentGuardTests
     // TrackClearLatch) and BuildAutoArchiveInputs now consumes the cached aggregate.
     //
     // The guard's PARAMETER LIST is the pin: there is no autoArchiveEnabled term, so re-gating the poll
-    // on the master toggle cannot compile at the call site. The two terms that remain are exactly the
-    // two skips the old engine-path call already had — see ShouldPollBossStatus' doc for why the
-    // archivePending one is load-bearing (BossStatus DRAINS the set on the all-gone tick while the
-    // engine consumes BossDead as a one-tick pulse and skips Evaluate entirely while a reason is
-    // pending: polling through a settle window would lose the BossKill for that fight).
+    // on the master toggle cannot compile at the call site. The one term that remains is exactly a skip
+    // the old engine-path call already had — see ShouldPollBossStatus' doc for why the archivePending one
+    // is load-bearing (BossStatus DRAINS the set on the all-gone tick while the engine consumes BossDead
+    // as a one-tick pulse and skips Evaluate entirely while a reason is pending: polling through a settle
+    // window would lose the BossKill for that fight).
+    //
+    // FIX 3 (owner ruling 2026-08-14, later the same day): the `paused` term is GONE too — its omission
+    // is the fix and its parameter is not there to re-add. The justification it used to carry ("nothing
+    // is being captured while paused, so there is no liveness to keep") stopped being true when fix 4
+    // made boss admission / elite candidates / replay entity noting run THROUGH pause; boss + elite HP
+    // tracks never had a pause gate at all (they ride the replay tick). Keeping it meant a boss KILLED
+    // while the meter was paused read killed:false forever, which on a raid loses the derived CLEAR
+    // verdict (it is computed from the killed SET — docs/recon/raid-clear-and-multiboss.md).
     [Fact]
-    public void ShouldPollBossStatus_is_not_gated_on_the_master_auto_archive_toggle()
+    public void ShouldPollBossStatus_is_not_gated_on_the_master_auto_archive_toggle_or_on_pause()
     {
         // The ordinary tick — polls regardless of ANY auto-archive toggle (no such parameter exists).
-        Assert.True(Plugin.ShouldPollBossStatus(paused: false, archivePending: false));
-        // Meter paused: OnCombatEvent early-returns on the same flag, so nothing is being captured.
-        Assert.False(Plugin.ShouldPollBossStatus(paused: true, archivePending: false));
+        Assert.True(Plugin.ShouldPollBossStatus(archivePending: false));
         // A deferred archive is waiting out its settle window — preserved from the pre-move call path.
-        Assert.False(Plugin.ShouldPollBossStatus(paused: false, archivePending: true));
-        Assert.False(Plugin.ShouldPollBossStatus(paused: true, archivePending: true));
+        Assert.False(Plugin.ShouldPollBossStatus(archivePending: true));
+    }
+
+    // FIX 3's owner-facing case, spelled out: a boss killed while the meter is PAUSED must still have its
+    // killed state recorded. There is no `paused` parameter to pass any more, so the poll a paused frame
+    // makes is bit-for-bit the poll an unpaused frame makes — that identity IS the pin. (The IL2CPP half
+    // — BossStatus's vitals read → StageBossSet.SetLiveness → sticky Killed → bosses[]/bossKilled — is
+    // the documented headless glue gap; its set-level rules are pinned by StageBossSetTests and its
+    // marking by KilledBossTrackerTests.)
+    [Fact]
+    public void A_boss_killed_while_paused_still_gets_polled()
+    {
+        // Paused or not, the same (and only) input decides — an unpaused tick and a paused tick agree.
+        Assert.True(Plugin.ShouldPollBossStatus(archivePending: false));
+        // And the pause ruling composes with the capture split: capture runs, accrual does not.
+        var (capture, accrue) = Plugin.ResolveCombatEventWork(paused: true);
+        Assert.True(capture);
+        Assert.False(accrue);
     }
 
     // ---- killed-boss marks (2026-07-26): the corpse-readoption loop that produced the sliver spam ----

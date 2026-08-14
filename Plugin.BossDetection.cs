@@ -134,11 +134,21 @@ public sealed partial class Plugin
     /// <c>MarkDead</c> stamp) was reachable ONLY from inside <c>TickAutoArchiveTriggers</c>, past its
     /// <c>!_autoArchive.Enabled</c> early return — so the set filled and never updated. That was the
     /// CAVEAT on protected archive-flow invariant 5; this removes it.</para>
-    /// <para>The two terms that DO remain are precisely the two skips the pre-existing engine path
-    /// already had, kept so a master-ON run's poll schedule stays identical tick for tick:
+    /// <para><b>PAUSE-PROOF (fix 3, same ruling, later the same day).</b> The <c>paused</c> term is
+    /// <b>GONE, not defaulted</b> — the omission IS the fix, and re-adding it would not compile at the
+    /// call site. It was justified by "<c>OnCombatEvent</c> early-returns on the same flag, so nothing is
+    /// being captured to keep liveness for", and fix 4 removed that premise: boss ADMISSION, elite
+    /// candidates and replay entity noting now run THROUGH pause (<c>ObserveAlwaysOnCapture</c>,
+    /// Plugin.CaptureAlwaysOn.cs), and boss/elite HP tracks always did (they ride the replay tick, which
+    /// has no pause gate). Keeping it meant a boss KILLED while the meter was paused stayed
+    /// <c>killed:false</c> forever — the residual the archive-flow doc recorded on invariant 5 — which on
+    /// a raid costs the derived CLEAR verdict, since that is computed from the killed SET
+    /// (docs/recon/raid-clear-and-multiboss.md). Polling while paused decides nothing: everything this
+    /// reaches is capture-side, and the engine itself cannot tick while paused
+    /// (<c>TickAutoArchiveTriggers</c> keeps its own <c>_paused</c> early return).</para>
+    /// <para>The ONE term that remains is a skip the pre-existing engine path already had, kept so a
+    /// master-ON run's poll schedule stays identical tick for tick:
     /// <list type="bullet">
-    /// <item><paramref name="paused"/> — the meter is paused. <c>OnCombatEvent</c> (Plugin.Capture.cs)
-    /// early-returns on the same flag, so nothing is being captured to keep liveness for.</item>
     /// <item><paramref name="archivePending"/> — a deferred archive is waiting out its settle window.
     /// <b>Load-bearing, not cosmetic.</b> <see cref="BossStatus"/> DRAINS <c>_stageBosses</c> on the tick
     /// its aggregate first reads all-gone, while the engine consumes <c>BossDead</c> as a ONE-TICK PULSE
@@ -153,7 +163,7 @@ public sealed partial class Plugin
     /// off), so this term costs the ruling nothing.</item>
     /// </list></para>
     /// Unit-tested headless (AutoArchiveContentGuardTests).</summary>
-    internal static bool ShouldPollBossStatus(bool paused, bool archivePending) => !paused && !archivePending;
+    internal static bool ShouldPollBossStatus(bool archivePending) => !archivePending;
 
     /// <summary>The single per-frame boss kill-state poll. Called UNCONDITIONALLY from
     /// <c>Plugin.OnUpdate</c>'s ~10 Hz throttled region — beside <c>TrackClearLatch</c> and immediately
@@ -169,7 +179,7 @@ public sealed partial class Plugin
     /// The call-order guarantee itself is headless-untestable; this comment IS the guard.</summary>
     private void TickBossStatus()
     {
-        if (!ShouldPollBossStatus(_paused, _pendingArchiveReason is not null)) return;
+        if (!ShouldPollBossStatus(_pendingArchiveReason is not null)) return;
         _bossStatus = BossStatus();
     }
 
@@ -291,8 +301,13 @@ public sealed partial class Plugin
     internal static bool ShouldClearTrackedBoss(bool confirmedDead, bool segmentActive)
         => confirmedDead || !segmentActive;
 
-    // Called from OnCombatEvent (Plugin.Capture.cs) BEFORE the player-only early-out, next to
-    // NoteReplayEntity — same "both sides of every event" coverage the boss-HP feature uses. NO
+    // Called from ObserveAlwaysOnCapture (Plugin.CaptureAlwaysOn.cs) — the always-on capture half of
+    // OnCombatEvent, BEFORE the player-only early-out, next to NoteReplayEntity/ObserveEliteCandidates
+    // — same "both sides of every event" coverage the boss-HP feature uses. Since 2026-08-14 (fix 4)
+    // this call site is PAUSE-INDEPENDENT as well as toggle-independent: it moved OUT of
+    // MaybeCutForBossPhase (Plugin.AutoArchive.cs) and above OnCombatEvent's pause gate, so a boss
+    // engaged while the meter is paused is still admitted, still fills bosses[]/buckets/HP tracks and
+    // still counts toward the derived raid clear. The CUT stayed behind (it is a decision). NO
     // "already tracked" early-out (multi-boss plan Task 2): the old single latch stopped checking once
     // one boss was adopted; the set must keep admitting so a co-boss engaged later in the same stage is
     // seen too. CheckBossCandidate / StageBossSet.Admit are the actual gates (already-tracked id,

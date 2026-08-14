@@ -226,11 +226,11 @@ public sealed partial class Plugin
         foreach (var m in _services.PartyRoster.Members) _replay.NoteEntity(m.EntityId);
     }
 
-    // Called from OnCombatEvent BEFORE the player-only early-out so boss/add targets enter the set.
-    // Gated on IsInstancedRun(): replay only ever records inside dungeon/raid runs (TickReplayCapture
-    // line ~102 sets Active from the same predicate), but this method used to allocate a ~72 KB
-    // PositionTrack per distinct mob id in the OPEN WORLD too — where no reset path (scene change /
-    // archive) ever fires during long farming sessions. That was the primary GC-pressure FPS leak.
+    // Called from ObserveAlwaysOnCapture (always-on capture half: runs through pause, 2026-08-14)
+    // BEFORE the player-only early-out so boss/add targets enter the set. Gated on IsInstancedRun():
+    // replay only records inside dungeon/raid runs (TickReplayCapture sets Active from the same
+    // predicate), but this method used to allocate a ~72 KB PositionTrack per distinct mob id in the
+    // OPEN WORLD too — no reset path (scene change / archive) fires there: the GC-pressure FPS leak.
     private void NoteReplayEntity(EntityId src, EntityId tgt)
     {
         if (_replay is null || !IsInstancedRun()) return;

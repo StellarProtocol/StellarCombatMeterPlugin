@@ -14,26 +14,41 @@ public sealed partial class Plugin
         // SP1: capture every event into the log buffer (runs even when the meter display is paused).
         MaybeCaptureForLog(evt);
 
-        if (_paused) return;
-        if (evt is CombatEvent.SkillUsed su) { LogSkillUsed(su); return; }
-        if (evt is CombatEvent.EntitySummonAppeared sa) { ObserveSummonAppeared(sa); return; }
+        // PAUSE = numbers stop, TRACKING CONTINUES (owner ruling 2026-08-14). The always-on capture
+        // channels live past the DamageDealt narrowing below, in ObserveAlwaysOnCapture
+        // (Plugin.CaptureAlwaysOn.cs — read its file header for the full split and its rationale).
+        // The two cast-log channels here are display/derived numbers, so they keep their pause gate.
+        var (capture, accrue) = ResolveCombatEventWork(_paused);
+        if (evt is CombatEvent.SkillUsed su) { if (accrue) LogSkillUsed(su); return; }
+        if (evt is CombatEvent.EntitySummonAppeared sa) { if (accrue) ObserveSummonAppeared(sa); return; }
         if (evt is not CombatEvent.DamageDealt d) return;
 
-        // Run-boundary combat-belt (Task 4, Plugin.RunBoundary.cs): MUST run before
-        // MaybeCutForBossPhase/EnsureCombatStarted below so a commit here resets the run-scoped
-        // trackers (stage bosses etc.) before this same event's boss-phase cut or combat-start latch
-        // could attribute it to the WRONG (stale) run. Hot path when not armed costs one field read.
+        // Run-boundary combat-belt (Task 4, Plugin.RunBoundary.cs): MUST run before ObserveAlwaysOnCapture
+        // and MaybeCutForBossPhase/EnsureCombatStarted below so a commit here resets the run-scoped
+        // trackers (stage bosses etc.) before this same event's ADMISSION, boss-phase cut or combat-start
+        // latch could attribute it to the WRONG (stale) run. Hot path when not armed costs one field read.
+        // Ungated by pause on purpose (fix 4, 2026-08-14): its sibling PollRunBoundary already resolves
+        // the very same boundary from OnUpdate with no pause gate at all (~10 Hz), so gating the belt
+        // would cost latency only — while exposing the admission below it to that stale-run latch.
         ResolveArmedBoundaryBelt();
+
+        // ALWAYS-ON CAPTURE (through pause): boss admission, elite candidates, replay entity noting.
+        // `capture` is unconditionally true — the branch is here so production really flows through the
+        // pinned seam (re-gating capture then turns the pin red instead of silently blinding tracking).
+        if (capture) ObserveAlwaysOnCapture(d);
+
+        // ---- Everything below is a DECISION or an ACCUMULATION: paused-gated (numbers stop here). ----
+        if (!accrue) return;
 
         // Inline boss-phase cut (Task 7, 2026-07-21). Capture whether combat was ALREADY running before
         // this event establishes it, then — on the FIRST combat event involving the boss — cut the
         // pre-boss trash into its own segment IMMEDIATELY (no settle defer) so this first boss hit lands
         // in the FRESH boss segment. MUST run BEFORE _agg/EnsureCombatStarted/CaptureTaken/Accumulate
-        // below, or the first hit leaks into the archived trash (the owner's chopped-fight bug). O(1) +
-        // alloc-free once warm: admission into the _stageBosses set short-circuits via the _bossCheck
-        // cache (Plugin.BossDetection.cs), and the CUT itself short-circuits via EventInvolvesAnyStageBoss
-        // once a segment is already active (multi-boss plan Task 2, 2026-08-12 — the set replaced the
-        // single _autoArchiveBossId latch this comment used to name).
+        // below, or the first hit leaks into the archived trash (the owner's chopped-fight bug). CUT ONLY
+        // since fix 4 (2026-08-14) — admission ran above, in ObserveAlwaysOnCapture. O(1) + alloc-free:
+        // the CUT short-circuits via EventInvolvesAnyStageBoss once a segment is already active
+        // (multi-boss plan Task 2, 2026-08-12 — the set replaced the single _autoArchiveBossId latch this
+        // comment used to name).
         bool priorCombat = _combatActive;
         MaybeCutForBossPhase(d.SourceId, d.TargetId, d.TimestampMs, priorCombat);
 
@@ -49,19 +64,8 @@ public sealed partial class Plugin
         // Damage taken: accrue onto the TARGET's stats (so Taken-mode can rank/aggregate victims).
         if (!d.IsHeal && d.TargetId.IsPlayer) CaptureTaken(d);
 
-        // Elite capture (ELITE CAPTURE channel, owner ruling 2026-08-13, Plugin.EliteDetection.cs):
-        // TOGGLE-INDEPENDENT — no _autoArchive.BossEnabled gate. As of the owner ruling 2026-08-14
-        // MaybeCutForBossPhase's boss ADMISSION above is toggle-independent too (only its CUT is still
-        // gated), so the two capture channels now share the same always-on-while-inRun shape. This one
-        // still feeds ONLY the capture-only _eliteSet — never AutoArchive/BossStatus/verdict/bossId
-        // paths — which remains the difference that matters.
-        ObserveEliteCandidates(d.SourceId, d.TargetId);
-
-        // Replay: note both source and target BEFORE the player-only early-out so boss/add target ids
-        // (e.g. a mob being hit by a player) also enter the entity set for position tracking.
-        // (Boss detection for the auto-archive trigger moved to MaybeCutForBossPhase above, which runs
-        // before accumulation — see the inline-cut comment at the top of OnCombatEvent.)
-        NoteReplayEntity(d.SourceId, d.TargetId);
+        // (Elite candidates + replay entity noting used to sit HERE. They are capture, not accrual, so
+        // fix 4 moved them up into ObserveAlwaysOnCapture — see Plugin.CaptureAlwaysOn.cs.)
 
         // Per-source stats/timeline: PLAYERS ONLY — mirror the _agg guard above. Mob sources are never
         // shown (live rows come from _agg, which discards non-players; History/SkillBreakdown are

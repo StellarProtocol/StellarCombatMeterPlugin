@@ -395,9 +395,9 @@ public sealed partial class Plugin
     internal static bool ShouldPreemptPendingForBoss(bool hasPending) => hasPending;
 
     /// <summary>Pure guard: should the inline boss CUT even consider this event (admission is now a
-    /// SEPARATE gate — see <see cref="ShouldConsiderBossAdmission"/>)? Only when boss auto-archive is
-    /// enabled, NO boss segment is currently active, AND we are in an instanced run. Keying on
-    /// <c>bossSegmentActive</c> (NOT "boss already known") is the recut-fix (2026-07-21, run
+    /// SEPARATE gate — see <see cref="ShouldConsiderBossAdmission"/>)? Only when the MASTER Auto-archive
+    /// toggle AND "Boss phase" are both on, NO boss segment is active, AND we are in an instanced run.
+    /// Keying on <c>bossSegmentActive</c> (NOT "boss already known") is the recut-fix (2026-07-21, run
     /// sea/U051Yv8lf2): once an archive closes the segment (<see cref="AutoArchiveEngine.OnArchived"/>,
     /// any reason except BossPhase) or a run/scene boundary clears it (<see
     /// cref="AutoArchiveEngine.UpdateLatches"/>), the inline cut must fire AGAIN — capped at firstHit −
@@ -406,25 +406,23 @@ public sealed partial class Plugin
     /// re-detect, and the engine's now-removed boss branch fired an UNCAPPED archive at the tick "now"
     /// instead (keep-before boundary at 0:55 vs 0:48). The <c>inRun</c> gate keeps <c>_autoArchiveBossId</c>
     /// + the cut out of the open world. When a segment IS active the fight is running and this fast-exits
-    /// (hot-path). Unit-tested headless.</summary>
-    internal static bool ShouldConsiderInlineBossCut(bool bossEnabled, bool bossSegmentActive, bool inRun)
-        => bossEnabled && !bossSegmentActive && inRun;
-
-    /// <summary>Pure guard: should this event be offered to <see cref="ObserveAutoArchiveBoss"/> for
-    /// ADMISSION into <c>_stageBosses</c>? <b>ONE term only — <paramref name="inRun"/>.</b>
-    /// <para><b>OWNER RULING 2026-08-14</b> ("boss tracking is supposed to be a default feature"):
-    /// admission is ALWAYS-ON during an instanced run, INDEPENDENT of the "Boss phase" sub-toggle —
-    /// like elite capture (Plugin.EliteDetection.cs, ruling 2026-08-13).
-    /// Extends protected invariant 5 ("detection is always-on; the toggle gates only per-boss CUTS")
-    /// from the retired single <c>bossId</c> latch to the multi-boss SET: with Boss phase OFF a fight
-    /// still admits members, fills <c>bosses[]</c>/buckets/HP tracks and records <c>bossId</c>.</para>
-    /// <para>Both dropped parameters are <b>GONE, not defaulted</b> — each omission IS its fix
-    /// (<c>bossSegmentActive</c>, 2026-08-12, the co-boss fix; <c>bossEnabled</c>, 2026-08-14, this
-    /// ruling). Compare <see cref="ShouldConsiderInlineBossCut"/>, which KEEPS both: the CUT is
-    /// deliberately untouched (invariant 8). <b>WHY UN-GATING IS SAFE with the toggle off is traced in
-    /// full on <c>ObserveAutoArchiveBoss</c> (Plugin.BossDetection.cs) — read it before re-gating.</b></para>
-    /// Unit-tested headless; set-level effect pinned by <c>StageBossSetTests</c>.</summary>
-    internal static bool ShouldConsiderBossAdmission(bool inRun) => inRun;
+    /// (hot-path).
+    /// <para><b>MASTER GATE (fix 1, owner ruling 2026-08-14 — capture is always-on, GATES DECIDE ONLY).</b>
+    /// <paramref name="masterEnabled"/> is the master "Auto-archive" toggle (<c>AutoArchiveEngine.Enabled</c>)
+    /// and it is REQUIRED here: this is the ONE auto cut that does NOT ride
+    /// <see cref="TickAutoArchiveTriggers"/> — it fires inline off <c>OnCombatEvent</c>, so it never passed
+    /// that method's <c>if (!_autoArchive.Enabled) …</c> gate. The term was lost when the boss cut moved
+    /// inline (2026-07-21, Task 7); until this fix a master-OFF install with "Boss phase" left on still
+    /// banked its trash at the first boss hit, contradicting the archive-flow fact table
+    /// (docs/recon/combatmeter-archive-flow.md: every auto trigger reads "master ON + …"). DECISION gate
+    /// only — admission, kill-state polling and HP/movement capture all stay always-on
+    /// (<see cref="ShouldConsiderBossAdmission"/>, <see cref="ShouldPollBossStatus"/>): a master-off run
+    /// still records its bosses, it just never CUTS for them. Invariants 1/4 untouched — the scene archive
+    /// is a separate always-firing path and the kill verdict rides the <c>_clearedThisRun</c> latch.</para>
+    /// Unit-tested headless.</summary>
+    internal static bool ShouldConsiderInlineBossCut(
+        bool masterEnabled, bool bossEnabled, bool bossSegmentActive, bool inRun)
+        => masterEnabled && bossEnabled && !bossSegmentActive && inRun;
 
     // NOTE (2026-08-12, multi-boss plan Task 2; narrowed 2026-08-14): ShouldConsiderInlineBossCut's doc
     // and MaybeCutForBossPhase's comments below still narrate the fix history via the retired single
@@ -433,9 +431,13 @@ public sealed partial class Plugin
     // unchanged and still load-bearing at the SET level, so that prose is left intact.
 
     // Inline boss-phase cut (2026-07-21). Called from OnCombatEvent (Plugin.Capture.cs) on every
-    // DamageDealt, BEFORE that event is accumulated — the SOLE boss-cut path. On the first boss combat
-    // event of a fresh (or re-armed) boss segment, when enabled and no segment is active, cuts
-    // IMMEDIATELY:
+    // DamageDealt, BEFORE that event is accumulated and only when the meter is NOT paused — the SOLE
+    // boss-cut path. CUT ONLY since 2026-08-14: boss ADMISSION moved OUT of this method to the
+    // always-on capture block (ObserveAlwaysOnCapture, Plugin.CaptureAlwaysOn.cs) so it keeps running
+    // through pause; this method is now purely a DECISION and is gated accordingly (master toggle +
+    // Boss phase + not paused). Admission still happens strictly BEFORE this call for the same event,
+    // so the first boss hit still opens its own segment. On the first boss combat event of a fresh (or
+    // re-armed) boss segment, when enabled and no segment is active, cuts IMMEDIATELY:
     //   • pre-emption (a deferred archive is still pending): open the NEW segment FIRST via
     //     TryBeginBossSegmentCutAcrossPreemption (finding 2, 2026-07-27), THEN commit the old pending —
     //     a one-shot engine guard stops that commit's OnArchived from closing the segment just opened.
@@ -449,16 +451,13 @@ public sealed partial class Plugin
     // is active (cut).
     private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
     {
-        bool inRun = IsInstancedRun();
-
-        // ADMISSION — ALWAYS-ON in an instanced run. Not gated on bossSegmentActive (Critical fix
-        // 2026-08-12: so a co-boss engaged mid-fight is still admitted) and not gated on the Boss-phase
-        // toggle (owner ruling 2026-08-14: turning it off must never blind boss tracking — it only stops
-        // the per-boss CUT below). See ShouldConsiderBossAdmission.
-        if (ShouldConsiderBossAdmission(inRun)) ObserveAutoArchiveBoss(src, tgt);
-
-        // Fast-exit for the CUT only — admission above already ran regardless of bossSegmentActive.
-        if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchive.BossSegmentActive, inRun)) return;
+        // Fast-exit for the CUT only — admission already ran (unconditionally, and even while paused)
+        // in ObserveAlwaysOnCapture before this call. _autoArchive.Enabled is the MASTER toggle: this
+        // inline path does not ride TickAutoArchiveTriggers, so the master gate has to be applied HERE
+        // (fix 1, owner ruling 2026-08-14 — see ShouldConsiderInlineBossCut's doc).
+        if (!ShouldConsiderInlineBossCut(
+                _autoArchive.Enabled, _autoArchive.BossEnabled, _autoArchive.BossSegmentActive,
+                IsInstancedRun())) return;
         // Critical A / Important B (review round 2026-07-27, second pass): an EXPLICIT "does this event
         // touch a tracked boss" test, not a bare "a boss is tracked at all" proxy. The proxy was only
         // valid the instant ObserveAutoArchiveBoss had just set the id from THIS event — once the id (or,

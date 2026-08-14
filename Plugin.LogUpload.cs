@@ -119,14 +119,14 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Feeds the raw event into the log buffer when upload is enabled.
-    /// Called on every combat event BEFORE the existing processing path; zero-allocation
-    /// when disabled (the buffer add is an O(1) list append).
+    /// Feeds the raw event into the log buffer — on every combat event, BEFORE the existing processing
+    /// path, while the meter is PAUSED, and whatever the upload policy says (owner ruling 2026-08-14:
+    /// capture is always-on; policy gates the SEND, at archive time). O(1) ring append, no allocation.
     /// </summary>
     internal void MaybeCaptureForLog(CombatEvent evt)
     {
-        // D3: only buffer raw events when the CURRENT content auto-uploads stats — today's semantics.
-        // Reads one cached bool (RecomputeUploadPolicyCache); never prefs, never a kind resolution.
+        // One cached bool (RecomputeUploadPolicyCache) — never prefs, never a kind resolution. TRUE
+        // unconditionally since the ruling; see Plugin.UploadPolicy.cs's EventCaptureEnabled for why.
         if (!_captureForLogEnabled) return;
         _logBuffer.Add(evt);
     }

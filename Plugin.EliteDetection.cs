@@ -50,7 +50,9 @@ public sealed partial class Plugin
     private IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> ResolveCurrentElites()
         => PreferLiveStageBosses(_eliteSet.MembersSnapshot(), _segmentElites);
 
-    // Called from OnCombatEvent (Plugin.Capture.cs), alongside NoteReplayEntity — TOGGLE-INDEPENDENT:
+    // Called from ObserveAlwaysOnCapture (Plugin.CaptureAlwaysOn.cs) alongside NoteReplayEntity — the
+    // always-on capture half of OnCombatEvent, so this is PAUSE-INDEPENDENT too since 2026-08-14 (it
+    // used to sit past OnCombatEvent's `if (_paused) return;`). TOGGLE-INDEPENDENT as well:
     // no _autoArchive.BossEnabled gate. Elite admission is deliberately wired from its OWN, always-
     // reached call site rather than piggy-backing on the boss path — turning Boss phase off must never
     // blind elite capture, and keeping the call sites separate is what guarantees that independently of
