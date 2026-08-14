@@ -10,7 +10,11 @@ namespace Stellar.CombatMeter.LogUpload;
 /// on the Unity main thread; onComplete fires on a thread-pool thread with (success, status, body).</summary>
 internal static class PortraitUploader
 {
-    private const string Url = "https://api.stellarresonance.app/char/portraits";
+    /// <summary>Builds the portrait-batch URL: <c>{apiBase}/char/portraits</c>. Built from
+    /// <see cref="LogUploader.ApiBase"/> (config-overridable via <c>uploadApiBase</c>) so a
+    /// staging-pointed build sends portraits to the same backend as its runs.</summary>
+    internal static string BuildUrl(string apiBase) => apiBase + "/char/portraits";
+
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
 
     internal static void UploadFireAndForget(string bodyJson, Action<bool, int, string?>? onComplete = null)
@@ -21,7 +25,7 @@ internal static class PortraitUploader
         try
         {
             using var content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
-            using var response = await HttpClient.PostAsync(Url, content, CancellationToken.None).ConfigureAwait(false);
+            using var response = await HttpClient.PostAsync(BuildUrl(LogUploader.ApiBase), content, CancellationToken.None).ConfigureAwait(false);
             string? respBody = null;
             try { respBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false); } catch { /* body optional */ }
             onComplete?.Invoke(response.IsSuccessStatusCode, (int)response.StatusCode, respBody);

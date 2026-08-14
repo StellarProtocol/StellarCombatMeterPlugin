@@ -19,8 +19,53 @@ internal static class LogUploader
 {
     // Ingestion worker base — shared with ChunkUploader (POST {ApiBase}/run/{region}/{levelUuid}/events
     // lives on the same worker as this /upload route).
-    internal const string ApiBase = "https://api.stellarresonance.app";
-    private const string UploadUrl = ApiBase + "/upload";
+
+    /// <summary>The compiled-in PRODUCTION ingestion base. Immutable; the fallback whenever no valid
+    /// override is configured. Also the base the SEPARATE claim flow defaults to (Plugin.Account) — the
+    /// claim endpoint has its own <c>stellarlogs.claimApiBase</c> key and must NOT follow the upload
+    /// override.</summary>
+    internal const string DefaultApiBase = "https://api.stellarresonance.app";
+
+    // Effective base, resolved ONCE at plugin construction from the "uploadApiBase" config key
+    // (see Plugin.UploadApiBase). Every upload artifact URL — summary, chunks, positions, supplement,
+    // portraits — is built from this ONE value so a staging-pointed test build can never split its
+    // uploads across two backends.
+    private static string _apiBase = DefaultApiBase;
+
+    /// <summary>The effective ingestion base every upload URL is built from. Equals
+    /// <see cref="DefaultApiBase"/> unless a valid <c>uploadApiBase</c> override was applied at boot.</summary>
+    internal static string ApiBase => _apiBase;
+
+    /// <summary>True when a config override moved uploads off <see cref="DefaultApiBase"/>.</summary>
+    internal static bool IsApiBaseOverridden => !string.Equals(_apiBase, DefaultApiBase, StringComparison.Ordinal);
+
+    /// <summary>Pure validator for a configured upload base. Returns the normalized value (trimmed, no
+    /// trailing slash) or <c>null</c> when the value must be IGNORED: empty/whitespace, not
+    /// <c>https://</c>-prefixed, or scheme-only with no host. Ignoring beats guessing — a malformed base
+    /// silently eating every upload is worse than falling back to production.</summary>
+    internal static string? NormalizeApiBase(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var v = raw!.Trim().TrimEnd('/');
+        const string scheme = "https://";
+        if (!v.StartsWith(scheme, StringComparison.OrdinalIgnoreCase)) return null;   // http:// / garbage → ignore
+        return v.Length > scheme.Length ? v : null;                                   // "https://" alone → ignore
+    }
+
+    /// <summary>Pure resolution: the normalized override, or <see cref="DefaultApiBase"/> when the
+    /// configured value is absent/malformed. Never throws, never returns null.</summary>
+    internal static string ResolveApiBase(string? raw) => NormalizeApiBase(raw) ?? DefaultApiBase;
+
+    /// <summary>Applies the configured upload base. Called ONCE from the plugin constructor before any
+    /// upload or content-kind fetch can run.</summary>
+    internal static void SetApiBase(string? raw) => _apiBase = ResolveApiBase(raw);
+
+    /// <summary>Builds the summary-upload URL: <c>{apiBase}/upload</c>.</summary>
+    internal static string BuildUploadUrl(string apiBase) => apiBase + "/upload";
+
+    /// <summary>Builds the supplement URL: <c>{apiBase}/run/{region}/{levelUuid}/supplement</c>.</summary>
+    internal static string BuildSupplementUrl(string apiBase, string region, long levelUuid)
+        => $"{apiBase}/run/{region}/{levelUuid.ToString(System.Globalization.CultureInfo.InvariantCulture)}/supplement";
 
     // Single shared client (avoids socket exhaustion on repeated uploads).
     private static readonly HttpClient HttpClient = new()
@@ -79,7 +124,7 @@ internal static class LogUploader
             using var content = new ByteArrayContent(gzipped);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
             content.Headers.ContentEncoding.Add("gzip");
-            using var req = new HttpRequestMessage(HttpMethod.Post, UploadUrl) { Content = content };
+            using var req = new HttpRequestMessage(HttpMethod.Post, BuildUploadUrl(ApiBase)) { Content = content };
             // The precheck lets the server 409-shortcut a redundant AUTO upload into a supplement
             // (bandwidth saver for a 20-player party archiving at once). A MANUAL re-upload is a
             // deliberate "re-send everything and take my data" — it MUST reach the full ingest path
@@ -147,7 +192,7 @@ internal static class LogUploader
     /// was ever received (genuine transport failure) — never as a mask over a real server status.</summary>
     private static async Task<int> PostSupplementAsync(CombatLog log)
     {
-        var url = $"{ApiBase}/run/{log.Header.Region}/{log.Header.Encounter.LevelUuid.ToString(System.Globalization.CultureInfo.InvariantCulture)}/supplement";
+        var url = BuildSupplementUrl(ApiBase, log.Header.Region, log.Header.Encounter.LevelUuid);
         var json = SupplementWriter.Write(log);
         var lastStatus = 0;
         for (var attempt = 0; ; attempt++)
@@ -179,7 +224,7 @@ internal static class LogUploader
     /// "Upload all" therefore DOWNGRADED the stored link to the numeric fallback. Same failure this file
     /// already fixed once for the 409 path (owner report 2026-07-20); this was the remaining hole.</para></summary>
     internal static void PostRawFireAndForget(string json, Action<bool, int, string?, UploadVerdict?> onComplete)
-        => _ = Task.Run(() => PostGzipJsonAsync(UploadUrl, json, onComplete));
+        => _ = Task.Run(() => PostGzipJsonAsync(BuildUploadUrl(ApiBase), json, onComplete));
 
     // Shared raw gzip+POST used by the verbatim-replay entry points.
     private static async Task PostGzipJsonAsync(string url, string json, Action<bool, int, string?, UploadVerdict?> onComplete)

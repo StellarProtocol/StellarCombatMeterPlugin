@@ -9,6 +9,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Stellar.CombatMeter.LogUpload;
+
 namespace Stellar.CombatMeter.Replay;
 
 /// <summary>
@@ -21,7 +23,12 @@ namespace Stellar.CombatMeter.Replay;
 /// </summary>
 internal static class PositionUploader
 {
-    private const string BaseUrl = "https://api.stellarresonance.app/run/";
+    /// <summary>Builds the positions URL: <c>{apiBase}/run/{region}/{levelUuid}/positions</c>. The base is
+    /// <see cref="LogUploader.ApiBase"/> — the ONE effective ingestion base (config-overridable via
+    /// <c>uploadApiBase</c>), never a second hardcoded host: a replay landing on a different backend than
+    /// its own summary is worse than either backend alone.</summary>
+    internal static string BuildUrl(string apiBase, string region, long levelUuid)
+        => string.Concat(apiBase, "/run/", region, "/", levelUuid.ToString(CultureInfo.InvariantCulture), "/positions");
 
     // Single shared client (avoids socket exhaustion on repeated uploads).
     private static readonly HttpClient HttpClient = new()
@@ -65,10 +72,7 @@ internal static class PositionUploader
             return;
         }
 
-        var url = string.Concat(
-            BaseUrl, region, "/",
-            doc.LevelUuid.ToString(CultureInfo.InvariantCulture),
-            "/positions");
+        var url = BuildUrl(LogUploader.ApiBase, region, doc.LevelUuid);
 
         // Fire off the actual HTTP on the thread-pool so the main thread is never blocked.
         _ = Task.Run(() => UploadAsync(json, url, onComplete));
@@ -77,7 +81,7 @@ internal static class PositionUploader
     /// <summary>Re-POST a pre-serialized positions body verbatim. Never throws.</summary>
     internal static void PostRawFireAndForget(string region, long levelUuid, string json, Action<bool, int, string?>? onComplete = null)
     {
-        var url = string.Concat(BaseUrl, region, "/", levelUuid.ToString(CultureInfo.InvariantCulture), "/positions");
+        var url = BuildUrl(LogUploader.ApiBase, region, levelUuid);
         _ = Task.Run(() => UploadAsync(json, url, onComplete));   // UploadAsync already gzips + POSTs
     }
 

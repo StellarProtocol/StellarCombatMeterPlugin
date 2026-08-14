@@ -150,6 +150,9 @@ public sealed partial class Plugin
 
     private void InitUploadPolicy()
     {
+        // FIRST — resolves the effective upload API base. Must precede MaybeRefreshContentKinds() below
+        // (which reads LogUploader.ApiBase) and any upload, so nothing can hit the wrong backend.
+        InitUploadApiBase();
         LoadOrMigrateUploadPolicy();
         NormalizeReplayManualToOff();
         _contentKinds = ContentKindMap.FromIds(
