@@ -104,6 +104,25 @@ public sealed partial class Plugin
     // boss the player merely walked away from at low HP is never counted (dungeons keep pure HP<=0).
     private const float BossScriptedKillHpFrac = 0.15f;
 
+    /// <summary>A REAL confirmed-death vitals reading: a current-HP observation has landed
+    /// (<c>HasHpObservation</c>, not a MaxHp-only "alive, HP unknown") with a valid max and
+    /// <c>Hp&lt;=0</c>. This is BOTH the observation pass's sticky-Killed gate
+    /// (<see cref="ObserveBossKillState"/>) and the engine half's <c>dead</c> term
+    /// (<see cref="BossStatus"/>) — extracted so the two agree by construction. <b>NO low-HP inference:</b>
+    /// the owner rejected "&lt;=2% = dead" because wipes happen at 0.01% with the boss still alive, so a
+    /// 0.01% reading returns false here. Pure/static — pinned by RaidKillMissTests.</summary>
+    internal static bool IsRealBossDeath(EntityVitals v) => v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
+
+    /// <summary>The scripted-vanish kill: an evicted RAID boss last seen at/under
+    /// <see cref="BossScriptedKillHpFrac"/> (scripted raid bosses reach ~1% then are killed by an event —
+    /// HP never reads 0, the entity just vanishes). RAID-GATED so a dungeon boss walked away from at low HP
+    /// is never counted (dungeons keep pure <see cref="IsRealBossDeath"/> semantics). <paramref name="lastFrac"/>
+    /// is <c>-1</c> when never recorded, so a stale/unset fraction above the floor is not a kill — the fix
+    /// keeps <c>_memberLastHpFrac</c> FRESH through the settle window (the observation pass) rather than
+    /// loosening this floor. Pure/static — pinned by RaidKillMissTests.</summary>
+    internal static bool IsScriptedRaidVanishKill(bool evicted, bool isRaid, float lastFrac)
+        => evicted && isRaid && lastFrac >= 0f && lastFrac <= BossScriptedKillHpFrac;
+
     // Raid-content gate (owner: party size does NOT classify content — Golem is 20p but not a raid, so
     // PartyType.Raid20 is wrong here). mapId is derived the SAME way BuildEncounter derives the uploaded
     // mapId — ParseMapId(_lastSceneName), the scene id string that becomes encounter.mapId. The nine raid
@@ -159,20 +178,21 @@ public sealed partial class Plugin
         {
             var (id, _, _) = _stageBosses.MemberAt(i);
             var v = _services.CombatLookup.GetVitals(id);
-            bool dead    = v.HasHpObservation && v.MaxHp > 0 && v.Hp <= 0;
+            bool dead    = IsRealBossDeath(v);
             bool evicted = !v.IsKnown;
 
             // UPLOAD-ONLY: remember this member's last LIVE HP fraction for the scripted-kill inference
             // below. Does NOT feed the (present,gone,dead) tuple, so the engine's cut timing/count is
-            // byte-identical (invariants 6/8).
+            // byte-identical (invariants 6/8). Kept here even though ObserveBossKillState already wrote it
+            // THIS tick (they run one after the other in TickBossStatus) so BossStatus stays correct on
+            // its own terms — the write is the same value.
             if (v.HasHpObservation && v.MaxHp > 0) _memberLastHpFrac[id] = (float)v.Hp / v.MaxHp;
             var lastFrac = _memberLastHpFrac.TryGetValue(id, out var f) ? f : -1f;
 
             // Scripted raid bosses are brought to ~1% then killed by a triggered event (HP never reads
             // 0, entity then vanishes). RAID-GATED so a dungeon boss the player merely walked away from
             // at low HP is never counted — dungeons keep pure HP<=0 semantics.
-            bool scriptedKill = evicted && IsRaidContent()
-                && lastFrac >= 0f && lastFrac <= BossScriptedKillHpFrac;
+            bool scriptedKill = IsScriptedRaidVanishKill(evicted, IsRaidContent(), lastFrac);
 
             // Mark BOTH trackers on a confirmed/scripted kill (2026-08-12 review, amendment 2). A member
             // now STAYS in the set (sticky Killed) instead of being cleared like the old single latch,
