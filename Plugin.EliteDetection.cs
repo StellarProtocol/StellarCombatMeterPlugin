@@ -77,7 +77,14 @@ public sealed partial class Plugin
         if (_eliteSet.Contains(id)) return;
         var cached = ResolveMonsterCandidate(id);   // shared with CheckBossCandidate (Plugin.BossDetection.cs)
         if (cached is null || !cached.Value.IsElite) return;
-        _eliteSet.Admit(id, cached.Value.ConfigId);
+        if (!_eliteSet.Admit(id, cached.Value.ConfigId)) return;
+        // STICKY BUCKET ROUTE (owner-approved fix 2026-08-15) — the elite half of the same admission-time
+        // record CheckBossCandidate does (Plugin.BossDetection.cs). This is the channel the defect was
+        // MEASURED on (staging run sea/jCFyDsx9uK): 13.6M + 13.2M of skill 3003213 kept ticking on two
+        // elites after they left the live set and was bucketed as Other. CAPTURE-ONLY either way — the
+        // sticky map is read by bucket routing and nothing else, so this stays as far from
+        // AutoArchive/BossStatus/verdict as the rest of this file.
+        _stickyRoutes.Record(id, isElite: true, cached.Value.ConfigId);
     }
 
     // Per-frame elite liveness + HP sampling — mirrors TickStageBossHpTracks/BossStatus's vitals-sampling

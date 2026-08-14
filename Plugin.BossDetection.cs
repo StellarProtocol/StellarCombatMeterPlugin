@@ -296,7 +296,15 @@ public sealed partial class Plugin
         if (!ShouldAdoptBossCandidate(cached.Value.IsBoss, _killedBosses.IsKilled(id))) return;
         // Admit into the set with the config id already resolved above: no-op if the stage is closed,
         // this id is already tracked, or the set is at MaxMembers.
-        _stageBosses.Admit(id, cached.Value.ConfigId);
+        if (!_stageBosses.Admit(id, cached.Value.ConfigId)) return;
+        // STICKY BUCKET ROUTE (owner-approved fix 2026-08-15) — remember this member's stat bucket for
+        // the REST OF THE RUN, so damage still landing on it after it leaves the live set (a raid boss
+        // scripted-killed and vanished, or a DrainIfAllGone once no member is present) keeps crediting
+        // ITS bucket instead of falling through to Other. CAPTURE-ONLY, run-scoped, bounded — see
+        // StickyBucketRoutes. Recorded only on a SUCCESSFUL admit: an id the set refused was never a
+        // tracked member, and inventing a route for it would bucket damage under a boss this run never
+        // actually engaged.
+        _stickyRoutes.Record(id, isElite: false, cached.Value.ConfigId);
     }
 
     /// <summary>Shared cache lookup/fill for <c>_bossCheck</c> — the ONE interop call site

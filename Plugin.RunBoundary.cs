@@ -52,6 +52,14 @@ public sealed partial class Plugin
         // archive must stay "seen", or its next AOI blink after the archive would mint a phantom cast.
         // CAPTURE ONLY — feeds nothing in AutoArchive/BossStatus/verdict paths.
         _seenSummons.Clear();
+        // Sticky bucket-routing memory (Plugin.BucketRouting.cs, owner-approved fix 2026-08-15): the
+        // last routing input, run-scoped exactly like the two live sets it backs up — a new run's
+        // entities are new entities, and holding a previous run's ids would let a recycled entity id
+        // credit a boss/elite that is not even in this instance. Deliberately NOT in Clear(): that runs
+        // on every archive, and the whole point of the map is that a boss cut banks at the kill while
+        // its DoT tail keeps ticking into the NEXT segment — those ticks must still credit that boss.
+        // CAPTURE ONLY — feeds nothing in AutoArchive/BossStatus/verdict paths.
+        _stickyRoutes.Clear();
         RecomputeUploadPolicyCache();   // new run ⇒ re-resolve kind + hot-path upload bools (Plugin.UploadPolicy.cs)
     }
 
