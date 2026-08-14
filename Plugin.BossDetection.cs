@@ -112,6 +112,67 @@ public sealed partial class Plugin
         new() { 13001, 13002, 13003, 13011, 13012, 13013, 13021, 13022, 13023 };
     private bool IsRaidContent() => RaidMapIds.Contains(ParseMapId(_lastSceneName));
 
+    // -----------------------------------------------------------------------
+    // The per-frame poll — ALWAYS-ON (owner ruling 2026-08-14)
+    // -----------------------------------------------------------------------
+
+    // Latest per-frame boss liveness aggregate, produced by TickBossStatus below (the SINGLE call site of
+    // BossStatus) and consumed by BuildAutoArchiveInputs (Plugin.AutoArchive.cs). Its default is the same
+    // (false,false,false) tuple BossStatus itself returns for an empty set, so the first tick — and any
+    // tick the guard below skips — reads exactly as a direct call would have.
+    private (bool present, bool gone, bool dead) _bossStatus;
+
+    /// <summary>Pure guard for the per-frame boss kill-state poll (<see cref="TickBossStatus"/>).
+    /// <para><b>OWNER RULING 2026-08-14:</b> boss KILL-STATE tracking is a DEFAULT FEATURE — this poll
+    /// runs even with the <b>MASTER</b> Auto-archive toggle OFF. There is therefore <b>no
+    /// auto-archive-enabled parameter here</b>, and re-adding one would not compile at the call site —
+    /// the same "the omission IS the fix" shape as <see cref="ShouldConsiderBossAdmission"/>. This
+    /// COMPLETES that day's admission ruling (commit dce10a1): admission already filled
+    /// <c>_stageBosses</c> with the toggle off, but the poll that turns membership into killed state
+    /// (<c>StageBossSet.SetLiveness</c> → sticky <c>Killed</c> → <c>bosses[]</c>/<c>bossKilled</c>,
+    /// <c>_killedBosses</c> marks, <c>_memberLastHpFrac</c>, and <c>TickStageBossHpTracks</c>'
+    /// <c>MarkDead</c> stamp) was reachable ONLY from inside <c>TickAutoArchiveTriggers</c>, past its
+    /// <c>!_autoArchive.Enabled</c> early return — so the set filled and never updated. That was the
+    /// CAVEAT on protected archive-flow invariant 5; this removes it.</para>
+    /// <para>The two terms that DO remain are precisely the two skips the pre-existing engine path
+    /// already had, kept so a master-ON run's poll schedule stays identical tick for tick:
+    /// <list type="bullet">
+    /// <item><paramref name="paused"/> — the meter is paused. <c>OnCombatEvent</c> (Plugin.Capture.cs)
+    /// early-returns on the same flag, so nothing is being captured to keep liveness for.</item>
+    /// <item><paramref name="archivePending"/> — a deferred archive is waiting out its settle window.
+    /// <b>Load-bearing, not cosmetic.</b> <see cref="BossStatus"/> DRAINS <c>_stageBosses</c> on the tick
+    /// its aggregate first reads all-gone, while the engine consumes <c>BossDead</c> as a ONE-TICK PULSE
+    /// (<c>AutoArchiveEngine.UpdateLatches</c>) and <c>TickAutoArchiveTriggers</c> skips <c>Evaluate</c>
+    /// entirely while a reason is pending. Polling through that window would therefore drain the set
+    /// against nobody and LOSE the pulse — no <c>BossKill</c> would ever fire for that fight. It would
+    /// also (a) stop routing the post-kill DoT tail to its boss bucket mid-settle
+    /// (<c>StageBossSet.TryGetConfigId</c> resolves a KILLED member only until the stage drains) and
+    /// (b) reopen the emptied set to a fresh admission that <c>ResolveCurrentStageBosses</c> would then
+    /// PREFER over the killed members, regressing final-review Critical 1. A pending reason is only ever
+    /// set with the master toggle ON (<c>TickAutoArchiveTriggers</c> nulls it the moment the toggle goes
+    /// off), so this term costs the ruling nothing.</item>
+    /// </list></para>
+    /// Unit-tested headless (AutoArchiveContentGuardTests).</summary>
+    internal static bool ShouldPollBossStatus(bool paused, bool archivePending) => !paused && !archivePending;
+
+    /// <summary>The single per-frame boss kill-state poll. Called UNCONDITIONALLY from
+    /// <c>Plugin.OnUpdate</c>'s ~10 Hz throttled region — beside <c>TrackClearLatch</c> and immediately
+    /// BEFORE <c>TickAutoArchiveTriggers</c>, which is exactly where <see cref="BossStatus"/> ran from
+    /// before (inline in <c>BuildAutoArchiveInputs</c>), so its ordering against <c>PollRunBoundary</c>
+    /// and <c>TrackClearLatch</c> is unchanged and there is no double-tick when the master toggle is on.
+    /// <b>DO NOT move this back inside <c>TickAutoArchiveTriggers</c> or behind the
+    /// <c>_autoArchive.Enabled</c> gate</b> — the same standing instruction <c>TrackClearLatch</c>
+    /// carries, for the same reason (owner ruling 2026-08-14). Capture-side only: nothing this reaches
+    /// can start an archive — <see cref="BossStatus"/> touches vitals, <c>_memberLastHpFrac</c>,
+    /// <c>_killedBosses</c>, <c>_stageBosses</c> and <see cref="LatchStageBosses"/>, and calls no
+    /// <c>ManualArchive</c>/engine path — so with the master toggle off the engine still never ticks.
+    /// The call-order guarantee itself is headless-untestable; this comment IS the guard.</summary>
+    private void TickBossStatus()
+    {
+        if (!ShouldPollBossStatus(_paused, _pendingArchiveReason is not null)) return;
+        _bossStatus = BossStatus();
+    }
+
     // Boss liveness for the engine. Gone = a REAL death observation (HasHpObservation) or the
     // vitals row vanished (AOI disappear / scene reset / framework idle sweep all remove it).
     // dead is the CONFIRMED-death subset of gone (excludes a transient cache eviction): a death arms
@@ -144,8 +205,9 @@ public sealed partial class Plugin
     // (all in AutoArchiveContentGuardTests), and the set's own aggregate rules (StageBossSetTests). A
     // known, named gap — this method is the IL2CPP glue Task 2 exists to wire, not to prove.
     //
-    // Alloc-free hot path (2026-08-12 review, amendment 1): this runs EVERY FRAME
-    // (BuildAutoArchiveInputs), so the loop below is a plain indexed `for` over Count/MemberAt — no
+    // Alloc-free hot path (2026-08-12 review, amendment 1): this runs EVERY FRAME (TickBossStatus, its
+    // SOLE caller since the always-on ruling 2026-08-14 — it used to be called inline from
+    // BuildAutoArchiveInputs), so the loop below is a plain indexed `for` over Count/MemberAt — no
     // LINQ, no MembersSnapshot() (that allocates and is archive-time-only).
     private (bool present, bool gone, bool dead) BossStatus()
     {

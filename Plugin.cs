@@ -338,6 +338,9 @@ public sealed partial class Plugin : IStellarPlugin
                                      // latch MUST track even in manual-only mode so a MANUAL archive of a cleared
                                      // run still reads "kill" (owner design 2026-08-06). Headless-untestable —
                                      // this call-order guarantee has no unit test; this comment IS the guard.
+        TickBossStatus();            // ~10 Hz: boss kill-state poll — ALWAYS-ON, runs with the MASTER
+                                     // Auto-archive toggle OFF too (owner ruling 2026-08-14). DO NOT move
+                                     // it back inside TickAutoArchiveTriggers — see Plugin.BossDetection.cs.
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
         TickLoadoutCapture();        // ~10 Hz: per-class loadout accumulator (poll profession + run-boundary reset)

@@ -159,6 +159,36 @@ public class AutoArchiveContentGuardTests
         Assert.False(Plugin.ShouldConsiderBossAdmission(inRun: false));
     }
 
+    // ── The per-frame kill-state POLL is always-on too (owner ruling 2026-08-14, second half) ────────
+    //
+    // The admission ruling above (commit dce10a1) filled _stageBosses with the "Boss phase" sub-toggle
+    // off — but the poll that turns membership into KILLED STATE (BossStatus → StageBossSet.SetLiveness
+    // → sticky Killed → bosses[]/bossKilled, plus the _killedBosses marks, _memberLastHpFrac and
+    // TickStageBossHpTracks' MarkDead stamp) was reachable ONLY from BuildAutoArchiveInputs, i.e. past
+    // TickAutoArchiveTriggers' `if (!_autoArchive.Enabled) return;`. With the MASTER Auto-archive toggle
+    // OFF the set therefore filled and never updated — the CAVEAT the archive-flow doc carried on
+    // protected invariant 5. Owner ruling: boss kill-state tracking is a DEFAULT FEATURE, so the poll
+    // moved to its own always-reached call site (TickBossStatus, called from Plugin.OnUpdate beside
+    // TrackClearLatch) and BuildAutoArchiveInputs now consumes the cached aggregate.
+    //
+    // The guard's PARAMETER LIST is the pin: there is no autoArchiveEnabled term, so re-gating the poll
+    // on the master toggle cannot compile at the call site. The two terms that remain are exactly the
+    // two skips the old engine-path call already had — see ShouldPollBossStatus' doc for why the
+    // archivePending one is load-bearing (BossStatus DRAINS the set on the all-gone tick while the
+    // engine consumes BossDead as a one-tick pulse and skips Evaluate entirely while a reason is
+    // pending: polling through a settle window would lose the BossKill for that fight).
+    [Fact]
+    public void ShouldPollBossStatus_is_not_gated_on_the_master_auto_archive_toggle()
+    {
+        // The ordinary tick — polls regardless of ANY auto-archive toggle (no such parameter exists).
+        Assert.True(Plugin.ShouldPollBossStatus(paused: false, archivePending: false));
+        // Meter paused: OnCombatEvent early-returns on the same flag, so nothing is being captured.
+        Assert.False(Plugin.ShouldPollBossStatus(paused: true, archivePending: false));
+        // A deferred archive is waiting out its settle window — preserved from the pre-move call path.
+        Assert.False(Plugin.ShouldPollBossStatus(paused: false, archivePending: true));
+        Assert.False(Plugin.ShouldPollBossStatus(paused: true, archivePending: true));
+    }
+
     // ---- killed-boss marks (2026-07-26): the corpse-readoption loop that produced the sliver spam ----
 
     [Fact]

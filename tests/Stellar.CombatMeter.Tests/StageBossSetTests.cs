@@ -1,6 +1,7 @@
 using System.Linq;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter.AutoArchive;
+using Stellar.CombatMeter.LogUpload;
 using Xunit;
 
 namespace Stellar.CombatMeter.Tests;
@@ -210,5 +211,43 @@ public class StageBossSetTests
         s.DrainIfAllGone();
         Assert.False(s.TryGetConfigId(E(10), out var drained));
         Assert.Equal(0, drained);
+    }
+
+    // ── OWNER RULING 2026-08-14 (second half): kill state must reach the archive with the MASTER
+    //    Auto-archive toggle OFF ──────────────────────────────────────────────────────────────────────
+    //
+    // Before TickBossStatus (Plugin.BossDetection.cs) existed, BossStatus() — the ONLY writer of
+    // SetLiveness — was reachable solely from BuildAutoArchiveInputs, past TickAutoArchiveTriggers'
+    // `if (!_autoArchive.Enabled) return;`. So with the master toggle off a boss was ADMITTED (dce10a1)
+    // and then frozen at Killed=false forever: bosses[] shipped every member as not-killed, bossKilled
+    // was always false, and the raid clear detection the worker derives from them (CLAUDE.md § HARD
+    // PRODUCT REQUIREMENTS, "a raid CLEAR has no game signal") could never fire for that install.
+    //
+    // This composes the WHOLE production chain that the always-on poll restores, from the poll's only
+    // side effect on this set through to the uploaded encounter fields: SetLiveness(Dead) is exactly what
+    // BossStatus writes on a confirmed/scripted kill, MembersSnapshot() is what ResolveCurrentStageBosses
+    // hands BuildHistoryEntry, and BossRepresentative.ResolveStageBosses is what CombatLogAssembler runs
+    // over entry.StageBosses. Nothing in this chain reads an auto-archive toggle — which is the point:
+    // the toggle's ONLY effect on it was upstream, in whether the poll ran at all.
+    [Fact]
+    public void A_kill_observed_with_auto_archive_off_still_reaches_bosses_and_bossKilled()
+    {
+        var s = new StageBossSet();
+        s.Admit(E(10), 102800); s.SetLiveness(E(10), Alive);
+        s.Admit(E(11), 102801); s.SetLiveness(E(11), Alive);   // Dreambloom stage 1: Sunfire + Moonstrike
+
+        // The defect this pins: no poll → no SetLiveness(Dead) → every member ships Killed=false.
+        var unpolled = BossRepresentative.ResolveStageBosses(s.MembersSnapshot());
+        Assert.False(unpolled.BossKilled);
+        Assert.All(unpolled.Bosses!, b => Assert.False(b.Killed));
+
+        // The poll runs (master toggle irrelevant) and both bosses are seen dead.
+        s.SetLiveness(E(10), Dead); s.SetLiveness(E(11), Dead);
+
+        var (bossId, bossKilled, bosses) = BossRepresentative.ResolveStageBosses(s.MembersSnapshot());
+        Assert.Equal(102800, bossId);        // first-admitted representative
+        Assert.True(bossKilled);
+        Assert.Equal(new[] { 102800, 102801 }, bosses!.Select(b => b.ConfigId));
+        Assert.All(bosses!, b => Assert.True(b.Killed));
     }
 }

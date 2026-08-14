@@ -311,7 +311,7 @@ public sealed partial class Plugin
     private AutoArchiveInputs BuildAutoArchiveInputs()
     {
         ScanRosterVitals(out var rosterSize, out var dead, out var unknown);
-        var (bossPresent, bossGone, bossDead) = BossStatus();
+        var (bossPresent, bossGone, bossDead) = _bossStatus;   // TickBossStatus polled it THIS tick (always-on 2026-08-14)
         // A fresh CLEAR is present when this encounter's settlement newly resolves to "kill" — the SAME
         // gate ManualArchive uses to bank the clear marker (IsFreshKill + ResolveVerdict). Lets the engine
         // fire the run-end stage archive through the HasStats + cooldown gates on a fast kill (see Evaluate).
