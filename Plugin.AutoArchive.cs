@@ -410,22 +410,27 @@ public sealed partial class Plugin
     internal static bool ShouldConsiderInlineBossCut(bool bossEnabled, bool bossSegmentActive, bool inRun)
         => bossEnabled && !bossSegmentActive && inRun;
 
-    /// <summary>Pure guard (Critical fix, 2026-08-12 review): should this event be offered to
-    /// <see cref="ObserveAutoArchiveBoss"/> for ADMISSION into <c>_stageBosses</c>? Same two terms as
-    /// <see cref="ShouldConsiderInlineBossCut"/> (bossEnabled + inRun), deliberately WITHOUT its
-    /// <c>bossSegmentActive</c> term: admission must run on EVERY combat event even while a segment is
-    /// active, or a co-boss engaged after the fight's first hit can never join the set — the set could
-    /// never exceed one member in a real simultaneous fight (multi-boss spec §3.2). The CUT decision
-    /// itself is unchanged. Unit-tested headless; the set-level effect is pinned by
-    /// <c>StageBossSetTests.Coboss_joins_while_first_is_present</c>.</summary>
-    internal static bool ShouldConsiderBossAdmission(bool bossEnabled, bool inRun) => bossEnabled && inRun;
+    /// <summary>Pure guard: should this event be offered to <see cref="ObserveAutoArchiveBoss"/> for
+    /// ADMISSION into <c>_stageBosses</c>? <b>ONE term only — <paramref name="inRun"/>.</b>
+    /// <para><b>OWNER RULING 2026-08-14</b> ("boss tracking is supposed to be a default feature"):
+    /// admission is ALWAYS-ON during an instanced run, INDEPENDENT of the "Boss phase" sub-toggle —
+    /// like elite capture (Plugin.EliteDetection.cs, ruling 2026-08-13).
+    /// Extends protected invariant 5 ("detection is always-on; the toggle gates only per-boss CUTS")
+    /// from the retired single <c>bossId</c> latch to the multi-boss SET: with Boss phase OFF a fight
+    /// still admits members, fills <c>bosses[]</c>/buckets/HP tracks and records <c>bossId</c>.</para>
+    /// <para>Both dropped parameters are <b>GONE, not defaulted</b> — each omission IS its fix
+    /// (<c>bossSegmentActive</c>, 2026-08-12, the co-boss fix; <c>bossEnabled</c>, 2026-08-14, this
+    /// ruling). Compare <see cref="ShouldConsiderInlineBossCut"/>, which KEEPS both: the CUT is
+    /// deliberately untouched (invariant 8). <b>WHY UN-GATING IS SAFE with the toggle off is traced in
+    /// full on <c>ObserveAutoArchiveBoss</c> (Plugin.BossDetection.cs) — read it before re-gating.</b></para>
+    /// Unit-tested headless; set-level effect pinned by <c>StageBossSetTests</c>.</summary>
+    internal static bool ShouldConsiderBossAdmission(bool inRun) => inRun;
 
-    // NOTE (2026-08-12, multi-boss plan Task 2): the doc comments above and on MaybeCutForBossPhase
-    // below still narrate the fix history in terms of the single _autoArchiveBossId latch this method's
-    // caller used to carry. That field is gone — Plugin.BossDetection.cs now carries the SET
-    // (_stageBosses) — but the historical reasoning (why the gate is keyed on bossSegmentActive, why a
-    // blink must not re-arm the cut) is unchanged and still load-bearing at the SET level, so the prose
-    // is left intact rather than rewritten line-by-line.
+    // NOTE (2026-08-12, multi-boss plan Task 2; narrowed 2026-08-14): ShouldConsiderInlineBossCut's doc
+    // and MaybeCutForBossPhase's comments below still narrate the fix history via the retired single
+    // _autoArchiveBossId latch (Plugin.BossDetection.cs now carries the SET, _stageBosses). The
+    // reasoning — why the CUT is keyed on bossSegmentActive, why a blink must not re-arm it — is
+    // unchanged and still load-bearing at the SET level, so that prose is left intact.
 
     // Inline boss-phase cut (2026-07-21). Called from OnCombatEvent (Plugin.Capture.cs) on every
     // DamageDealt, BEFORE that event is accumulated — the SOLE boss-cut path. On the first boss combat
@@ -440,17 +445,17 @@ public sealed partial class Plugin
     //   • direct engage (!priorCombat, no pending): NO archive — mark the segment active and backdate
     //     the combat clock by keepBefore.
     // Re-cuts fire here too (CAPPED) once an archive or run/scene boundary re-arms the segment latch.
-    // Hot-path safe: O(1), no allocation once a segment is active or boss auto-archive is off.
-    //
-    // ADMISSION vs CUT (Critical fix, 2026-08-12): admission now runs regardless of bossSegmentActive
-    // (see ShouldConsiderBossAdmission) — the CUT below is otherwise unchanged.
+    // Hot-path safe: O(1), alloc-free once the _bossCheck cache is warm (admission) and once a segment
+    // is active (cut).
     private void MaybeCutForBossPhase(EntityId src, EntityId tgt, long firstHitMs, bool priorCombat)
     {
         bool inRun = IsInstancedRun();
 
-        // NOT gated on bossSegmentActive — must run every event so a co-boss engaged mid-fight is still
-        // admitted. O(1)/alloc-free once the _bossCheck cache is warm.
-        if (ShouldConsiderBossAdmission(_autoArchive.BossEnabled, inRun)) ObserveAutoArchiveBoss(src, tgt);
+        // ADMISSION — ALWAYS-ON in an instanced run. Not gated on bossSegmentActive (Critical fix
+        // 2026-08-12: so a co-boss engaged mid-fight is still admitted) and not gated on the Boss-phase
+        // toggle (owner ruling 2026-08-14: turning it off must never blind boss tracking — it only stops
+        // the per-boss CUT below). See ShouldConsiderBossAdmission.
+        if (ShouldConsiderBossAdmission(inRun)) ObserveAutoArchiveBoss(src, tgt);
 
         // Fast-exit for the CUT only — admission above already ran regardless of bossSegmentActive.
         if (!ShouldConsiderInlineBossCut(_autoArchive.BossEnabled, _autoArchive.BossSegmentActive, inRun)) return;

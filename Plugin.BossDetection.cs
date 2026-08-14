@@ -235,9 +235,38 @@ public sealed partial class Plugin
     // one boss was adopted; the set must keep admitting so a co-boss engaged later in the same stage is
     // seen too. CheckBossCandidate / StageBossSet.Admit are the actual gates (already-tracked id,
     // already-killed id, closed stage, MaxMembers all no-op harmlessly).
+    //
+    // TOGGLE-INDEPENDENT (owner ruling 2026-08-14, verbatim intent: "boss tracking is supposed to be a
+    // default feature"): the `if (!_autoArchive.BossEnabled) return;` that used to head this method is
+    // GONE, as is the bossEnabled term in the caller's ShouldConsiderBossAdmission gate — boss-set
+    // admission is now always-on during an instanced run, mirroring the elite capture channel
+    // (Plugin.EliteDetection.cs's ObserveEliteCandidates). The ONLY remaining gate is the caller's
+    // inRun test. Extends protected archive-flow invariant 5 to the SET; the Boss-phase toggle keeps
+    // gating the per-boss archive CUTS alone (invariant 8).
+    //
+    // WHY THIS IS SAFE WITH THE TOGGLE OFF (traced 2026-08-14 — read this before re-gating anything).
+    // Un-gating admission means _stageBosses can now be non-empty while Boss phase is OFF, so BossStatus()
+    // no longer short-circuits on `Count == 0` and feeds AutoArchiveInputs.Boss{Present,Gone,Dead} REAL
+    // readings for the first time. `BossEnabled == false` together with a live boss reading was previously
+    // an unreachable input combination. It changes no decision, because every engine consumer of those
+    // readings is transitively gated on _bossSegmentActive (AutoArchive/AutoArchiveEngine.cs):
+    //   • TryBeginBossSegmentCut refuses to set _bossSegmentActive while !BossEnabled — so it stays false
+    //     for the whole toggle-off run, and it is the ONLY thing that sets it;
+    //   • UpdateLatches arms _bossKillWanted only under `s.BossDead && _bossSegmentActive`, and zeroes the
+    //     gone-timeout streak (_bossGoneSinceMs) whenever !_bossSegmentActive — so neither of the two ways
+    //     a BossKill can arm is reachable;
+    //   • Evaluate's fire is additionally gated `BossEnabled && _bossKillWanted` (belt and suspenders);
+    //   • the settle window watches the GENERAL damage clock (_lastDamageMs, Plugin.AutoArchive.cs) and
+    //     carries no boss term at all, so cut TIMING is untouched too.
+    // Net: with the toggle off the engine's decisions are byte-identical, and no want can latch while off
+    // and then fire if the owner flips the toggle mid-run. Both properties are pinned by
+    // AutoArchiveEngineTests.Boss_readings_are_inert_while_boss_disabled (a differential test against a
+    // control engine fed the old all-false tuple) and .A_kill_seen_while_boss_disabled_does_not_fire_
+    // when_the_toggle_is_turned_on. The side effects BossStatus() now performs on a toggle-off run are all
+    // capture-side and desired: _memberLastHpFrac (upload-only), _killedBosses marks, and the
+    // LatchStageBosses/DrainIfAllGone pair that hands bosses[] to the archive.
     private void ObserveAutoArchiveBoss(EntityId src, EntityId tgt)
     {
-        if (!_autoArchive.BossEnabled) return;
         CheckBossCandidate(src);
         CheckBossCandidate(tgt);
     }

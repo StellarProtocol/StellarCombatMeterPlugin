@@ -107,6 +107,108 @@ public partial class AutoArchiveEngineTests
         Assert.Null(e.Evaluate(Live(nowMs: 260_000) with { BossDead = true, BossGone = true, BossPresent = false }));
     }
 
+    // ── OWNER RULING 2026-08-14: boss-set ADMISSION is always-on; the toggle gates CUTS only ──────────
+    //
+    // Why these two tests exist. Before the ruling, Boss phase = OFF meant _stageBosses stayed EMPTY, so
+    // Plugin.BossDetection.cs's BossStatus() short-circuited on `Count == 0` and always handed the engine
+    // (present, gone, dead) = (false, false, false). Un-gating admission (Plugin.AutoArchive.cs's
+    // ShouldConsiderBossAdmission lost its bossEnabled term) means a toggle-off run now feeds the engine
+    // REAL boss readings for the first time. That is a genuinely new input combination — `BossEnabled ==
+    // false` together with `BossDead/BossGone/BossPresent == true` was previously unreachable in
+    // production — and the ruling requires it to change NOTHING (protected archive-flow invariant 8:
+    // sub-toggles change cuts/timing only, never detection, verdict, or run id).
+    //
+    // It holds structurally: TryBeginBossSegmentCut refuses to set _bossSegmentActive while !BossEnabled,
+    // UpdateLatches arms _bossKillWanted only under _bossSegmentActive and zeroes the gone-timeout streak
+    // whenever !_bossSegmentActive, and Evaluate's fire is additionally gated `BossEnabled &&
+    // _bossKillWanted`. The settle window watches the general damage clock (_lastDamageMs), which carries
+    // no boss term at all. These tests pin that chain end-to-end rather than by inspection.
+
+    [Fact]
+    public void Boss_readings_are_inert_while_boss_disabled()
+    {
+        // DIFFERENTIAL pin (agent-process-rules § 23: a test that cannot fail is worse than no test —
+        // this one compares against a control, so it fails the moment a boss reading leaks a decision).
+        // Two engines, identical config with Boss phase OFF, driven through the SAME long tick sequence.
+        // The only difference: `live` gets the real boss readings admission now produces, `control` gets
+        // the all-false tuple the toggle-off path produced BEFORE the ruling. Every returned reason must
+        // match, tick for tick — that IS "byte-identical behavior with the toggle off".
+        //
+        // The sequence deliberately spans a full boss fight AND long enough for the gone-timeout streak
+        // (BossGoneTimeoutMs) to mature, since that streak is the one boss-derived latch with a time
+        // dimension and so the likeliest place for a leak to hide.
+        var live    = new AutoArchiveEngine { BossEnabled = false, IdleEnabled = false, CooldownMs = 10_000 };
+        var control = new AutoArchiveEngine { BossEnabled = false, IdleEnabled = false, CooldownMs = 10_000 };
+
+        Assert.Null(live.Evaluate(Live()));      // adopt flow version on both
+        Assert.Null(control.Evaluate(Live()));
+
+        // Neither engine may open a segment — the inline cut's own BossEnabled gate (invariant 8).
+        Assert.False(live.TryBeginBossSegmentCut());
+        Assert.False(control.TryBeginBossSegmentCut());
+
+        // engaged → alive → gone (held well past BossGoneTimeoutMs) → confirmed dead.
+        var bossReadings = new List<(bool present, bool gone, bool dead)>
+        {
+            (true,  false, false),   // pull
+            (true,  false, false),   // mid-fight
+            (false, true,  false),   // AOI blink / scripted-kill vanish — starts the gone streak
+            (false, true,  false),
+            (false, true,  false),
+            (false, true,  true),    // confirmed death pulse
+            (false, true,  false),   // pulse gone; a latched want (if any) would still fire here
+        };
+
+        long now = 200_000;
+        for (var i = 0; i < bossReadings.Count; i++)
+        {
+            var (present, gone, dead) = bossReadings[i];
+            // Step past BossGoneTimeoutMs across the streak so the timeout would mature if it could arm.
+            now += AutoArchiveEngine.BossGoneTimeoutMs;
+            var withBoss = Live(nowMs: now) with
+            {
+                BossPresent = present, BossGone = gone, BossDead = dead,
+                // Keep the damage clock fresh so the (disabled) idle trigger can never confound the diff.
+                LastDamageMs = now - 1_000,
+            };
+            var without = withBoss with { BossPresent = false, BossGone = false, BossDead = false };
+
+            var liveReason    = live.Evaluate(in withBoss);
+            var controlReason = control.Evaluate(in without);
+
+            Assert.Equal(controlReason, liveReason);          // tick-for-tick identical decisions
+            Assert.NotEqual(ArchiveReason.BossKill, liveReason);   // and never a boss cut, explicitly
+            // The segment latch the cut path keys on must stay closed on both.
+            Assert.False(live.BossSegmentActive);
+            Assert.False(control.BossSegmentActive);
+        }
+    }
+
+    [Fact]
+    public void A_kill_seen_while_boss_disabled_does_not_fire_when_the_toggle_is_turned_on()
+    {
+        // The one carry-over risk the ruling introduces: admission is now running during a toggle-off
+        // fight, so if a boss death could LATCH a want while disabled, flipping Boss phase on mid-run
+        // would fire a stale BossKill against a fight that was never cut — banking a spurious archive
+        // and, worse, splitting a replay window (protected invariant 6, the replay-contiguity P0).
+        // It cannot: _bossKillWanted arms only under _bossSegmentActive, which TryBeginBossSegmentCut
+        // refuses to set while disabled. Pinned here because the structural argument lives in two files.
+        var e = new AutoArchiveEngine { BossEnabled = false, IdleEnabled = false };
+        Assert.Null(e.Evaluate(Live()));
+
+        // A full kill observed while the toggle is OFF (only reachable now that admission is always-on).
+        var dead = Live(nowMs: 260_000) with { BossPresent = false, BossGone = true, BossDead = true };
+        Assert.Null(e.Evaluate(in dead));
+
+        // Owner flips "Boss phase" on mid-run. No segment was ever opened, so there is nothing to bank.
+        e.BossEnabled = true;
+        Assert.Null(e.Evaluate(Live(nowMs: 270_000) with { BossPresent = false, BossGone = true }));
+        Assert.False(e.BossSegmentActive);
+
+        // And the NEXT genuine boss fight still cuts normally — the toggle-off period left no residue.
+        Assert.True(e.TryBeginBossSegmentCut());
+    }
+
     [Fact]
     public void An_intervening_archive_consumes_the_pending_bosskill()
     {

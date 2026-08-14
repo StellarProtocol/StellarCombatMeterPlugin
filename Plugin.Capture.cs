@@ -50,9 +50,11 @@ public sealed partial class Plugin
         if (!d.IsHeal && d.TargetId.IsPlayer) CaptureTaken(d);
 
         // Elite capture (ELITE CAPTURE channel, owner ruling 2026-08-13, Plugin.EliteDetection.cs):
-        // TOGGLE-INDEPENDENT — no _autoArchive.BossEnabled gate, unlike MaybeCutForBossPhase's boss
-        // admission above (which only runs when Boss phase is on). Feeds ONLY the capture-only
-        // _eliteSet — never AutoArchive/BossStatus/verdict/bossId paths.
+        // TOGGLE-INDEPENDENT — no _autoArchive.BossEnabled gate. As of the owner ruling 2026-08-14
+        // MaybeCutForBossPhase's boss ADMISSION above is toggle-independent too (only its CUT is still
+        // gated), so the two capture channels now share the same always-on-while-inRun shape. This one
+        // still feeds ONLY the capture-only _eliteSet — never AutoArchive/BossStatus/verdict/bossId
+        // paths — which remains the difference that matters.
         ObserveEliteCandidates(d.SourceId, d.TargetId);
 
         // Replay: note both source and target BEFORE the player-only early-out so boss/add target ids

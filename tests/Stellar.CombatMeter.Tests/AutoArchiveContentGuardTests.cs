@@ -121,22 +121,42 @@ public class AutoArchiveContentGuardTests
         Assert.False(Plugin.ShouldConsiderInlineBossCut(bossEnabled: true,  bossSegmentActive: false, inRun: false)); // open world — no cut
     }
 
-    // ── Admission is a SEPARATE, less-strict gate than the cut (Critical fix, 2026-08-12 review) ──────
-    // Review finding: the ONLY call path into StageBossSet.Admit was MaybeCutForBossPhase, gated by
-    // ShouldConsiderInlineBossCut — which fast-exits the instant bossSegmentActive is true (the first
-    // boss-touching event sets it via TryBeginBossSegmentCut). So a co-boss engaged AFTER the first hit
-    // was NEVER admitted; the set could never exceed one member in a real simultaneous fight, defeating
-    // the multi-boss spec (§3.2: "admit every IsBoss-flagged, not-already-killed entity while the stage
-    // is open"). Fix: MaybeCutForBossPhase now calls ObserveAutoArchiveBoss under this SEPARATE guard —
-    // ShouldConsiderBossAdmission — which has NO bossSegmentActive parameter at all: that omission IS the
-    // fix, proven here by asserting admission stays true with a segment active, deliberately mirroring
-    // the same enabled/inRun terms ShouldConsiderInlineBossCut uses for everything EXCEPT segment state.
+    // ── Admission is a SEPARATE, less-strict gate than the cut ────────────────────────────────────────
+    //
+    // RE-PINNED 2026-08-14 (owner ruling — this test previously pinned the OLD, stricter gating and now
+    // pins the ruling that superseded it; agent-process-rules § 9 corollary: when a fix deliberately
+    // changes a pinned contract, RE-PIN in the same commit with the rationale in the test comment).
+    //
+    // History, in two rounds — each round DELETED one term from this guard, and each deletion IS the fix:
+    //
+    //   Round 1 (Critical fix, 2026-08-12 review) removed `bossSegmentActive`. The ONLY call path into
+    //   StageBossSet.Admit was MaybeCutForBossPhase, gated by ShouldConsiderInlineBossCut — which
+    //   fast-exits the instant bossSegmentActive is true (the first boss-touching event sets it via
+    //   TryBeginBossSegmentCut). So a co-boss engaged AFTER the first hit was NEVER admitted; the set
+    //   could never exceed one member in a real simultaneous fight, defeating the multi-boss spec (§3.2:
+    //   "admit every IsBoss-flagged, not-already-killed entity while the stage is open").
+    //
+    //   Round 2 (OWNER RULING 2026-08-14, verbatim intent: "boss tracking is supposed to be a default
+    //   feature") removed `bossEnabled`. Boss-set ADMISSION must be always-on during an instanced run,
+    //   independent of the "Boss phase" auto-archive sub-toggle — exactly like elite capture (owner
+    //   ruling 2026-08-13). This extends protected archive-flow invariant 5 ("boss detection is
+    //   always-on; the toggle gates only per-boss archive CUTS") from the retired single bossId latch to
+    //   the multi-boss SET. The OLD assertion here — `ShouldConsiderBossAdmission(bossEnabled: false,
+    //   inRun: true)` is false — was the pin the ruling overturned; it is deliberately GONE, replaced by
+    //   its exact inverse below. The second half of the ruling (the toggle STILL gates cuts) is pinned by
+    //   ShouldConsiderInlineBossCut's test above, which keeps its bossEnabled term, and end-to-end at the
+    //   engine by AutoArchiveEngineTests.Boss_readings_are_inert_while_boss_disabled.
+    //
+    // What survives both rounds is a single term: inRun. Admission is now the LEAST strict of the three
+    // boss guards, and the parameter list itself is the proof — a re-added term would not compile here.
     [Fact]
-    public void ShouldConsiderBossAdmission_ignores_segment_state_requires_enabled_and_in_run()
+    public void ShouldConsiderBossAdmission_is_always_on_in_a_run_regardless_of_toggle_or_segment()
     {
-        Assert.True(Plugin.ShouldConsiderBossAdmission(bossEnabled: true, inRun: true));    // admits — no segment-active term to block it
-        Assert.False(Plugin.ShouldConsiderBossAdmission(bossEnabled: false, inRun: true));  // boss auto-archive off
-        Assert.False(Plugin.ShouldConsiderBossAdmission(bossEnabled: true, inRun: false));  // open world — no admission
+        // In an instanced run admission ALWAYS runs — the guard has no bossEnabled term and no
+        // bossSegmentActive term left to block it (owner ruling 2026-08-14 / Critical fix 2026-08-12).
+        Assert.True(Plugin.ShouldConsiderBossAdmission(inRun: true));
+        // Open world — the ONLY remaining gate, unchanged by either round.
+        Assert.False(Plugin.ShouldConsiderBossAdmission(inRun: false));
     }
 
     // ---- killed-boss marks (2026-07-26): the corpse-readoption loop that produced the sliver spam ----

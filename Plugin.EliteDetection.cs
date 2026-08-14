@@ -51,12 +51,15 @@ public sealed partial class Plugin
         => PreferLiveStageBosses(_eliteSet.MembersSnapshot(), _segmentElites);
 
     // Called from OnCombatEvent (Plugin.Capture.cs), alongside NoteReplayEntity — TOGGLE-INDEPENDENT:
-    // no _autoArchive.BossEnabled gate. CheckBossCandidate's caller (Plugin.AutoArchive.cs's
-    // MaybeCutForBossPhase) only reaches ObserveAutoArchiveBoss when BossEnabled is already true, so
-    // elite admission is deliberately wired from a SEPARATE, always-reached call site rather than
-    // piggy-backing on that one — turning Boss phase off must never blind elite capture. Gated only on
-    // being in an instanced run (inRun gate — no open-world elite capture), mirroring NoteReplayEntity's
-    // own gate.
+    // no _autoArchive.BossEnabled gate. Elite admission is deliberately wired from its OWN, always-
+    // reached call site rather than piggy-backing on the boss path — turning Boss phase off must never
+    // blind elite capture, and keeping the call sites separate is what guarantees that independently of
+    // however the boss path is gated. (Historical note: when this channel landed, 2026-08-13, the boss
+    // path's ObserveAutoArchiveBoss WAS gated on BossEnabled, which made a separate call site strictly
+    // necessary; the owner ruling 2026-08-14 has since made boss admission always-on too, so the two
+    // channels now share the same gating — the separation stands on isolation grounds alone, per
+    // agent-process-rules § 35.) Gated only on being in an instanced run (inRun gate — no open-world
+    // elite capture), mirroring NoteReplayEntity's own gate.
     private void ObserveEliteCandidates(EntityId src, EntityId tgt)
     {
         if (!IsInstancedRun()) return;

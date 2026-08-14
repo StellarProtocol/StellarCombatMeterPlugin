@@ -25,8 +25,8 @@ internal static class BossRepresentative
     /// review): NO plugin-side raid-roster preference here — master data for that lives
     /// server/site-side, and the worker already prefers <c>bosses[]</c> when present.
     ///
-    /// When the segment tracked NO stage boss at all (boss-phase detection OFF for this content, or a
-    /// genuinely bossless trash segment), falls back to <paramref name="fallbackBossConfigId"/> — the
+    /// When the segment tracked NO stage boss at all (a genuinely bossless trash segment, or a boss the
+    /// admission path never saw), falls back to <paramref name="fallbackBossConfigId"/> — the
     /// entry's <c>FallbackBossConfigId</c>, itself the archive-time snapshot of the STANDALONE boss-HP
     /// replay heuristic (<c>_bossMonsterInfo?.Id ?? 0</c>, Plugin.Replay.cs's
     /// <c>ResolveBossEntity</c>), which runs independently of <c>_autoArchive.BossEnabled</c> — gated
@@ -40,6 +40,15 @@ internal static class BossRepresentative
     /// a3cb7fa shipped for this shape — its <c>entry.BossKilled</c> scalar was populated only from the
     /// same boss-phase-gated stage set (<c>_segmentBossKilled</c>, set only via <c>BossStatus()</c>'s
     /// first-admitted-member mirror), so it was always <c>false</c> whenever that set was empty.
+    ///
+    /// <para>NOTE (owner ruling 2026-08-14): the fallback's reach SHRANK — "Boss phase toggle is OFF"
+    /// is no longer one of its cases. Boss-set admission is now always-on during an instanced run
+    /// (Plugin.AutoArchive.cs's <c>ShouldConsiderBossAdmission</c>), so a toggle-off boss fight now
+    /// arrives here with a populated <c>stageBosses</c> and takes the REAL branch above — real
+    /// <c>bossId</c>, a real <c>Bosses</c> list, and real per-member <c>Killed</c> state, instead of
+    /// the heuristic's id with <c>Bosses=null</c>/<c>BossKilled=false</c>. That is a strict upgrade to
+    /// protected invariant 5 ("Boss phase = OFF -> bossId still recorded"), not a departure from it:
+    /// the fallback stays in place, unchanged, for the shapes that genuinely have no admitted set.</para>
     ///
     /// Returns <c>(0, false, null)</c> when BOTH are absent (default <paramref
     /// name="fallbackBossConfigId"/> of 0, i.e. the heuristic never resolved a boss either) — the
