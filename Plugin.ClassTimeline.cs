@@ -86,55 +86,23 @@ public sealed partial class Plugin
     /// ~200 ms resolution is ample.</summary>
     private int _classTimelineThrottle;
 
-    // Illusion-Breaking Strength = attr 11440 (AttrSeasonStrength, AttrCatalog.g.cs). Cached per member off
-    // the SAME throttled GetAttributes read the class timeline already pays (owner 2026-08-15) so the row
-    // display never touches GetAttributes on the render path — the exact anti-pattern this throttle exists
-    // to avoid. Bounded by party size; cleared with the run in Clear().
-    private const int AttrSeasonStrengthId = 11440;
-    private readonly System.Collections.Generic.Dictionary<EntityId, long> _memberSeasonStrength = new();
-
     private void TickClassTimeline()
     {
         _classTimelineThrottle ^= 1;
         if (_classTimelineThrottle == 0) return;   // every other tick → ~5 Hz
         var self  = _services.CombatSnapshot.LocalEntityId;
         var nowMs = _services.CombatSnapshot.ServerNowMs;
-
-        // Season strength (Illusion-Breaking Strength) for every DISPLAYED party entity — self + the party
-        // roster — sampled UNCONDITIONALLY, in OR out of combat (owner: "no need to wait on fight"). Ability
-        // Score (GetFightPoint) shows for these regardless of combat, so this must match. Same
-        // IEntityDetail.GetAttributes read EntityInspector uses per target (Plugin.Header.cs's AttrOr). The
-        // _stats loop below additionally covers any list-mode / open-world combatant not in the party.
-        SampleSeasonStrength(self);
-        foreach (var m in _services.PartyRoster.Members) SampleSeasonStrength(m.EntityId);
-
         foreach (var id in _stats.Keys)
         {
             if (!id.IsPlayer) continue;
-            // ONE GetAttributes dict-copy per member per throttled tick (unchanged cost) — now yielding BOTH
-            // the profession (220) and the Illusion-Breaking Strength (11440).
-            var attrs = _services.EntityDetail.GetAttributes(id);
-            if (attrs.TryGetValue(AttrSeasonStrengthId, out var ss)) _memberSeasonStrength[id] = ss;
-            var prof = id == self ? _services.PlayerState.Profession
-                     : attrs.TryGetValue(AttrProfessionIdForTimeline, out var v) ? (int)v : 0;
+            var prof = id == self ? _services.PlayerState.Profession : ReadBroadcastProfession(id);
             if (prof == 0) continue;
             _classSpans.Observe(id.Value, prof, nowMs);
         }
     }
 
-    // Cache attr 11440 for one displayed entity — the EntityInspector read (IEntityDetail.GetAttributes),
-    // ~5 Hz, so BuildRowData never touches GetAttributes on the render path. No-op for a non-player or an
-    // entity whose attrs have not broadcast (leaves the cache untouched → Ability Score shows alone).
-    private void SampleSeasonStrength(EntityId id)
-    {
-        if (!id.IsPlayer) return;
-        if (_services.EntityDetail.GetAttributes(id).TryGetValue(AttrSeasonStrengthId, out var ss))
-            _memberSeasonStrength[id] = ss;
-    }
-
-    // The row's Illusion-Breaking Strength (0 when not yet sampled / not broadcast) — a cheap dict read for
-    // BuildRowData, never GetAttributes on the render path.
-    private long SeasonStrengthOf(EntityId id) => _memberSeasonStrength.TryGetValue(id, out var v) ? v : 0;
+    private int ReadBroadcastProfession(EntityId id)
+        => _services.EntityDetail.GetAttributes(id).TryGetValue(AttrProfessionIdForTimeline, out var v) ? (int)v : 0;
 
     /// <summary>Pure: writes each <c>[professionId, startMs, endMs]</c> triple into
     /// <paramref name="snap"/>'s parallel ClassSpan* arrays. Testable without services (mirrors
