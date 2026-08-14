@@ -283,6 +283,22 @@ public sealed partial class Plugin
     /// solo/unformed at both.</summary>
     internal static long LatchTeamId(long latched, long live) => latched != 0 ? latched : live;
 
+    /// <summary>Resolves the per-run dungeon-start timestamp an archived entry carries as
+    /// <c>DungeonStartMs</c>: the value LATCHED once at the run's first combat start
+    /// (<paramref name="latched"/>, Plugin.Capture.cs's <c>_lastRunStartMs</c>) wins outright when
+    /// non-zero; <paramref name="live"/> (a fresh <c>Dungeon.RunTimerStartMs</c> read) is only the
+    /// never-latched fallback (open-world has no dungeon timer → both are 0). SAME preference order and
+    /// pure shape as <see cref="LatchTeamId"/> / the <c>LevelUuid</c> latch (all prefer the mid-run
+    /// LATCHED value; live is only the latch==0 fallback). This exists because the game RE-STAMPS
+    /// <c>RunTimerStartMs</c> at run end (Victory/settlement, measured 680000 → 802000 on prod
+    /// sea/YvLLO3YSc8 + sea/yVfTrPylk7): a post-kill tail segment read live would carry a bogus start and
+    /// the server (keying identity on <c>&lt;levelUuid&gt;-&lt;dungeonStartMs/1000&gt;</c>) would split ONE
+    /// run into two pages. The latch is set ONCE per run and never re-latched per combat start (see
+    /// <c>_lastRunStartMs</c>'s doc in Plugin.cs), so the tail keeps the run's original start. This is the
+    /// READ side; the once-per-run SET side (0-retry) is the identically-shaped latch-else-live applied in
+    /// <c>EnsureCombatStarted</c>.</summary>
+    internal static long LatchRunStartMs(long latched, long live) => latched != 0 ? latched : live;
+
     /// <summary>Owner request 2026-08-05: the run page / meter must list EVERY party member IN THIS RUN,
     /// not only those who dealt or took damage in the archived window — a short archive can miss members
     /// who simply hadn't acted yet, so the roster looked incomplete. Ensures each in-instance party
@@ -349,7 +365,7 @@ public sealed partial class Plugin
             MasterModeScore  = clearSettlement?.MasterModeScore ?? 0,
             TotalScore       = clearSettlement?.TotalScore ?? 0,
             DifficultyLevel  = Math.Max(_difficultyAtCombatStart, _services.Dungeon.CurrentDifficulty),
-            DungeonStartMs   = _services.Dungeon.RunTimerStartMs,
+            DungeonStartMs   = LatchRunStartMs(_lastRunStartMs, _services.Dungeon.RunTimerStartMs),
             Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome, _clearedThisRun),
             Defeated         = _services.Dungeon.LastDefeatedCount,
             Trigger          = ResolveTriggerTag(reason),

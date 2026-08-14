@@ -100,6 +100,16 @@ public sealed partial class Plugin
         // to 0 on scene-leave, which may be exactly when the archive fires. ManualArchive uses this if the
         // live id is already 0 at archive time.
         _lastRunId     = _services.Dungeon.CurrentRunId;
+        // Latch the dungeon-start timestamp ONCE per run — the ONE critical difference from _lastRunId
+        // above (which re-latches every combat start because CurrentRunId is STABLE mid-run). RunTimerStartMs
+        // is UNSTABLE: the game re-stamps it at run end (Victory/settlement, measured 680000 → 802000 on
+        // prod sea/YvLLO3YSc8 + sea/yVfTrPylk7), so a post-kill tail segment's own combat start must NOT
+        // re-read it — that reset value is exactly what split one run into two server pages. The latch-else-
+        // live seam keeps an already-latched (non-zero) start untouched and only 0-retries while still
+        // unlatched, so a run whose timer wasn't ready at the first combat event picks it up on the next
+        // (open-world stays 0 → the archive falls back to live). Reset to 0 only at a confirmed run
+        // boundary (BankRunBoundary), never by Clear(). See _lastRunStartMs's doc in Plugin.cs.
+        _lastRunStartMs = LatchRunStartMs(_lastRunStartMs, _services.Dungeon.RunTimerStartMs);
         // Latch the party id (GrpcTeam team_id) too, for the same reason: the server keys a run's
         // identity on the party (docs/superpowers/specs/2026-08-04-run-identity-party-teamkey-design.md),
         // so a mid-run/post-run party change (member leaves, party disbands, re-forms) must not
