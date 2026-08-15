@@ -76,18 +76,25 @@ public sealed partial class Plugin
     // in-game validation of the offscreen uGUI→PNG pipeline before the rich v2 layout is built.
     internal void SendDiscordCardTest()
     {
-        var png = DiscordCardRenderer.RenderSpike(
-            "Depths of Decay — CLEAR · 04:27",
-            new[] { "1  Somay        1.35M dps", "2  巨刃守护者    1.06M dps", "3  峰ifdy        3.1K dps" },
-            s => _services.Log.Info(s));
-        if (png is null)
+        var purple = new UnityEngine.Color32(167, 139, 250, 255);
+        var green = new UnityEngine.Color32(74, 222, 128, 255);
+        var rows = new List<CardRow>
         {
-            _discordTestResult = "Card render failed — see log";
-            return;
-        }
+            new(1, "Somay", "Moonstrike", purple, true, 1.00f, "51,214", "361.9M", "36%", "1.35M", "1.49M active", "19% / 56%", "5.75M", "", "4.14M", "2"),
+            new(2, "Eiori", "Moonstrike", purple, false, 0.967f, "49,704", "353.5M", "35%", "1.32M", "1.32M active", "21% / 55%", "3.61M", "", "3.84M", "2"),
+            new(3, "Tampan", "Moonstrike", purple, false, 0.778f, "50,451", "284.5M", "28%", "1.06M", "1.17M active", "33% / 47%", "4.66M", "", "3.79M", "2"),
+            new(4, "NatalCharm", "Recovery", green, false, 0.048f, "47,199", "17.5M", "2%", "65.4K", "66.7K active", "45% / 4%", "20.4M", "531K HPS", "4.45M", "1"),
+            new(5, "巨刃守护者", "Lifebind", green, false, 0.012f, "46,725", "825.2K", "0%", "3.08K", "3.25K active", "14% / 5%", "67.1M", "251K HPS", "2.92M", "2"),
+        };
+        var totals = new CardRow(0, "", "", default, false, 0f, "", "1.02B", "", "3.80M", "", "", "86.6M", "", "52.6M", "9");
+        var model = new CardModel("Depths of Decay", "MASTER 20", "Forgotten Nightmare  ·  6 players  ·  SEA",
+            "CLEAR", green, "04:27", rows, totals, "Stellar CombatMeter", "logs.stellarresonance.app/run/sea/T54ZbOVly");
+
+        var png = DiscordCardRenderer.Render(model, s => _services.Log.Info(s));
+        if (png is null) { _discordTestResult = "Card render failed — see log"; return; }
         _discordTestResult = "Rendering… sending card";
         DiscordWebhookPoster.PostImage(_discordWebhookUrl, png,
-            "{\"content\":\"Card render spike — offscreen uGUI → PNG in-game.\"}",
+            "{\"content\":\"Card v2 layout — rendered in-game.\"}",
             onComplete: (ok, status, err) => _discordTestResult = ok ? "Card sent ✓" : $"Card failed: {(status == 0 ? err : status.ToString())}");
     }
 
