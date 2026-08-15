@@ -53,4 +53,15 @@ public class DiscordMessageBuilderTests
         Assert.Contains("\\\"", json);        // escaped quote present
         Assert.DoesNotContain("\n\nc", json); // raw newline from the name did not leak a bare LF into a JSON string
     }
+
+    [Fact]
+    public void Build_with_zero_combat_span_does_not_divide_by_zero()
+    {
+        // A heal-only tail archive has CombatDurationMs=0, so RunCombatSpanMs=0 is a reachable input.
+        // BuildTable guards with Math.Max(1L, RunCombatSpanMs); this pins that guard.
+        var summary = new DiscordRunSummary("map", "kill", 5000, 0,
+            new[] { new DiscordPlayerRow("Kai", 500_000, 120_000, 0) }, null);
+        var json = DiscordMessageBuilder.Build(summary);
+        Assert.Contains("Kai", json);
+    }
 }

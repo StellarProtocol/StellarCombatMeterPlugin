@@ -22,6 +22,11 @@ public sealed partial class Plugin
 
     private readonly record struct PendingDiscordPost(long LevelUuid, DiscordRunSummary Summary, long DeadlineMs);
     private readonly List<PendingDiscordPost> _discordPending = new();
+
+    // Keys on levelUuid, which is NOT run-unique in shared-instance content (world-boss instances /
+    // mid-dungeon relaunch share a levelUuid — see docs/recon/run-identity-relaunch-split.md). A
+    // shared-instance levelUuid therefore posts once per INSTANCE, not once per party's completed run
+    // (spec's "once per completed run" choice) — do NOT "fix" this into re-posting.
     private readonly HashSet<long> _discordPosted = new();
     private readonly Queue<long>   _discordPostedFifo = new();
 
