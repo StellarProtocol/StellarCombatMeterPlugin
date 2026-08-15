@@ -373,7 +373,7 @@ public sealed partial class Plugin
             Elites           = ResolveCurrentElites(),
         };
         // Post-build appliers, one per feature partial (last: Spec B buckets, Plugin.BucketStats.cs).
-        ApplyAttrRanges(entry); ApplyClassSpans(entry); ApplyBucketStats(entry);
+        ApplyAttrRanges(entry); ApplyClassSpans(entry); ApplySpecs(entry); ApplyBucketStats(entry);
         return entry;
     }
 

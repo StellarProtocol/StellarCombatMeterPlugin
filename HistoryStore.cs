@@ -181,6 +181,7 @@ internal static partial class HistoryStore
             w.Name("si").Value(s.SkillIds);
             w.Name("sl").Value(s.SkillLevels);
             w.Name("st").Value(s.SkillTiers);
+            w.Name("spec").Value(s.SpecId);   // authoritative cast-inferred spec, frozen at archive
             w.Name("fs").Value(s.FashionSlots);
             w.Name("fi").Value(s.FashionIds);
             w.Name("fc").Value(s.FashionDyeCounts);

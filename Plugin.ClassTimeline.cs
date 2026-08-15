@@ -95,6 +95,7 @@ public sealed partial class Plugin
         foreach (var id in _stats.Keys)
         {
             if (!id.IsPlayer) continue;
+            SampleSpec(id);   // cache the cast-inferred spec for the archive freeze (independent of the UI)
             var prof = id == self ? _services.PlayerState.Profession : ReadBroadcastProfession(id);
             if (prof == 0) continue;
             _classSpans.Observe(id.Value, prof, nowMs);
@@ -166,6 +167,19 @@ public sealed partial class Plugin
         {
             var spans = _classSpans.Spans(id.Value, entry.ArchivedAtMs);
             if (spans.Count > 0) WriteClassSpansToSnapshot(snap, spans);
+        }
+    }
+
+    // Freezes the authoritative cast-inferred spec per entity into its snapshot (mirrors ApplyClassSpans).
+    // Additive — touches NO verdict/run-id/latch/stage logic (archive-flow invariants preserved). The
+    // run spec cache (SampleSpec, run tick) keeps this correct even on a scene-change archive where the
+    // live spec service is already torn down.
+    private void ApplySpecs(EncounterHistoryEntry entry)
+    {
+        foreach (var (id, snap) in entry.Entities)
+        {
+            var sub = ResolveSpec(id);
+            if (sub > 0) snap.SpecId = sub;
         }
     }
 }

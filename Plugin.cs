@@ -338,6 +338,7 @@ public sealed partial class Plugin : IStellarPlugin
         EnsureReadyCheckSubscribed();
         TickRowMenuPlace();
         PumpClassIcons();
+        PumpDungeonIcon();
         TickEntitySnapshots(deltaTime);
         TickReadyCheckCooldown(deltaTime);
         TickReadyCheckResult(deltaTime);

@@ -47,6 +47,11 @@ internal sealed class EntitySnapshot
     public long[] ClassSpanStart = System.Array.Empty<long>();
     public long[] ClassSpanEnd   = System.Array.Empty<long>();
 
+    // Authoritative CAST-INFERRED sub-profession (spec) id, frozen at archive from the run's spec cache
+    // (see ApplySpecs / SampleSpec). Casts disambiguate the two specs of a class — the equipped loadout
+    // carries BOTH specs' signature skills and cannot. 0 = no spec observed this run / old entry.
+    public long SpecId;
+
     public int[] GearSlots   = System.Array.Empty<int>();
     public int[] GearItemIds = System.Array.Empty<int>();
 

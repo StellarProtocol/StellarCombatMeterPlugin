@@ -198,6 +198,7 @@ internal static partial class HistoryStore
                     case "si":  return ReadIntArray(r, out s.SkillIds);
                     case "sl":  return ReadIntArray(r, out s.SkillLevels);
                     case "st":  return ReadIntArray(r, out s.SkillTiers);
+                    case "spec": return ReadLong(r, out s.SpecId);
                     case "fs":  return ReadIntArray(r, out s.FashionSlots);
                     case "fi":  return ReadIntArray(r, out s.FashionIds);
                     case "fc":  return ReadIntArray(r, out s.FashionDyeCounts);
