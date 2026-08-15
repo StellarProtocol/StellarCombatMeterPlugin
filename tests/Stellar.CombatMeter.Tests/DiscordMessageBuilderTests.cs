@@ -66,20 +66,20 @@ public class DiscordMessageBuilderTests
     }
 
     [Fact]
-    public void Build_pads_names_by_display_width_and_right_aligns_numbers()
+    public void Build_puts_name_last_so_cjk_width_cannot_shift_numeric_columns()
     {
-        // CJK glyphs are 2 monospace cells in Discord's code block; padding by char-count would shove
-        // the later columns out of line (the bug the owner saw). The name column pads to 14 DISPLAY
-        // cells and the numbers are right-aligned.
+        // Discord's code-block font renders CJK between 1 and 2 ASCII cells, so a name-FIRST column can't
+        // be aligned by any integer per-glyph width (owner report). Numbers are emitted first
+        // (right-aligned, pure ASCII), the name LAST — so a CJK name cannot shift the numeric columns.
         var json = DiscordMessageBuilder.Build(new DiscordRunSummary("m", "kill", 1000, 1000, new[]
         {
-            new DiscordPlayerRow("Revette", 543_600, 0, 0),   // 7 ASCII cells
-            new DiscordPlayerRow("巨刃守护者", 829, 0, 3),       // 5 CJK glyphs = 10 cells
+            new DiscordPlayerRow("Revette", 543_600, 0, 100),
+            new DiscordPlayerRow("巨刃守护者", 829, 0, 3),
         }, null));
 
-        Assert.Contains("Revette" + new string(' ', 7), json);   // 14 - 7 = 7 trailing pad cells
-        Assert.Contains("巨刃守护者" + new string(' ', 4), json);   // 14 - 10 = 4 trailing pad cells
-        Assert.Contains("  543.6K", json);                       // right-aligned in 8 → 2 leading spaces
-        Assert.Contains("     829", json);                       // right-aligned in 8 → 5 leading spaces
+        Assert.Contains("  543.6K", json);      // DPS right-aligned in 8 → 2 leading spaces
+        Assert.Contains("     829", json);      // DPS right-aligned in 8 → 5 leading spaces
+        Assert.Contains("100  Revette", json);  // name follows the Taken value (name is LAST)
+        Assert.Contains("3  巨刃守护者", json);    // CJK name is also last, after its Taken value
     }
 }
