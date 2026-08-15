@@ -1,6 +1,7 @@
 // Plugin.DiscordWebhook.cs
 using System.Collections.Generic;
 using System.Linq;
+using Stellar.Abstractions.Domain.GameData;
 using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
@@ -71,10 +72,98 @@ public sealed partial class Plugin
             (ok, status, err) => _discordTestResult = ok ? "Sent ✓" : $"Failed: {(status == 0 ? err : status.ToString())}");
     }
 
-    // Phase-1 card spike: renders a minimal card image IN-GAME (main thread, from the settings button) and
-    // posts it as a webhook attachment. Falls back to a text note if the render returns null. This is the
-    // in-game validation of the offscreen uGUI→PNG pipeline before the rich v2 layout is built.
+    // Renders the run card IN-GAME (main thread, from the settings button) from your latest banked run's
+    // REAL stats (falls back to the sample if no run yet) and posts it as a webhook attachment.
     internal void SendDiscordCardTest()
+    {
+        var model = BuildCardFromLatestRun() ?? SampleCardModel();
+        var png = DiscordCardRenderer.Render(model, s => _services.Log.Info(s));
+        if (png is null) { _discordTestResult = "Card render failed — see log"; return; }
+        _discordTestResult = "Rendering… sending card";
+        DiscordWebhookPoster.PostImage(_discordWebhookUrl, png,
+            "{\"content\":\"Run card — rendered in-game.\"}",
+            onComplete: (ok, status, err) => _discordTestResult = ok ? "Card sent ✓" : $"Card failed: {(status == 0 ? err : status.ToString())}");
+    }
+
+    private sealed class CardAgg
+    {
+        public long Dmg, Heal, Taken, Top, First, Last, Fp, Prof;
+        public int Hits, Crits, Luckys, Deaths;
+        public string Name = "";
+    }
+
+    // Builds the card model from the most-recent banked run's REAL per-player stats; null if no run yet.
+    private CardModel? BuildCardFromLatestRun()
+    {
+        if (_history.Count == 0) return null;
+        long runId = _history[^1].LevelUuid;
+        var entries = _history.Where(e => e.LevelUuid == runId).OrderBy(e => e.EnteredAtMs).ToList();
+        if (entries.Count == 0) return null;
+
+        var agg = new Dictionary<long, CardAgg>();
+        foreach (var e in entries)
+            foreach (var kv in e.Entities)
+            {
+                if (!agg.TryGetValue(kv.Key.Value, out var a)) { a = new CardAgg(); agg[kv.Key.Value] = a; }
+                if (string.IsNullOrEmpty(a.Name)) a.Name = string.IsNullOrEmpty(kv.Value.Name) ? kv.Key.Value.ToString() : kv.Value.Name!;
+                if (kv.Value.FightPoint > a.Fp) a.Fp = kv.Value.FightPoint;
+                if (a.Prof == 0 && kv.Value.ClassSpanProf.Length > 0) a.Prof = kv.Value.ClassSpanProf[^1];
+                if (e.Stats.TryGetValue(kv.Key, out var s))
+                {
+                    a.Dmg += s.TotalDamage; a.Heal += s.TotalHealing; a.Taken += s.TotalTaken;
+                    a.Hits += s.Hits; a.Crits += s.Crits; a.Luckys += s.Luckys; a.Deaths += s.Deaths;
+                    if (s.TopHit > a.Top) a.Top = s.TopHit;
+                    if (s.FirstHitMs > 0) a.First = a.First == 0 ? s.FirstHitMs : System.Math.Min(a.First, s.FirstHitMs);
+                    if (s.LastHitMs > a.Last) a.Last = s.LastHitMs;
+                }
+            }
+        if (agg.Count == 0) return null;
+
+        long combat = System.Math.Max(1, entries.Sum(e => e.CombatDurationMs));
+        long totalDmg = agg.Values.Sum(a => a.Dmg);
+        long maxDmg = System.Math.Max(1, agg.Values.Max(a => a.Dmg));
+
+        var rows = new List<CardRow>();
+        int rank = 0;
+        foreach (var a in agg.Values.OrderByDescending(a => a.Dmg))
+        {
+            rank++;
+            int prof = (int)a.Prof, parent = RoleClassifier.ParentProfession(prof);
+            var role = RoleClassifier.Classify(parent != 0 ? parent : prof);
+            var color = role == Role.Healer ? new UnityEngine.Color32(74, 222, 128, 255)
+                      : role == Role.Tank ? new UnityEngine.Color32(77, 160, 225, 255)
+                      : new UnityEngine.Color32(167, 139, 250, 255);
+            string cls = ProfessionSpecs.Name(prof) is { Length: > 0 } n ? n : role.ToString();
+            long active = System.Math.Max(1, a.Last - a.First);
+            int critPct = a.Hits > 0 ? (int)System.Math.Round(a.Crits * 100.0 / a.Hits) : 0;
+            int luckyPct = a.Hits > 0 ? (int)System.Math.Round(a.Luckys * 100.0 / a.Hits) : 0;
+            rows.Add(new CardRow(rank, a.Name, cls, color, rank == 1, (float)(a.Dmg / (double)maxDmg),
+                a.Fp.ToString("N0"), FormatAmount(a.Dmg), totalDmg > 0 ? $"{a.Dmg * 100 / totalDmg}%" : "0%",
+                FormatAmount(a.Dmg * 1000 / combat), FormatAmount(a.Dmg * 1000 / active) + " active",
+                $"{critPct}% / {luckyPct}%", FormatAmount(a.Heal),
+                a.Heal > 0 ? FormatAmount(a.Heal * 1000 / combat) + " HPS" : "",
+                FormatAmount(a.Taken), a.Deaths.ToString()));
+            if (rows.Count >= 10) break;
+        }
+
+        var totals = new CardRow(0, "", "", default, false, 0f, "", FormatAmount(totalDmg), "",
+            FormatAmount(totalDmg * 1000 / combat), "", "", FormatAmount(agg.Values.Sum(a => a.Heal)), "",
+            FormatAmount(agg.Values.Sum(a => a.Taken)), agg.Values.Sum(a => a.Deaths).ToString());
+
+        var p = entries[^1];
+        string verdict = p.Result == "kill" ? "CLEAR" : "PARTIAL";
+        var vColor = p.Result == "kill" ? new UnityEngine.Color32(74, 222, 128, 255) : new UnityEngine.Color32(255, 196, 85, 255);
+        string region = _services.GameEnvironment.Region.ToString().ToUpperInvariant();
+        long realMs = System.Math.Max(0, entries[^1].ArchivedAtMs - entries[0].EnteredAtMs);
+        string link = ResolveShareableRunLink(entries) is { } url
+            ? url.Replace("https://", "").Replace("http://", "") : "logs.stellarresonance.app";
+        return new CardModel(ResolveSceneName(p.SceneName), "", $"{agg.Count} players  ·  {region}",
+            verdict, vColor, FormatClock(realMs), rows, totals, "Stellar CombatMeter", link);
+    }
+
+    private static string FormatClock(long ms) { long s = System.Math.Max(0, ms) / 1000; return $"{s / 60:00}:{s % 60:00}"; }
+
+    private static CardModel SampleCardModel()
     {
         var purple = new UnityEngine.Color32(167, 139, 250, 255);
         var green = new UnityEngine.Color32(74, 222, 128, 255);
@@ -82,20 +171,11 @@ public sealed partial class Plugin
         {
             new(1, "Somay", "Moonstrike", purple, true, 1.00f, "51,214", "361.9M", "36%", "1.35M", "1.49M active", "19% / 56%", "5.75M", "", "4.14M", "2"),
             new(2, "Eiori", "Moonstrike", purple, false, 0.967f, "49,704", "353.5M", "35%", "1.32M", "1.32M active", "21% / 55%", "3.61M", "", "3.84M", "2"),
-            new(3, "Tampan", "Moonstrike", purple, false, 0.778f, "50,451", "284.5M", "28%", "1.06M", "1.17M active", "33% / 47%", "4.66M", "", "3.79M", "2"),
-            new(4, "NatalCharm", "Recovery", green, false, 0.048f, "47,199", "17.5M", "2%", "65.4K", "66.7K active", "45% / 4%", "20.4M", "531K HPS", "4.45M", "1"),
             new(5, "巨刃守护者", "Lifebind", green, false, 0.012f, "46,725", "825.2K", "0%", "3.08K", "3.25K active", "14% / 5%", "67.1M", "251K HPS", "2.92M", "2"),
         };
         var totals = new CardRow(0, "", "", default, false, 0f, "", "1.02B", "", "3.80M", "", "", "86.6M", "", "52.6M", "9");
-        var model = new CardModel("Depths of Decay", "MASTER 20", "Forgotten Nightmare  ·  6 players  ·  SEA",
+        return new CardModel("Depths of Decay", "MASTER 20", "6 players  ·  SEA",
             "CLEAR", green, "04:27", rows, totals, "Stellar CombatMeter", "logs.stellarresonance.app/run/sea/T54ZbOVly");
-
-        var png = DiscordCardRenderer.Render(model, s => _services.Log.Info(s));
-        if (png is null) { _discordTestResult = "Card render failed — see log"; return; }
-        _discordTestResult = "Rendering… sending card";
-        DiscordWebhookPoster.PostImage(_discordWebhookUrl, png,
-            "{\"content\":\"Card v2 layout — rendered in-game.\"}",
-            onComplete: (ok, status, err) => _discordTestResult = ok ? "Card sent ✓" : $"Card failed: {(status == 0 ? err : status.ToString())}");
     }
 
     // Read-only observer — called at the END of BankRunBoundary (Plugin.RunBoundary.cs), after the
