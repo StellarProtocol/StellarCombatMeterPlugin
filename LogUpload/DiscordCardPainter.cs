@@ -67,6 +67,26 @@ internal sealed class Painter
             }
     }
 
+    // Rounded rect filled with a gradient (horizontal → across x, else vertical → down y).
+    internal void RoundedGrad(int x, int y, int w, int h, float r, Color32 c0, Color32 c1, bool horizontal)
+    {
+        r = Mathf.Min(r, Mathf.Min(w, h) / 2f);
+        float cx = x + w / 2f, cy = y + h / 2f, hw = w / 2f, hh = h / 2f;
+        int x1 = Mathf.Clamp(x + w, 0, _w), y1 = Mathf.Clamp(y + h, 0, _h);
+        for (int yy = Mathf.Max(0, y); yy < y1; yy++)
+            for (int xx = Mathf.Max(0, x); xx < x1; xx++)
+            {
+                float qx = Mathf.Abs(xx + 0.5f - cx) - (hw - r);
+                float qy = Mathf.Abs(yy + 0.5f - cy) - (hh - r);
+                float d = Mathf.Sqrt(Mathf.Max(qx, 0) * Mathf.Max(qx, 0) + Mathf.Max(qy, 0) * Mathf.Max(qy, 0))
+                          + Mathf.Min(Mathf.Max(qx, qy), 0) - r;
+                float cov = Mathf.Clamp01(0.5f - d);
+                if (cov <= 0) continue;
+                float t = horizontal ? (xx - x) / (float)w : (yy - y) / (float)h;
+                Blend(yy * _w + xx, Color32.Lerp(c0, c1, t), cov);
+            }
+    }
+
     internal float Measure(string s, int size, FontStyle style)
     {
         float x = 0;

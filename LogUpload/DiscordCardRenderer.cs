@@ -84,23 +84,26 @@ internal static class DiscordCardRenderer
     {
         g.VGradient(0, 0, W, HeaderH, HeaderTop, HeaderBot);
         g.Fill(0, HeaderH - 2, W, 2, Divider);
-        g.Text(m.Title, 28, FontStyle.Bold, Pad, 38, Primary);
+        const int bs = 52, by = 16;
+        int hx = Pad + bs + 16;
+        g.RoundedGrad(Pad, by, bs, bs, 13, new Color32(124, 92, 255, 255), new Color32(77, 208, 225, 255), false);
+        g.Text(m.Title, 28, FontStyle.Bold, hx, 42, Primary);
         float tw = g.Measure(m.Title, 28, FontStyle.Bold);
         if (!string.IsNullOrEmpty(m.Difficulty))
         {
-            int bx = Pad + (int)tw + 14, bw = (int)g.Measure(m.Difficulty, 13, FontStyle.Bold) + 20;
-            g.Rounded(bx, 20, bw, 24, 7, new Color32(255, 196, 85, 36));
-            g.Text(m.Difficulty, 13, FontStyle.Bold, bx + 10, 37, Gold);
+            int bx = hx + (int)tw + 14, bw = (int)g.Measure(m.Difficulty, 13, FontStyle.Bold) + 20;
+            g.Rounded(bx, 24, bw, 24, 7, new Color32(255, 196, 85, 36));
+            g.Text(m.Difficulty, 13, FontStyle.Bold, bx + 10, 41, Gold);
         }
-        g.Text(m.Sub, 14, FontStyle.Normal, Pad, 66, Muted);
+        g.Text(m.Sub, 14, FontStyle.Normal, hx, 68, Muted);
         // verdict pill (right of the clock block)
         int cw = (int)g.Measure(m.Clock, 24, FontStyle.Bold);
-        g.TextRight(m.Clock, 24, FontStyle.Bold, W - Pad, 40, Primary);
-        g.TextRight("ENCOUNTER", 11, FontStyle.Bold, W - Pad, 62, Head);
+        g.TextRight(m.Clock, 24, FontStyle.Bold, W - Pad, 42, Primary);
+        g.TextRight("ENCOUNTER", 11, FontStyle.Bold, W - Pad, 64, Head);
         int pw = (int)g.Measure(m.Verdict, 13, FontStyle.Bold) + 24;
         int px = W - Pad - cw - 18 - pw;
-        g.Rounded(px, 26, pw, 26, 13, Mul(m.VerdictColor, 0.20f));
-        g.Text(m.Verdict, 13, FontStyle.Bold, px + 12, 43, m.VerdictColor);
+        g.Rounded(px, 28, pw, 26, 13, Mul(m.VerdictColor, 0.20f));
+        g.Text(m.Verdict, 13, FontStyle.Bold, px + 12, 45, m.VerdictColor);
     }
 
     private static void DrawColumnHeaders(Painter g, int y)
@@ -139,10 +142,11 @@ internal static class DiscordCardRenderer
             g.Text("MVP", 10, FontStyle.Bold, mx + 7, y + 31, Gold);
         }
         g.TextRight(r.Score, 15, FontStyle.Normal, ScoreR, mid + 3, new Color32(223, 227, 236, 255));
-        // damage bar
-        g.Rounded(DmgX, y + 14, DmgW, 34, 6, new Color32(255, 255, 255, 10));
-        int fw = Mathf.Clamp((int)(DmgW * r.DmgShare), 2, DmgW);
-        g.Rounded(DmgX, y + 14, fw, 34, 6, Mul(r.Role, 0.9f, 90));
+        // damage bar (dark track + bright→faded class-colour gradient fill)
+        g.Rounded(DmgX, y + 14, DmgW, 34, 6, new Color32(255, 255, 255, 12));
+        int fw = Mathf.Clamp((int)(DmgW * r.DmgShare), 3, DmgW);
+        g.RoundedGrad(DmgX, y + 14, fw, 34, 6,
+            new Color32(r.Role.r, r.Role.g, r.Role.b, 225), new Color32(r.Role.r, r.Role.g, r.Role.b, 95), true);
         g.Text(r.Damage, 15, FontStyle.Bold, DmgX + 12, mid + 6, Primary);
         g.Text(r.DmgPct, 12, FontStyle.Normal, DmgX + 12 + (int)g.Measure(r.Damage, 15, FontStyle.Bold) + 8, mid + 6, Muted);
         // dps + active
@@ -194,14 +198,26 @@ internal static class DiscordCardRenderer
 
     private static Color32[]? ReadAtlasForModel(Font font, CardModel m, out int w, out int h, Action<string> log)
     {
-        // Request every glyph at every size BEFORE reading the atlas (a request can rebuild it).
-        void Req(string s, int sz, FontStyle st) { if (!string.IsNullOrEmpty(s)) font.RequestCharactersInTexture(s, sz, st); }
+        var sb = new System.Text.StringBuilder();
+        void A(string? s) { if (!string.IsNullOrEmpty(s)) sb.Append(s).Append(' '); }
+        A(m.Title); A(m.Difficulty); A(m.Sub); A(m.Verdict); A(m.Clock); A(m.Footer); A(m.Link);
+        foreach (var r in m.Rows)
+        {
+            A(r.Name); A(r.Class); A(r.Score); A(r.Damage); A(r.DmgPct); A(r.Dps);
+            A(r.Active); A(r.CritLucky); A(r.Healing); A(r.Hps); A(r.Taken); A(r.Deaths); A(r.Rank.ToString());
+        }
+        var t = m.Totals;
+        A(t.Damage); A(t.Dps); A(t.Healing); A(t.Taken); A(t.Deaths);
+        sb.Append("ENCOUNTER PLAYER SCORE TOTAL DAMAGE DPS CRIT/LUCKY HEAL TAKEN DIE PARTY MVP HPS active # ");
+        sb.Append("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,%/:·- ");
+        var all = sb.ToString();
+        // EVERY glyph at EVERY size in BOTH styles must be requested BEFORE the readback — a request can
+        // rebuild/resize the atlas and invalidate earlier UVs. (The garbled sub-line/footer link were
+        // Normal-style glyphs that were only requested in Bold, so they were dropped at draw time.)
         foreach (int sz in new[] { 10, 11, 12, 13, 14, 15, 17, 24, 28 })
         {
-            Req(m.Title + m.Difficulty + m.Sub + m.Verdict + m.Clock + m.Footer + m.Link +
-                "ENCOUNTER PLAYER SCORE TOTAL DAMAGE DPS CRIT/LUCKY HEAL TAKEN DIE PARTY 0123456789.%KMB", sz, FontStyle.Bold);
-            Req("MVP HPS active", sz, FontStyle.Normal);
-            foreach (var r in m.Rows) { Req(r.Name + r.Class + r.Damage + r.DmgPct + r.Dps + r.Active + r.CritLucky + r.Healing + r.Hps + r.Taken + r.Deaths + r.Score + r.Rank, sz, FontStyle.Bold); Req(r.Name + r.Class + r.Dps + r.Active + r.CritLucky + r.Score, sz, FontStyle.Normal); }
+            font.RequestCharactersInTexture(all, sz, FontStyle.Bold);
+            font.RequestCharactersInTexture(all, sz, FontStyle.Normal);
         }
         return ReadAtlas(font, log, out w, out h);
     }
