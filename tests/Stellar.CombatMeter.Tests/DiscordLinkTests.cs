@@ -41,4 +41,21 @@ public class DiscordLinkTests
     [Fact]
     public void PickShareable_null_when_none_qualify()
         => Assert.Null(DiscordLink.PickShareable(new List<(long, bool, string?)> { (1, false, "x"), (2, true, "/run/sea/123") }));
+
+    [Fact]
+    public void MaskWebhook_keeps_host_and_id_but_hides_the_token()
+    {
+        var m = DiscordLink.MaskWebhook("https://discord.com/api/webhooks/1538054088229396582/j8AryfEXQ0Le2Gv8xG3");
+        Assert.Contains("discord.com/api/webhooks/1538054088229396582/", m);
+        Assert.DoesNotContain("j8AryfEXQ0Le2Gv8xG3", m);   // full token never shown
+        Assert.Contains("j8Ar", m);                         // first 4 of the token, for recognition
+        Assert.DoesNotContain("https://", m);               // scheme stripped for brevity
+    }
+
+    [Fact]
+    public void MaskWebhook_passthrough_for_non_webhook_and_empty()
+    {
+        Assert.Equal("", DiscordLink.MaskWebhook(""));
+        Assert.Equal("https://evil.com/x", DiscordLink.MaskWebhook("https://evil.com/x"));
+    }
 }

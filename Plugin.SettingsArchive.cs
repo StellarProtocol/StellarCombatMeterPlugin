@@ -68,7 +68,7 @@ public sealed partial class Plugin
                 new TextElement(() => "URL", MutedCol, Width: 40f),
                 new InputElement(() => DiscordWebhookUrl, s => DiscordWebhookUrl = s, 300f, OnChange: s => DiscordWebhookUrl = s),
             }, Gap: 6f),
-            new TextElement(() => "   Paste a Discord channel webhook URL (discord.com/api/webhooks/…).", MutedCol),
+            new TextElement(DiscordUrlStatus, MutedCol),
             new TextElement(() => "   Post for:", MutedCol),
         };
         foreach (ContentKind k in System.Enum.GetValues(typeof(ContentKind)))
@@ -80,6 +80,20 @@ public sealed partial class Plugin
             new TextElement(() => DiscordTestResult, MutedCol),
         }, Gap: 6f));
         return rows;
+    }
+
+    // Readability workaround: the framework InputElement renders a white field with (in this dark panel)
+    // light text, so the pasted URL is unreadable and it cannot be restyled from the plugin. This line
+    // beneath the field shows a validity check + a MASKED view of the stored URL (token hidden — the
+    // settings panel gets screenshotted), so the user can confirm what they pasted.
+    private string DiscordUrlStatus()
+    {
+        var url = DiscordWebhookUrl;
+        if (string.IsNullOrWhiteSpace(url))
+            return "   Paste your Discord channel webhook URL (discord.com/api/webhooks/…).";
+        return DiscordLink.IsValidWebhookUrl(url)
+            ? "   ✓ " + DiscordLink.MaskWebhook(url)
+            : "   ✗ Not a Discord webhook URL — check the link.";
     }
 
     private HudElement BuildAutoArchiveSettingsRoot()

@@ -44,4 +44,24 @@ internal static class DiscordLink
             }
         return best;
     }
+
+    /// <summary>Display form of a webhook URL for the settings panel: drops the scheme, keeps the host +
+    /// webhook id, and masks the secret token (it would leak in a shared screenshot). Returns the input
+    /// unchanged if it is not an <c>/api/webhooks/</c> URL.</summary>
+    internal static string MaskWebhook(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return "";
+        const string marker = "/api/webhooks/";
+        var i = url!.IndexOf(marker, StringComparison.Ordinal);
+        if (i < 0) return url;
+        var head = url.Substring(0, i + marker.Length).Replace("https://", "").Replace("http://", "");
+        var rest = url.Substring(i + marker.Length);          // {id}/{token}
+        var slash = rest.IndexOf('/');
+        if (slash < 0) return head + rest;                    // no token yet
+        var id = rest.Substring(0, slash);
+        var token = rest.Substring(slash + 1);
+        var masked = token.Length <= 8 ? new string('•', token.Length)
+            : token.Substring(0, 4) + "…" + token.Substring(token.Length - 4);
+        return head + id + "/" + masked;
+    }
 }
