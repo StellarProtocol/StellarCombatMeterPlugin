@@ -10,7 +10,18 @@ namespace Stellar.CombatMeter.LogUpload;
 /// post. MUST run on the Unity main thread. Heavily logged so the first in-game run is diagnostic.</summary>
 internal static class DiscordCardRenderer
 {
+    // Dedicated layer for the offscreen card so the camera renders ONLY the card, never the game
+    // world/skybox. UI (5) is conventional for a UI-only camera; nothing world-space sits in this
+    // tiny ortho frustum.
+    private const int CardLayer = 5;
+
     private static Font? _font;
+
+    private static void SetLayerRecursive(Transform t, int layer)
+    {
+        t.gameObject.layer = layer;
+        for (int i = 0; i < t.childCount; i++) SetLayerRecursive(t.GetChild(i), layer);
+    }
 
     internal static byte[]? RenderSpike(string title, string[] lines, Action<string> log)
     {
@@ -32,10 +43,14 @@ internal static class DiscordCardRenderer
             var camGo = new GameObject("cam");
             camGo.transform.SetParent(root.transform, false);
             var cam = camGo.AddComponent<Camera>();
+            cam.enabled = false;                 // we call Render() ourselves; don't render every frame
             cam.orthographic = true;
             cam.orthographicSize = H / 2f;
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.05f, 0.06f, 0.09f, 1f);
+            cam.cullingMask = 1 << CardLayer;    // ONLY the card — not the game world/skybox (spike-1 bug)
+            cam.allowHDR = false;
+            cam.allowMSAA = false;
             cam.nearClipPlane = 0.01f;
             cam.farClipPlane = 100f;
             cam.targetTexture = rt;
@@ -57,6 +72,7 @@ internal static class DiscordCardRenderer
                 AddText(canvas.transform, lines[i], font, 17, new Color(0.87f, 0.90f, 0.95f, 1f), 20, y, W - 40, 34);
             }
 
+            SetLayerRecursive(root.transform, CardLayer);   // put camera + canvas + widgets on the culled layer
             cam.Render();
             RenderTexture.active = rt;
             tex = new Texture2D(W, H, TextureFormat.RGBA32, false);
