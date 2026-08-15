@@ -68,4 +68,33 @@ public class DiscordRunAggregatorTests
         Assert.Empty(s.Rows);
         Assert.Equal("partial", s.Verdict);
     }
+
+    [Fact]
+    public void Aggregate_verdict_is_last_entry_result_when_no_kill()
+    {
+        var entries = new List<Plugin.EncounterHistoryEntry>
+        {
+            Entry("1201", "partial", 3000, 1000, 4000, (1, "Void", 100, 0, 0)),
+            Entry("1201", "aborted", 3000, 4000, 8000, (1, "Void", 200, 0, 0)),  // later EnteredAtMs
+        };
+        var s = DiscordRunAggregator.Aggregate(entries);
+        Assert.Equal("aborted", s.Verdict);
+    }
+
+    [Fact]
+    public void Aggregate_row_name_falls_back_to_entity_id_when_snapshot_name_is_null()
+    {
+        var e = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "1201", Result = "partial", CombatDurationMs = 1000,
+            EnteredAtMs = 0, ArchivedAtMs = 1000, LevelUuid = 42,
+        };
+        e.Entities[new EntityId(9)] = new EntitySnapshot { Name = null };
+        e.Stats[new EntityId(9)] = new SourceStats { TotalDamage = 500 };
+
+        var s = DiscordRunAggregator.Aggregate(new List<Plugin.EncounterHistoryEntry> { e });
+
+        Assert.Single(s.Rows);
+        Assert.Equal("9", s.Rows[0].Name);
+    }
 }
