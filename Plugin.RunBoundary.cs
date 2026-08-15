@@ -69,6 +69,7 @@ public sealed partial class Plugin
     // unconditionally above that guard.
     private void BankRunBoundary(AutoArchive.ArchiveReason reason)
     {
+        var outgoingRunId = _lastRunId;   // captured BEFORE the archive zeroes the latch below
         ManualArchive(reason);
         // The outgoing run is now archived under its OWN latched id (LevelUuid = _lastRunId) — clear the
         // latch so a later archive (an empty scene hop, or the next floor before its own combat
@@ -104,6 +105,7 @@ public sealed partial class Plugin
         // dropped/skip-empty/suppressed archive attempt must not leave this latch pinned past its own
         // run boundary. CAPTURE ONLY either way — no engine/verdict impact.
         _segmentElites = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        NotifyDiscordRunEnded(outgoingRunId);   // read-only downstream observer (Plugin.DiscordWebhook.cs)
     }
 
     // The ONE run-boundary bank+reset block (spec §3 COMMIT), composed of the two halves above. Called
