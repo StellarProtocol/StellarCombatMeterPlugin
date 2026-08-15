@@ -544,7 +544,7 @@ public sealed partial class Plugin : IStellarPlugin
         return false;
     }
 
-    private static string FormatAmount(long v)
+    internal static string FormatAmount(long v)
     {
         if (v < 0) v = 0;
         if (v >= 1_000_000) return $"{v / 1_000_000f:F1}M";
