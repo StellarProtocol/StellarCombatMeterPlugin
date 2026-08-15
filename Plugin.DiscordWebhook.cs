@@ -71,6 +71,26 @@ public sealed partial class Plugin
             (ok, status, err) => _discordTestResult = ok ? "Sent ✓" : $"Failed: {(status == 0 ? err : status.ToString())}");
     }
 
+    // Phase-1 card spike: renders a minimal card image IN-GAME (main thread, from the settings button) and
+    // posts it as a webhook attachment. Falls back to a text note if the render returns null. This is the
+    // in-game validation of the offscreen uGUI→PNG pipeline before the rich v2 layout is built.
+    internal void SendDiscordCardTest()
+    {
+        var png = DiscordCardRenderer.RenderSpike(
+            "Depths of Decay — CLEAR · 04:27",
+            new[] { "1  Somay        1.35M dps", "2  巨刃守护者    1.06M dps", "3  峰ifdy        3.1K dps" },
+            s => _services.Log.Info(s));
+        if (png is null)
+        {
+            _discordTestResult = "Card render failed — see log";
+            return;
+        }
+        _discordTestResult = "Rendering… sending card";
+        DiscordWebhookPoster.PostImage(_discordWebhookUrl, png,
+            "{\"content\":\"Card render spike — offscreen uGUI → PNG in-game.\"}",
+            onComplete: (ok, status, err) => _discordTestResult = ok ? "Card sent ✓" : $"Card failed: {(status == 0 ? err : status.ToString())}");
+    }
+
     // Read-only observer — called at the END of BankRunBoundary (Plugin.RunBoundary.cs), after the
     // outgoing run is fully banked, with the id captured before _lastRunId was zeroed.
     private void NotifyDiscordRunEnded(long levelUuid)

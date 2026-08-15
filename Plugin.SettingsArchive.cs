@@ -76,7 +76,8 @@ public sealed partial class Plugin
         rows.Add(new RowElement(new HudElement[]
         {
             new SpacerElement(Width: 8f),
-            new ButtonElement(() => "Send test message", SendDiscordTest, Width: 160f),
+            new ButtonElement(() => "Send test message", SendDiscordTest, Width: 150f),
+            new ButtonElement(() => "Send test card", SendDiscordCardTest, Width: 140f),
             new TextElement(() => DiscordTestResult, MutedCol),
         }, Gap: 6f));
         return rows;
