@@ -22,11 +22,15 @@ internal static class DiscordMessageBuilder
         return sb.ToString();
     }
 
+    // Column display widths (monospace CELLS, not chars — CJK/emoji occupy 2). Name is left-aligned;
+    // the numeric columns are right-aligned so magnitudes line up.
+    private const int RankW = 2, NameW = 14, NumW = 8;
+
     private static string BuildTable(DiscordRunSummary s)
     {
         var span = System.Math.Max(1L, s.RunCombatSpanMs);
         var table = new StringBuilder();
-        table.Append("#  Name        DPS     HPS     Taken\n");
+        table.Append(Row("#", "Name", "DPS", "HPS", "Taken")).Append('\n');
         int rank = 0;
         foreach (var r in s.Rows)
         {
@@ -34,16 +38,55 @@ internal static class DiscordMessageBuilder
             rank++;
             var dps = Plugin.FormatAmount(r.Damage * 1000L / span);
             var hps = Plugin.FormatAmount(r.Healing * 1000L / span);
-            var taken = Plugin.FormatAmount(r.Taken);
-            table.Append($"{rank,-2} {Pad(Sanitize(r.Name), 11)} {Pad(dps, 7)} {Pad(hps, 7)} {taken}\n");
+            table.Append(Row(rank.ToString(), Sanitize(r.Name), dps, hps, Plugin.FormatAmount(r.Taken))).Append('\n');
         }
 
         return "```\n" + table + "```";
     }
 
+    // One monospace table line. The number columns are right-aligned; the name is left-aligned and
+    // truncated by DISPLAY width so a CJK/emoji name (2 cells per glyph in Discord's code-block font)
+    // doesn't shove the later columns out of alignment.
+    private static string Row(string rank, string name, string dps, string hps, string taken)
+        => PadRight(rank, RankW) + " " + PadRight(name, NameW) + " " +
+           PadLeft(dps, NumW) + " " + PadLeft(hps, NumW) + " " + PadLeft(taken, NumW);
+
     private static string Sanitize(string? v) => (v ?? "").Replace('\n', ' ').Replace('\r', ' ').Replace("`", "'");
 
-    private static string Pad(string v, int width) => v.Length >= width ? v.Substring(0, width) : v.PadRight(width);
+    // CJK/fullwidth code points render as 2 cells in a monospace code block; astral (surrogate-pair)
+    // code points (emoji) are treated as 2 and never split.
+    private static bool IsWide(char c)
+        => (c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0x303E) || (c >= 0x3041 && c <= 0x33FF)
+        || (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xA000 && c <= 0xA4CF)
+        || (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F)
+        || (c >= 0xFF00 && c <= 0xFF60) || (c >= 0xFFE0 && c <= 0xFFE6);
+
+    // Truncate to at most `width` display cells; returns the substring and its actual display width.
+    private static (string Text, int Width) TruncateToWidth(string v, int width)
+    {
+        int w = 0, i = 0;
+        while (i < v.Length)
+        {
+            bool astral = char.IsHighSurrogate(v[i]) && i + 1 < v.Length && char.IsLowSurrogate(v[i + 1]);
+            int cw = astral || IsWide(v[i]) ? 2 : 1;
+            if (w + cw > width) break;
+            w += cw;
+            i += astral ? 2 : 1;
+        }
+        return (i == v.Length ? v : v.Substring(0, i), w);
+    }
+
+    private static string PadRight(string v, int width)   // left-align to `width` display cells
+    {
+        var (text, w) = TruncateToWidth(v, width);
+        return w < width ? text + new string(' ', width - w) : text;
+    }
+
+    private static string PadLeft(string v, int width)    // right-align to `width` display cells
+    {
+        var (text, w) = TruncateToWidth(v, width);
+        return w < width ? new string(' ', width - w) + text : text;
+    }
 
     private static string FormatDuration(long ms)
     {

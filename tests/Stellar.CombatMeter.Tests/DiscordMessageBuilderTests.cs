@@ -64,4 +64,22 @@ public class DiscordMessageBuilderTests
         var json = DiscordMessageBuilder.Build(summary);
         Assert.Contains("Kai", json);
     }
+
+    [Fact]
+    public void Build_pads_names_by_display_width_and_right_aligns_numbers()
+    {
+        // CJK glyphs are 2 monospace cells in Discord's code block; padding by char-count would shove
+        // the later columns out of line (the bug the owner saw). The name column pads to 14 DISPLAY
+        // cells and the numbers are right-aligned.
+        var json = DiscordMessageBuilder.Build(new DiscordRunSummary("m", "kill", 1000, 1000, new[]
+        {
+            new DiscordPlayerRow("Revette", 543_600, 0, 0),   // 7 ASCII cells
+            new DiscordPlayerRow("巨刃守护者", 829, 0, 3),       // 5 CJK glyphs = 10 cells
+        }, null));
+
+        Assert.Contains("Revette" + new string(' ', 7), json);   // 14 - 7 = 7 trailing pad cells
+        Assert.Contains("巨刃守护者" + new string(' ', 4), json);   // 14 - 10 = 4 trailing pad cells
+        Assert.Contains("  543.6K", json);                       // right-aligned in 8 → 2 leading spaces
+        Assert.Contains("     829", json);                       // right-aligned in 8 → 5 leading spaces
+    }
 }
