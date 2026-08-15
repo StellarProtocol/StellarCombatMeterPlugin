@@ -134,6 +134,7 @@ public sealed partial class Plugin
                       : role == Role.Tank ? new UnityEngine.Color32(77, 160, 225, 255)
                       : new UnityEngine.Color32(167, 139, 250, 255);
             string cls = ProfessionSpecs.Name(prof) is { Length: > 0 } n ? n : role.ToString();
+            _services.Log.Info($"[CombatMeter.SP1] card player '{a.Name}' prof={prof} parent={parent} role={role} class='{cls}'");
             long active = System.Math.Max(1, a.Last - a.First);
             int critPct = a.Hits > 0 ? (int)System.Math.Round(a.Crits * 100.0 / a.Hits) : 0;
             int luckyPct = a.Hits > 0 ? (int)System.Math.Round(a.Luckys * 100.0 / a.Hits) : 0;

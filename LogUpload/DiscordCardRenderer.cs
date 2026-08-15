@@ -23,6 +23,7 @@ internal sealed record CardModel(
 internal static class DiscordCardRenderer
 {
     private static Font? _font;
+    private static bool _dumped;
 
     // Palette
     private static readonly Color32 Bg = new(13, 15, 23, 255);
@@ -59,6 +60,17 @@ internal static class DiscordCardRenderer
             var atlas = ReadAtlasForModel(font, m, out int aw, out int ah, log);
             if (atlas == null) return null;
             var g = new Painter(new Color32[W * H], W, H, atlas, aw, ah, font);
+
+            if (!_dumped)   // one-shot diagnostic: real glyph metrics to nail the vertical-alignment bug
+            {
+                _dumped = true;
+                var probe = m.Rows.Count > 0 ? m.Rows[0].Name + " M" : m.Title;
+                var sb = new System.Text.StringBuilder($"[CombatMeter.SP1] glyphs '{probe}'@17Bold: ");
+                foreach (var ch in probe)
+                    if (font.GetCharacterInfo(ch, out var ci, 17, FontStyle.Bold))
+                        sb.Append($"{ch}[mY={ci.minY} MY={ci.maxY} mX={ci.minX} MX={ci.maxX} adv={ci.advance}] ");
+                log(sb.ToString());
+            }
 
             g.Fill(0, 0, W, H, Bg);
             DrawHeader(g, m);
