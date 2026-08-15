@@ -124,39 +124,38 @@ internal static class DiscordCardRenderer
     {
         if (idx % 2 == 1) g.Fill(0, y, W, RowH, new Color32(255, 255, 255, 4));
         g.Fill(0, y, W, 1, RowLine);
-        int mid = y + 26, sub = y + 46;
-        // rank medal for top-3 by damage share order (idx 0..2); else number
+        int bl = y + 27;                 // ONE shared main baseline for every column (fixes line height)
+        int sl = y + 46;                 // sub-line baseline (active / HPS)
+        var val = new Color32(223, 227, 236, 255);
+        // rank medal for top-3; else number
         var medal = r.Rank == 1 ? Gold : r.Rank == 2 ? Silver : r.Rank == 3 ? Bronze : (Color32?)null;
-        if (medal is { } mc) { g.Rounded(Pad - 2, y + 15, 26, 26, 7, mc); g.TextCenter(r.Rank.ToString(), 13, FontStyle.Bold, Pad + 11, y + 33, Bg); }
-        else g.Text(r.Rank.ToString(), 15, FontStyle.Bold, Pad + 2, mid + 3, Head);
-        // class accent strip
-        g.Rounded(NameX - 16, y + 16, 4, 30, 2, r.Role);
-        // name + class + mvp
-        g.Text(r.Name, 17, FontStyle.Bold, NameX, mid + 2, Primary);
+        if (medal is { } mc) { g.Rounded(Pad - 2, bl - 20, 26, 26, 7, mc); g.TextCenter(r.Rank.ToString(), 13, FontStyle.Bold, Pad + 11, bl - 2, Bg); }
+        else g.Text(r.Rank.ToString(), 15, FontStyle.Bold, Pad + 2, bl, Head);
+        g.Rounded(NameX - 16, bl - 15, 4, 32, 2, r.Role);              // class accent strip
+        g.Text(r.Name, 17, FontStyle.Bold, NameX, bl, Primary);
         float nw = g.Measure(r.Name, 17, FontStyle.Bold);
-        g.Text(r.Class, 13, FontStyle.Normal, NameX + (int)nw + 10, mid + 2, Muted);
+        g.Text(r.Class, 13, FontStyle.Normal, NameX + (int)nw + 10, bl, Muted);
         if (r.Mvp)
         {
             int mx = NameX + (int)nw + 12 + (int)g.Measure(r.Class, 13, FontStyle.Normal) + 8;
-            g.Rounded(mx, y + 18, 40, 18, 5, new Color32(255, 196, 85, 40));
-            g.Text("MVP", 10, FontStyle.Bold, mx + 7, y + 31, Gold);
+            g.Rounded(mx, bl - 14, 40, 18, 5, new Color32(255, 196, 85, 40));
+            g.Text("MVP", 10, FontStyle.Bold, mx + 7, bl - 1, Gold);
         }
-        g.TextRight(r.Score, 15, FontStyle.Normal, ScoreR, mid + 3, new Color32(223, 227, 236, 255));
-        // damage bar (dark track + bright→faded class-colour gradient fill)
-        g.Rounded(DmgX, y + 14, DmgW, 34, 6, new Color32(255, 255, 255, 12));
+        g.TextRight(r.Score, 15, FontStyle.Normal, ScoreR, bl, val);
+        // damage bar (centred on the baseline) + value/percent on it
+        g.Rounded(DmgX, bl - 17, DmgW, 32, 6, new Color32(255, 255, 255, 12));
         int fw = Mathf.Clamp((int)(DmgW * r.DmgShare), 3, DmgW);
-        g.RoundedGrad(DmgX, y + 14, fw, 34, 6,
+        g.RoundedGrad(DmgX, bl - 17, fw, 32, 6,
             new Color32(r.Role.r, r.Role.g, r.Role.b, 225), new Color32(r.Role.r, r.Role.g, r.Role.b, 95), true);
-        g.Text(r.Damage, 15, FontStyle.Bold, DmgX + 12, mid + 6, Primary);
-        g.Text(r.DmgPct, 12, FontStyle.Normal, DmgX + 12 + (int)g.Measure(r.Damage, 15, FontStyle.Bold) + 8, mid + 6, Muted);
-        // dps + active
-        g.TextRight(r.Dps, 15, FontStyle.Bold, DpsR, mid, Primary);
-        g.TextRight(r.Active, 11, FontStyle.Normal, DpsR, sub, Muted);
-        g.TextRight(r.CritLucky, 14, FontStyle.Normal, ClR, mid + 2, new Color32(223, 227, 236, 255));
-        g.TextRight(r.Healing, 15, FontStyle.Bold, HealR, mid, Green);
-        if (!string.IsNullOrEmpty(r.Hps)) g.TextRight(r.Hps, 11, FontStyle.Normal, HealR, sub, Mul(Green, 1f, 190));
-        g.TextRight(r.Taken, 15, FontStyle.Normal, TakenR, mid + 2, new Color32(223, 227, 236, 255));
-        g.TextRight(r.Deaths, 15, FontStyle.Bold, DeathR, mid + 2, Red);
+        g.Text(r.Damage, 15, FontStyle.Bold, DmgX + 12, bl, Primary);
+        g.Text(r.DmgPct, 12, FontStyle.Normal, DmgX + 12 + (int)g.Measure(r.Damage, 15, FontStyle.Bold) + 8, bl, Muted);
+        g.TextRight(r.Dps, 15, FontStyle.Bold, DpsR, bl, Primary);
+        g.TextRight(r.Active, 11, FontStyle.Normal, DpsR, sl, Muted);
+        g.TextRight(r.CritLucky, 14, FontStyle.Normal, ClR, bl, val);
+        g.TextRight(r.Healing, 15, FontStyle.Bold, HealR, bl, Green);
+        if (!string.IsNullOrEmpty(r.Hps)) g.TextRight(r.Hps, 11, FontStyle.Normal, HealR, sl, Mul(Green, 1f, 190));
+        g.TextRight(r.Taken, 15, FontStyle.Normal, TakenR, bl, val);
+        g.TextRight(r.Deaths, 15, FontStyle.Bold, DeathR, bl, Red);
     }
 
     private static void DrawTotals(Painter g, CardRow t, int y)
