@@ -51,6 +51,52 @@ public sealed partial class Plugin
 
     private void ToggleArchiveSettings() => _archiveSettingsWindow.SetVisible(!_archiveSettingsWindow.IsShown);
 
+    // Discord webhook section (spec 2026-08-15-combatmeter-discord-webhook-share). Master toggle +
+    // webhook URL + a per-ContentKind matrix + a test-ping button. The URL field persists live (like the
+    // ToggleRows) so a pasted URL is usable by the test button without pressing Enter first.
+    private List<HudElement> DiscordSectionRows()
+    {
+        var rows = new List<HudElement>
+        {
+            new SeparatorElement(),
+            new TextElement(() => "Discord webhook", Emphasis: true),
+            new TextElement(() => "   Auto-posts a run's link + party scores to your Discord webhook when a run ends.", MutedCol),
+            ToggleRow("Enabled", () => DiscordEnabled, v => DiscordEnabled = v),
+            new RowElement(new HudElement[]
+            {
+                new SpacerElement(Width: 8f),
+                new TextElement(() => "URL", MutedCol, Width: 40f),
+                new InputElement(() => DiscordWebhookUrl, s => DiscordWebhookUrl = s, 300f, OnChange: s => DiscordWebhookUrl = s),
+            }, Gap: 6f),
+            new TextElement(DiscordUrlStatus, MutedCol),
+            new TextElement(() => "   Post for:", MutedCol),
+        };
+        foreach (ContentKind k in System.Enum.GetValues(typeof(ContentKind)))
+            rows.Add(ToggleRow(UploadPolicy.Label(k), () => DiscordContentFor(k), v => SetDiscordContent(k, v), () => DiscordEnabled, indent: true));
+        rows.Add(new RowElement(new HudElement[]
+        {
+            new SpacerElement(Width: 8f),
+            new ButtonElement(() => "Send test message", SendDiscordTest, Width: 150f),
+            new ButtonElement(() => "Send test card", SendDiscordCardTest, Width: 140f),
+            new TextElement(() => DiscordTestResult, MutedCol),
+        }, Gap: 6f));
+        return rows;
+    }
+
+    // Readability workaround: the framework InputElement renders a white field with (in this dark panel)
+    // light text, so the pasted URL is unreadable and it cannot be restyled from the plugin. This line
+    // beneath the field shows a validity check + a MASKED view of the stored URL (token hidden — the
+    // settings panel gets screenshotted), so the user can confirm what they pasted.
+    private string DiscordUrlStatus()
+    {
+        var url = DiscordWebhookUrl;
+        if (string.IsNullOrWhiteSpace(url))
+            return "   Paste your Discord channel webhook URL (discord.com/api/webhooks/…).";
+        return DiscordLink.IsValidWebhookUrl(url)
+            ? "   ✓ " + DiscordLink.MaskWebhook(url)
+            : "   ✗ Not a Discord webhook URL — check the link.";
+    }
+
     private HudElement BuildAutoArchiveSettingsRoot()
     {
         var rows = new List<HudElement>
@@ -90,6 +136,7 @@ public sealed partial class Plugin
             new TextElement(() => "Uploads", Emphasis: true),
         };
         rows.AddRange(UploadsSection());
+        rows.AddRange(DiscordSectionRows());
         // Scroll the whole pane. MEASURED (tools/run-ui-sandbox.sh combatmeter-settings-full-window-ugui):
         // the pane's content still overflows a 620f window even after the dense Uploads rewrite cut ~160px
         // off it, so the viewport stays required. Raising DefaultRect alone would NOT have fixed it either:

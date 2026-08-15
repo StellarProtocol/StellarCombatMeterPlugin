@@ -133,6 +133,11 @@ public sealed partial class Plugin
         return _lastKnownSpec.TryGetValue(charId, out var cached) ? cached : 0;
     }
 
+    // Sample-only: refresh the sticky spec cache from the live cast-inferred spec. Called each run tick so
+    // the cache is populated even when the meter's Spec column is collapsed/off (which otherwise never
+    // calls SpecLine → ResolveSpec → StickySpec), so the archive freeze (ApplySpecs) has the real spec.
+    private void SampleSpec(EntityId id) => StickySpec(id, _services.CombatSpec.GetSubProfession(id));
+
     // Session-persistent name cache, keyed by stable char id. StickyName (the per-encounter snapshot store)
     // clears on scene change, so a party member's name reverts to "Player#<uid>" after you change areas. This
     // cache outlives scene changes: we remember every real name we resolve and reuse it when live resolution

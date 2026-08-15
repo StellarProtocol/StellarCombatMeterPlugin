@@ -187,6 +187,7 @@ public sealed partial class Plugin : IStellarPlugin
         InitUploadPolicy();  // SP1: load/migrate the 8 upload-policy cells + cache the hot-path bools
         InitReplay();      // Replay R1: load pref + create capture instance
         InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
+        LoadDiscordPrefs(); // SP1 Discord webhook: load enabled/url/per-content prefs (Plugin.DiscordWebhook.cs)
 
         // Encounter history is persisted in its own config section (string[] of per-entry JSON). Load it before
         // the windows are built so the History window has its sessions on first show.
@@ -337,6 +338,7 @@ public sealed partial class Plugin : IStellarPlugin
         EnsureReadyCheckSubscribed();
         TickRowMenuPlace();
         PumpClassIcons();
+        PumpDungeonIcon();
         TickEntitySnapshots(deltaTime);
         TickReadyCheckCooldown(deltaTime);
         TickReadyCheckResult(deltaTime);
@@ -347,6 +349,7 @@ public sealed partial class Plugin : IStellarPlugin
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
         PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
+        DrainDiscordPendingPosts();    // Discord webhook: resolve a link-wait post once its deadline/link lands
         DrainContentKindsNotice();     // surface a manual content-list refresh result (Notifications is main-thread only)
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         PollRunBoundary();           // Plugin.RunBoundary.cs — BEFORE TrackClearLatch (bank OLD run first)
@@ -544,7 +547,7 @@ public sealed partial class Plugin : IStellarPlugin
         return false;
     }
 
-    private static string FormatAmount(long v)
+    internal static string FormatAmount(long v)
     {
         if (v < 0) v = 0;
         if (v >= 1_000_000) return $"{v / 1_000_000f:F1}M";

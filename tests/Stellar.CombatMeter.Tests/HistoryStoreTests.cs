@@ -75,6 +75,7 @@ public sealed class HistoryStoreTests
             SkillIds   = new[] { 101, 102 },
             SkillLevels = new[] { 6, 4 },
             SkillTiers = new[] { 2, 1 },
+            SpecId     = 110002,   // authoritative cast-inferred spec (Marksman/Falconry) frozen into the run
             FashionSlots = new[] { 1, 2 },
             FashionIds = new[] { 7001, 7002 },
             FashionDyeCounts = new[] { 2, 0 },
@@ -108,6 +109,7 @@ public sealed class HistoryStoreTests
         Assert.Equal(want.SkillIds, got.SkillIds);
         Assert.Equal(want.SkillLevels, got.SkillLevels);
         Assert.Equal(want.SkillTiers, got.SkillTiers);
+        Assert.Equal(want.SpecId, got.SpecId);
         Assert.Equal(want.FashionSlots, got.FashionSlots);
         Assert.Equal(want.FashionIds, got.FashionIds);
         Assert.Equal(want.FashionDyeCounts, got.FashionDyeCounts);

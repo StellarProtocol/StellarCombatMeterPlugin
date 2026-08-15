@@ -14,7 +14,9 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Stellar.Abstractions" Version="2.0.2" />
+    <!-- Requires IGameAssets.LoadByPath (framework main PR #61). Publishes with the next framework release
+         (expected 2.0.3); this ref must match that release version — ships together (no release yet). -->
+    <PackageReference Include="Stellar.Abstractions" Version="2.0.3" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
