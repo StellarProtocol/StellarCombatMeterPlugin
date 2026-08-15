@@ -178,6 +178,8 @@ public sealed partial class Plugin
             UploadPhase.Failed   => "✗ Failed — Retry",
             // Not a failure and not retryable: the send was withheld by this content's upload cell.
             UploadPhase.Skipped  => "⃠ Uploads off for this content",
+            // Below the server upload floor — the fix is to update the plugin, not to retry.
+            UploadPhase.Outdated => "⚠ Update to upload",
             _                    => SegmentUploadVerb(),
         };
     }
@@ -188,6 +190,8 @@ public sealed partial class Plugin
         if (s.LevelUuid == 0) return "Archived before run-id was saved — re-run the fight to upload it.";
         if (UploadStateFor(s) == UploadPhase.Skipped)
             return "This content's upload is set to off — the run is still recorded locally. Turn its cell on in Settings to send it.";
+        if (UploadStateFor(s) == UploadPhase.Outdated)
+            return "This CombatMeter is out of date — the run is recorded locally. Update via the launcher, then push it.";
         return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? ShortRunLabel(u) : "";
     }
 

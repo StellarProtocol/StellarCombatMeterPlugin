@@ -146,6 +146,20 @@ public sealed partial class Plugin
     /// </summary>
     internal bool MaybeUploadLog(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc = null)
     {
+        // Compat floor (owner ask 2026-08-16): a build below the server floor would be 426'd, so withhold
+        // the send rather than fail it — the record is RETAINED and hand-pushes normally once updated. This
+        // gates the SEND only; capture/archive already happened (capture is always-on). Fail-open: the flag
+        // is set true only after the endpoint confirmed we are below (Plugin.UploadCompat.cs).
+        if (_uploadBelowFloor)
+        {
+            _services.Log.Info(
+                $"[CombatMeter.SP1] stats upload withheld: plugin below the server upload floor " +
+                $"(min {_uploadFloorMin ?? "?"}) — update to send. Record retained.");
+            _uploadStatus.Set(entry, UploadPhase.Outdated);
+            RetainWithoutUpload(entry, replayDoc);
+            return false;
+        }
+
         var kind = ResolveKind(entry);
         var state = EffectivePolicyFor(entry, UploadArtifact.Stats);   // fail-open on an empty map (§ 8.3)
         if (!UploadPolicy.Allows(state, UploadTrigger.Auto))
@@ -203,6 +217,20 @@ public sealed partial class Plugin
     internal void UploadHistoryEntry(EncounterHistoryEntry entry)
     {
         if (UploadStateFor(entry) == UploadPhase.InFlight) return;   // debounce double-click
+
+        // Compat floor (owner ask 2026-08-16): below the server floor the send would be 426'd. Withhold
+        // even a hand push and say why (Outdated ⇒ "⚠ Update to upload") rather than let it fail with the
+        // misleading "✗ Failed — Retry" that invites pointless retries. The archive stays; after updating
+        // the same row pushes normally.
+        if (_uploadBelowFloor)
+        {
+            _services.Log.Info(
+                $"[CombatMeter.SP1] stats upload withheld (manual): plugin below the server upload floor " +
+                $"(min {_uploadFloorMin ?? "?"}) — update to send.");
+            _uploadStatus.Set(entry, UploadPhase.Outdated);
+            _uploadStateDirty = true;
+            return;
+        }
 
         // Spec § 2.4: a hand push proceeds unless the archived run's kind has stats `off`. The kind comes
         // from the ENTRY's stored scene name, so a re-upload after a relaunch resolves the kind the run

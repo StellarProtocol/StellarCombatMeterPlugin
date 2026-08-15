@@ -351,6 +351,7 @@ public sealed partial class Plugin : IStellarPlugin
         PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
         DrainDiscordPendingPosts();    // Discord webhook: resolve a link-wait post once its deadline/link lands
         DrainContentKindsNotice();     // surface a manual content-list refresh result (Notifications is main-thread only)
+        DrainCompatNotice();           // surface the "update the plugin" notice when below the upload floor (main-thread only)
         DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
         PollRunBoundary();           // Plugin.RunBoundary.cs — BEFORE TrackClearLatch (bank OLD run first)
         TrackClearLatch();           // ~10 Hz: run-scoped clear latch — UNCONDITIONAL. DO NOT move inside
