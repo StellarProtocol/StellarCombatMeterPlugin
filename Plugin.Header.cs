@@ -20,6 +20,10 @@ public sealed partial class Plugin
 
     private HudElement BuildMainRoot() => new ColumnElement(new HudElement[]
     {
+        // Persistent "update the plugin" banner — shown while this build is below the server upload floor
+        // and not dismissed this session (owner 2026-08-16: the notice must stay until the user closes it,
+        // which the transient framework toast cannot do). Sits above the header so it's the first thing seen.
+        new ConditionalElement(() => ShowCompatBanner, BuildCompatBanner()),
         BuildHeaderBar(),
         new ConditionalElement(() => _mainMenuOpen, BuildMainMenu()),
         // A little vertical margin (no divider line) between an open menu panel and the meter/group list below.
@@ -27,6 +31,15 @@ public sealed partial class Plugin
         new ConditionalElement(() => _viewMode == ViewMode.List, BuildListBody(), Fill: true),
         new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildPartyFocusBody()),
     }, Gap: 4f);
+
+    // Persistent update banner (amber): the ⚠ message + an × that dismisses it for the session. Reads
+    // UploadFloorNoticeLine / DismissCompatNotice from Plugin.UploadCompat.cs.
+    private HudElement BuildCompatBanner() => new RowElement(new HudElement[]
+    {
+        new TextElement(() => UploadFloorNoticeLine, () => new ColorRgba(0.95f, 0.55f, 0.15f, 1f)),
+        new SpacerElement(),
+        new ButtonElement(() => "×", DismissCompatNotice, Width: 24f),
+    }, Gap: 6f);
 
     private HudElement BuildHeaderBar() => new RowElement(new HudElement[]
     {

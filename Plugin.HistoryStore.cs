@@ -5,52 +5,113 @@ using Stellar.CombatMeter.LogUpload;   // UploadPhase / UploadStatusTable
 namespace Stellar.CombatMeter;
 
 /// <summary>
-/// History persistence + clear controls. The encounter history (<c>_history</c>) is serialized one entry per JSON
-/// string via <see cref="HistoryStore"/> and stored as a <c>string[]</c> under the <c>history.entries</c> config
-/// key — the per-plugin <c>&lt;guid&gt;.config.json</c> in the game dir, human-viewable. Loaded once on construct,
-/// re-saved on every archive / eviction / clear (all user- or scene-driven, never per-frame).
+/// History persistence + clear controls. Each archived run is persisted as its OWN file under the plugindata
+/// <c>history/</c> prefix — <c>history/&lt;levelUuid&gt;-&lt;archivedAtMs&gt;.histdoc</c>, next to its
+/// <c>replay/</c> file (owner ask 2026-08-16). The file holds the entry JSON (<see cref="HistoryStore.SerializeEntry"/>)
+/// plus that run's upload state, via <see cref="HistoryContainer"/>. This replaced the old model of one
+/// <c>string[]</c> under the config <c>history.entries</c> key: that put ~2.8 MB of history in the SAME file as
+/// settings, so every settings save re-serialized all of it on the main thread (a 3-5s freeze). Per-run files
+/// mean a settings save touches only the tiny settings section, and archiving/upload-state writes touch only
+/// the one run's file.
 ///
-/// <c>_history</c> is ordered oldest→newest (Add appends, eviction RemoveAt(0)); that order is preserved on disk
-/// so the newest-first session list and the cap-50 eviction behave identically across a restart.
+/// A one-time migration (in <see cref="LoadHistory"/>) reads any surviving config <c>history.entries</c>,
+/// writes the per-run files, and clears the config section — merge-based, so it is crash-safe and re-syncs a
+/// run archived by a rolled-back (pre-per-run) build. <c>_history</c> stays ordered oldest→newest so the
+/// newest-first list and the cap eviction behave identically across a restart.
 /// </summary>
 public sealed partial class Plugin
 {
     private const string HistoryEntriesKey = "entries";
-    // Sidecar: per-entry upload state (phase + run URL) persisted next to "entries" in the SAME history
-    // config section. Kept OUT of the entry JSON so entries stay byte-identical to prior (v10) builds — a
-    // rollback DLL reads history intact and simply ignores + round-trips this key (PluginConfigService saves
-    // the whole config tree, so an unread key is preserved, not dropped).
+    // Legacy sidecar key (pre-per-run): per-entry upload state stored next to "entries" in the config
+    // history section. Only READ now — during migration — then the whole section is cleared.
     private const string HistoryUploadStatesKey = "uploadStates";
     private readonly IConfigSection _historyPrefs;
 
-    // Populate _history from the persisted string[] (entries are oldest→newest). Malformed/legacy entries are
-    // skipped silently (HistoryStore.TryDeserializeEntry never throws), and the cap is enforced on load so a
-    // hand-edited file with >50 entries can't blow the in-memory bound.
+    // Populate _history from the per-run history files (+ a one-time merge from the legacy config section).
+    // Malformed/legacy files are skipped silently (never throw); the cap is enforced on load so a stray
+    // over-cap set can't blow the in-memory bound.
+    private readonly struct LoadedRun
+    {
+        internal LoadedRun(EncounterHistoryEntry entry, HistoryStore.UploadStateRecord? up) { Entry = entry; Up = up; }
+        internal EncounterHistoryEntry Entry { get; }
+        internal HistoryStore.UploadStateRecord? Up { get; }
+    }
+
     private void LoadHistory()
     {
-        var raw = _historyPrefs.Get<string[]>(HistoryEntriesKey, null);
-        if (raw is null || raw.Length == 0) return;
+        var byKey = ReadPerRunHistoryFiles(out var skipped);
+        var configHadEntries = MergeLegacyConfigHistory(byKey, ref skipped);
 
+        // Build _history oldest→newest (List()/dictionary order is not guaranteed), then enforce the cap
+        // BEFORE hydrating so evicted runs are never rooted by _uploadStatus.
+        var all = new List<LoadedRun>(byKey.Values);
+        all.Sort((x, y) => x.Entry.ArchivedAtMs.CompareTo(y.Entry.ArchivedAtMs));
         _history.Clear();
-        var skipped = 0;
-        foreach (var s in raw)
+        foreach (var r in all) _history.Add(r.Entry);
+        foreach (var evicted in TrimToCapacity(_history, HistoryRetention))
+        { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); DeleteHistoryFile(evicted); }
+
+        // Re-root upload state for the survivors — restores "✓ Uploaded" + URL after a relaunch.
+        foreach (var r in all)
+            if (r.Up is { } rec && _history.Contains(r.Entry)) _uploadStatus.Set(r.Entry, rec.Phase, rec.Url);
+
+        // If the config carried history, guarantee every surviving run has a per-run file, THEN clear the
+        // config section (so settings saves stop re-serializing it). Files first, so a crash never loses
+        // data — next load re-merges from config.
+        if (configHadEntries)
         {
-            if (HistoryStore.TryDeserializeEntry(s, out var entry) && entry is not null) _history.Add(entry);
-            else skipped++;
+            foreach (var e in _history) WriteHistoryFile(e);
+            ClearConfigHistorySection();
+            _services.Log.Info($"[CombatMeter] history: migrated {_history.Count} run(s) to per-run files; config history section cleared.");
         }
-        // Enforce the cap BEFORE hydrating so evicted runs are never rooted by _uploadStatus; the Forget loop
-        // matches the archive path (ManualArchive) and stays correct even if hydration order ever changes.
-        foreach (var evicted in TrimToCapacity(_history, HistoryRetention)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }
-        HydrateUploadStatesFromSidecar();   // restore "✓ Uploaded" + URL for the surviving entries
-        SweepOrphanReUploads();   // belt-and-braces: drop any container left by a crash mid-evict
+
+        SweepOrphanReUploads();
+        SweepOrphanHistoryFiles();
         if (skipped > 0) _services.Log.Info($"[CombatMeter] history: skipped {skipped} malformed entr{(skipped == 1 ? "y" : "ies")} on load");
+    }
+
+    // Per-run files — the store of record. Keyed by (LevelUuid, ArchivedAtMs) so the config merge can't
+    // double-add a run a file already holds. Malformed files bump `skipped` and are dropped.
+    private Dictionary<(long, long), LoadedRun> ReadPerRunHistoryFiles(out int skipped)
+    {
+        var byKey = new Dictionary<(long, long), LoadedRun>();
+        skipped = 0;
+        foreach (var name in _services.Data.List("history/"))
+        {
+            var bytes = _services.Data.Read(name);
+            if (bytes is null || !HistoryContainer.TryDeserialize(bytes, out var entryJson, out var upJson)) { skipped++; continue; }
+            if (!HistoryStore.TryDeserializeEntry(entryJson, out var entry) || entry is null) { skipped++; continue; }
+            HistoryStore.UploadStateRecord? up =
+                upJson != null && HistoryStore.TryDeserializeUploadState(upJson, out var rec) ? rec : null;
+            byKey[(entry.LevelUuid, entry.ArchivedAtMs)] = new LoadedRun(entry, up);
+        }
+        return byKey;
+    }
+
+    // Merge any legacy config entries the per-run files don't already have. First run: files are empty, so
+    // everything comes from here (migration). After a rollback to a pre-per-run build that archived a run:
+    // that run is in the config and gets re-synced into a file by the caller. Returns whether the config
+    // carried any entries (⇒ the caller writes files + clears the section).
+    private bool MergeLegacyConfigHistory(Dictionary<(long, long), LoadedRun> byKey, ref int skipped)
+    {
+        var configRaw = _historyPrefs.Get<string[]>(HistoryEntriesKey, null);
+        if (configRaw is not { Length: > 0 }) return false;
+        var upIdx = HistoryStore.IndexUploadStates(_historyPrefs.Get<string[]>(HistoryUploadStatesKey, null));
+        foreach (var s in configRaw)
+        {
+            if (!HistoryStore.TryDeserializeEntry(s, out var entry) || entry is null) { skipped++; continue; }
+            var key = (entry.LevelUuid, entry.ArchivedAtMs);
+            if (byKey.ContainsKey(key)) continue;
+            byKey[key] = new LoadedRun(entry, upIdx.TryGetValue(key, out var rec) ? rec : (HistoryStore.UploadStateRecord?)null);
+        }
+        return true;
     }
 
     // Delete a run's retained re-upload payload (mirrors _uploadStatus.Forget). No-op when absent.
     private void ForgetReUpload(EncounterHistoryEntry e)
         => _services.Data.Delete(ReUploadContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
 
-    // Belt-and-braces: drop any container file with no matching live entry (e.g. left by a crash mid-evict).
+    // Belt-and-braces: drop any replay container with no matching live entry (e.g. left by a crash mid-evict).
     private void SweepOrphanReUploads()
     {
         var live = new List<(long, long)>(_history.Count);
@@ -59,22 +120,42 @@ public sealed partial class Plugin
             _services.Data.Delete(name);
     }
 
-    // Match the persisted sidecar records back to the loaded entries by their stable (LevelUuid, ArchivedAtMs)
-    // composite and re-root the live upload state into _uploadStatus — this is what restores "✓ Uploaded" + the
-    // run URL after a relaunch. Orphaned records (no matching entry — an evicted/deleted run) are never applied
-    // and drop away on the next SaveHistory (the sidecar is rebuilt from live _history).
-    private void HydrateUploadStatesFromSidecar()
+    // Same, for per-run history files: drop any history/ file with no live entry (left by a crash mid-evict).
+    private void SweepOrphanHistoryFiles()
     {
-        var byKey = HistoryStore.IndexUploadStates(_historyPrefs.Get<string[]>(HistoryUploadStatesKey, null));
-        if (byKey.Count == 0) return;
-        foreach (var e in _history)
-            if (byKey.TryGetValue((e.LevelUuid, e.ArchivedAtMs), out var rec))
-                _uploadStatus.Set(e, rec.Phase, rec.Url);
+        var live = new List<(long, long)>(_history.Count);
+        foreach (var e in _history) live.Add((e.LevelUuid, e.ArchivedAtMs));
+        foreach (var name in HistoryContainer.OrphanContainerNames(_services.Data.List("history/"), live))
+            _services.Data.Delete(name);
+    }
+
+    // Write ONE run's history file: its entry JSON + (when durable) its upload state, folded into the same
+    // per-run file. A transient InFlight collapses to Idle (never persisted, matching the old sidecar rule).
+    private void WriteHistoryFile(EncounterHistoryEntry e)
+    {
+        var entryJson = HistoryStore.SerializeEntry(e);
+        var phase = UploadStatusTable.Persistable(_uploadStatus.PhaseFor(e));
+        string? upJson = phase == UploadPhase.Idle
+            ? null
+            : HistoryStore.SerializeUploadState(new HistoryStore.UploadStateRecord(e.LevelUuid, e.ArchivedAtMs, phase, _uploadStatus.UrlFor(e)));
+        _services.Data.Write(HistoryContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs), HistoryContainer.Serialize(entryJson, upJson));
+    }
+
+    private void DeleteHistoryFile(EncounterHistoryEntry e)
+        => _services.Data.Delete(HistoryContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
+
+    // Empty the legacy config history section (one final write) — after migration, so settings saves no
+    // longer re-serialize megabytes of history. Left as empty arrays rather than removed keys for clarity.
+    private void ClearConfigHistorySection()
+    {
+        _historyPrefs.Set(HistoryEntriesKey, System.Array.Empty<string>());
+        _historyPrefs.Set(HistoryUploadStatesKey, System.Array.Empty<string>());
+        _historyPrefs.Save();
     }
 
     // Local-history retention (owner 2026-08-15): a SETTING, not a fixed cap. Clamped to [Min,Max] — Min is
-    // the old fixed cap (never fewer), Max is the config-size ceiling (each entry carries full per-actor
-    // stats/gear/skills; ~50 entries ≈ 1.7 MB, so 250 ≈ ~8 MB parsed on load / rewritten per archive).
+    // the old fixed cap (never fewer), Max is the config-size ceiling. With per-run files this no longer
+    // bounds one giant config blob, but the in-memory list + slot pool are still sized to it.
     internal const int MinRetention = 50;
     internal const int MaxRetention = 250;
     internal const int DefaultRetention = 100;
@@ -86,8 +167,7 @@ public sealed partial class Plugin
         => value < MinRetention ? MinRetention : value > MaxRetention ? MaxRetention : value;
 
     /// <summary>The current retention (how many past archives the local list keeps), read from prefs and
-    /// clamped. Setter persists. The slot pool is sized to <see cref="MaxRetention"/> so this can change at
-    /// runtime without rebuilding the window (MaxSessionSlots).</summary>
+    /// clamped. Setter persists.</summary>
     internal int HistoryRetention
     {
         get => ClampRetention(_prefs.Get(PrefHistoryRetention, DefaultRetention));
@@ -96,7 +176,7 @@ public sealed partial class Plugin
 
     // Cap the history to `capacity`, evicting oldest-first (front of the list). Single source of truth for
     // the cap so load and archive evict identically; testable without a live host. Returns the evicted entries
-    // (oldest-first) so the caller can drop their upload status — otherwise they'd be rooted by _uploadStatus.
+    // (oldest-first) so the caller can drop their upload status + per-run files.
     internal static List<EncounterHistoryEntry> TrimToCapacity(List<EncounterHistoryEntry> history, int capacity)
     {
         List<EncounterHistoryEntry>? evicted = null;
@@ -120,50 +200,21 @@ public sealed partial class Plugin
         return searchableText.IndexOf(q, System.StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    // Serialize the whole _history list + the upload-state sidecar and persist them. Called after
-    // archive/eviction, after any clear, and (via PersistUploadStateIfDirty) once an async upload settles.
-    private void SaveHistory()
-    {
-        var arr = new string[_history.Count];
-        for (var i = 0; i < _history.Count; i++) arr[i] = HistoryStore.SerializeEntry(_history[i]);
-        _historyPrefs.Set(HistoryEntriesKey, arr);
-        _historyPrefs.Set(HistoryUploadStatesKey, BuildUploadStateSidecar());
-        _historyPrefs.Save();
-    }
-
-    // Gather the sidecar for the CURRENT live history: one record per entry that carries a durable (non-Idle)
-    // upload phase, keyed by (LevelUuid, ArchivedAtMs). A transient InFlight collapses to Idle (never
-    // persisted). Entries evicted/deleted since the last save aren't in _history, so their records fall away.
-    private string[] BuildUploadStateSidecar()
-    {
-        var live = new List<HistoryStore.UploadStateRecord>(_history.Count);
-        foreach (var e in _history)
-        {
-            var phase = UploadStatusTable.Persistable(_uploadStatus.PhaseFor(e));
-            if (phase == UploadPhase.Idle) continue;
-            live.Add(new HistoryStore.UploadStateRecord(e.LevelUuid, e.ArchivedAtMs, phase, _uploadStatus.UrlFor(e)));
-        }
-        return HistoryStore.SerializeUploadStates(live);
-    }
-
     // ----- clear controls -----
 
-    // Wipe all history. Resets the selected session + chart state, persists, refreshes the snapshots so the
-    // window reflects the empty state immediately. The Skill Breakdown closes on its own via the stale-session
-    // guard (the drilled Session is no longer in _history) on the next RebuildSkillRows.
+    // Wipe all history: delete every per-run file, clear in-memory + upload status, refresh the window.
     internal void ClearAllHistory()
     {
-        foreach (var e in _history) ForgetReUpload(e);
+        foreach (var e in _history) { ForgetReUpload(e); DeleteHistoryFile(e); }
         _history.Clear();
-        _uploadStatus.Clear();   // drop all per-entry upload status so evicted runs aren't rooted
+        _uploadStatus.Clear();
         ResetHistorySelection();
-        SaveHistory();
+        SweepOrphanHistoryFiles();   // drop any file a prior crash left behind
         RebuildHistorySnapshots();
     }
 
-    // Delete a single session by its _history index. Fixes up the current selection: if the deleted session was
-    // selected, clear the selection; otherwise keep the same session selected by tracking its object across the
-    // index shift. Then persist + refresh.
+    // Delete a single session by its _history index. Fixes up the current selection, deletes that run's
+    // per-run file + replay, then refreshes.
     internal void DeleteSession(int historyIndex)
     {
         if (historyIndex < 0 || historyIndex >= _history.Count) return;
@@ -171,20 +222,19 @@ public sealed partial class Plugin
         var wasSelected = _selectedSession;
         var deleted = _history[historyIndex];
         _history.RemoveAt(historyIndex);
-        _uploadStatus.Forget(deleted);   // drop this run's upload status so it isn't rooted after delete
+        _uploadStatus.Forget(deleted);
         ForgetReUpload(deleted);
+        DeleteHistoryFile(deleted);
 
         if (ReferenceEquals(wasSelected, deleted)) ResetHistorySelection();
         else if (wasSelected is not null)
         {
-            // Re-point _historyIndex at the still-selected entry's new position (its index may have shifted down).
             var newIdx = _history.IndexOf(wasSelected);
             if (newIdx >= 0) { _historyIndex = newIdx; _selectedSession = wasSelected; }
             else ResetHistorySelection();
         }
 
-        SaveHistory();
-        RebuildHistorySnapshots();   // newest-first list + stale-session guard for the breakdown
+        RebuildHistorySnapshots();
     }
 
     private void ResetHistorySelection()

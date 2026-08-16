@@ -170,6 +170,11 @@ public sealed partial class Plugin
     {
         var rows = new List<HudElement>
         {
+            // Sticky "update the plugin" line — shown only while this build is below the server upload floor
+            // (GET /api/upload/compat). Amber so it reads as an action needed; the toast (Plugin.UploadCompat.cs)
+            // is the one-shot, this persists until the launcher updates the plugin.
+            new ConditionalElement(() => UploadBelowFloor,
+                new TextElement(() => UploadFloorNoticeLine, () => new ColorRgba(0.95f, 0.55f, 0.15f, 1f))),
             new TextElement(() => "   auto = uploads itself · manual = only when you press upload · off = never.", MutedCol),
             // Column header names both axes ONCE, which is what let the duplicated "Replay position track"
             // section (5 rows + its own header) be deleted outright — design 3d73f7a.

@@ -136,6 +136,7 @@ public sealed partial class Plugin
         _prefs.Set(UploadPolicy.PrefKey(kind, artifact), UploadPolicy.Format(state));
         _prefs.Save();
         RecomputeUploadPolicyCache();
+        MaybeCheckUploadCompat();   // turning auto ON is the trigger to check the floor (no-op if already checked)
     }
 
     internal bool UploadAllowed(ContentKind kind, UploadArtifact artifact, UploadTrigger trigger)
@@ -165,6 +166,7 @@ public sealed partial class Plugin
         LoadTierFilter();
         RecomputeUploadPolicyCache();
         MaybeRefreshContentKinds();
+        MaybeCheckUploadCompat();   // warn + withhold if this build is below the server upload floor
     }
 
     // ---- Difficulty-tier filter (owner-approved axis, 2026-07-29) -----------------------------

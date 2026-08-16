@@ -178,6 +178,9 @@ public sealed partial class Plugin
             UploadPhase.Failed   => "✗ Failed — Retry",
             // Not a failure and not retryable: the send was withheld by this content's upload cell.
             UploadPhase.Skipped  => "⃠ Uploads off for this content",
+            // Recorded by a build below the server upload floor — the payload's baked-in old pluginVer is
+            // 426'd forever (even after upgrading), so this run can't upload and it isn't retryable.
+            UploadPhase.Outdated => "⚠ Old-version run",
             _                    => SegmentUploadVerb(),
         };
     }
@@ -188,6 +191,8 @@ public sealed partial class Plugin
         if (s.LevelUuid == 0) return "Archived before run-id was saved — re-run the fight to upload it.";
         if (UploadStateFor(s) == UploadPhase.Skipped)
             return "This content's upload is set to off — the run is still recorded locally. Turn its cell on in Settings to send it.";
+        if (UploadStateFor(s) == UploadPhase.Outdated)
+            return "Recorded by an out-of-date build — saved locally, but the server won't accept it (even after you update). Update the plugin so new runs upload.";
         return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? ShortRunLabel(u) : "";
     }
 

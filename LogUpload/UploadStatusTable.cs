@@ -20,6 +20,12 @@ internal enum UploadPhase
     /// as "✗ Failed — Retry" cost the owner twelve pointless Retry presses on a Giant Golem Crusade run
     /// (2026-07-29) while every attempt was refused by `other=off`.</summary>
     Skipped,
+    /// <summary>The plugin is below the server upload floor (GET /api/upload/compat), so the send was
+    /// withheld — the server would 426 it anyway. Distinct from <see cref="Skipped"/> so the row can say
+    /// "update to upload" rather than the misleading "uploads off for this content"; distinct from
+    /// <see cref="Failed"/> for the same reason Skipped is (retrying can't help until the plugin updates).
+    /// The record is retained; after updating, the same archive hand-pushes normally. Append-only.</summary>
+    Outdated,
 }
 
 /// <summary>

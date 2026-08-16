@@ -220,11 +220,13 @@ public sealed partial class Plugin
     ///
     /// <para><see cref="UploadPhase.Skipped"/> stays eligible: it is a policy refusal, and the owner's verified
     /// workflow is to flip the cell on and push the same archive — an `other=off` run uploaded with its events
-    /// intact once set to `manual`. <see cref="UploadPhase.Failed"/> makes this a retry-the-rest.</para>
+    /// intact once set to `manual`. <see cref="UploadPhase.Failed"/> makes this a retry-the-rest.
+    /// <see cref="UploadPhase.Outdated"/> is EXCLUDED: a run recorded below the upload floor carries an old
+    /// baked-in pluginVer the server 426s forever, so re-queuing it only wastes a request.</para>
     ///
     /// <para>Only InFlight is excluded, because a second concurrent send of the same archive is the one thing
     /// that is never wanted. Pure + static so the rule pins headless.</para></summary>
-    internal static bool NeedsRunUpload(UploadPhase phase) => phase != UploadPhase.InFlight;
+    internal static bool NeedsRunUpload(UploadPhase phase) => phase != UploadPhase.InFlight && phase != UploadPhase.Outdated;
 
     /// <summary>Queues every not-yet-sent segment of the selected run. Already-uploaded and in-flight segments
     /// are skipped, so pressing this after a partial upload only sends the remainder.</summary>

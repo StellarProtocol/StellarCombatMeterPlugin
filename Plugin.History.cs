@@ -216,8 +216,8 @@ public sealed partial class Plugin
         // settlement — don't re-bank a duplicate. Reset on the next encounter's combat start.
         if (entry.Result == "kill") _clearMarkerBanked = true;
         _history.Add(entry);
-        foreach (var evicted in TrimToCapacity(_history, HistoryRetention)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); }   // unroot evicted runs
-        SaveHistory();   // persist on every archive + eviction (a user/scene event, not a hot-path frame)
+        foreach (var evicted in TrimToCapacity(_history, HistoryRetention)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); DeleteHistoryFile(evicted); }   // unroot + delete evicted runs
+        WriteHistoryFile(entry);   // persist THIS run's per-run file (a user/scene event, not a hot-path frame)
 
         var summaryFired = FinalizeAndMaybeUploadReplay(entry, replayUpperCapServerMs);
         LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs,
