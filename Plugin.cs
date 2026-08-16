@@ -193,6 +193,7 @@ public sealed partial class Plugin : IStellarPlugin
         // the windows are built so the History window has its sessions on first show.
         _historyPrefs = _services.Config.GetSection("history");
         LoadHistory();
+        LoadActiveRunMarker();   // read the persisted mid-relaunch marker (null on a clean session) — Plugin.RelaunchMarker.cs
 
         RegisterColours();
         BuildWindows();
@@ -361,6 +362,7 @@ public sealed partial class Plugin : IStellarPlugin
         TickBossStatus();            // ~10 Hz: boss kill-state poll — ALWAYS-ON, runs with the MASTER
                                      // Auto-archive toggle OFF too (owner ruling 2026-08-14). DO NOT move
                                      // it back inside TickAutoArchiveTriggers — see Plugin.BossDetection.cs.
+        TickRelaunchMarker();        // mid-relaunch recovery (Plugin.RelaunchMarker.cs): ~30 s marker heartbeat + stale-marker clear
         TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
         TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
         TickLoadoutCapture();        // ~10 Hz: per-class loadout accumulator (poll profession + run-boundary reset)
