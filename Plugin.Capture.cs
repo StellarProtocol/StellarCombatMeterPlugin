@@ -100,6 +100,15 @@ public sealed partial class Plugin
         // to 0 on scene-leave, which may be exactly when the archive fires. ManualArchive uses this if the
         // live id is already 0 at archive time.
         _lastRunId     = _services.Dungeon.CurrentRunId;
+        // Mid-dungeon-relaunch recovery (Plugin.RelaunchMarker.cs, owner-approved design 2026-08-16): a
+        // crash/relaunch mid-run re-stamps RunTimerStartMs (+41s measured, run sea/av4dghY1FK), splitting one
+        // physical run into two server pages. If this is the run's first combat start this SESSION
+        // (_lastRunStartMs still 0) and a persisted marker matches the run we're standing in — same instance
+        // AND same party AND fresh (≤10min gap) — restore the run's ORIGINAL dungeon-start here, BEFORE the
+        // latch below, so LatchRunStartMs keeps it (non-zero wins) and the run continues under one identity.
+        // Returns 0 (no restore) on a clean session, a mismatch, or a stale marker → falls through to live.
+        if (_lastRunStartMs == 0)
+            _lastRunStartMs = ResolveRelaunchStartMs(timestampMs);
         // Latch the dungeon-start timestamp ONCE per run — the ONE critical difference from _lastRunId
         // above (which re-latches every combat start because CurrentRunId is STABLE mid-run). RunTimerStartMs
         // is UNSTABLE: the game re-stamps it at run end (Victory/settlement, measured 680000 → 802000 on
@@ -123,6 +132,11 @@ public sealed partial class Plugin
         // survives here, but CurrentDifficulty is reset to 0 on a run-id change that can precede
         // archive (fail-out to a result/lobby scene), which dropped the "Master N" level on fails.
         _difficultyAtCombatStart = _services.Dungeon.CurrentDifficulty;
+        // Persist the active-run marker now that the run's identity (id + start + party) is latched, so a
+        // crash/relaunch mid-run can restore this dungeon-start and continue the SAME run. Uses this event's
+        // server timestamp (always valid) so even a crash seconds in leaves a marker. No-op outside a dungeon
+        // (_lastRunStartMs stays 0 in open-world). See Plugin.RelaunchMarker.cs.
+        PersistActiveRunMarker(timestampMs);
     }
 
     // Per-boss/per-elite CAPTURE-ONLY bucket routing (Spec B) moved to Plugin.BucketRouting.cs

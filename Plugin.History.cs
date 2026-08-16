@@ -359,7 +359,8 @@ public sealed partial class Plugin
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
             LevelUuid        = _lastRunId != 0 ? _lastRunId : _services.Dungeon.CurrentRunId,
-            PartyId          = LatchTeamId(_lastTeamId, _services.PartySnapshot.PartyId),
+            PartyId          = AutoArchive.RelaunchMarker.ResolvePartyId(
+                                   _lastTeamId, _services.PartySnapshot.PartyId, _relaunchPartyFallback),
             PassTime         = clearSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = clearSettlement?.MasterModeScore ?? 0,
             TotalScore       = clearSettlement?.TotalScore ?? 0,
@@ -374,6 +375,7 @@ public sealed partial class Plugin
         };
         // Post-build appliers, one per feature partial (last: Spec B buckets, Plugin.BucketStats.cs).
         ApplyAttrRanges(entry); ApplyClassSpans(entry); ApplySpecs(entry); ApplyBucketStats(entry);
+        LogArchiveIdentity(entry);   // diagnostics: the exact uploaded run-identity (levelUuid/start/party)
         return entry;
     }
 

@@ -9,7 +9,7 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.CombatMeter</RootNamespace>
     <AssemblyName>Stellar.CombatMeter</AssemblyName>
-    <Version>2.2.1</Version>
+    <Version>2.3.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>

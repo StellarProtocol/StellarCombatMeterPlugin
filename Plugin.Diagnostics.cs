@@ -322,6 +322,55 @@ public sealed partial class Plugin
             $"[CombatMeter][boundary] source={source} old={oldId} new={newId} stats={statsCount}{bossesText}");
     }
 
+    // Mid-dungeon-relaunch recovery (Plugin.RelaunchMarker.cs) — diagnostics-gated (owner ruling 2026-08-16:
+    // keep these off the production log). A restore means a relaunch/crash mid-run was stitched back onto its
+    // original server run instead of splitting into a second page.
+    private void LogRelaunchRestore(long runId, long dungeonStartMs)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][relaunch] restored dungeonStart={dungeonStartMs} for run={runId} (mid-run relaunch continued, not split)");
+    }
+
+    // Diagnostics-gated — the marker was for a run we are no longer in (kicked to town / timed out); cleared
+    // so a later re-entry of the same instance is a fresh run.
+    private void LogRelaunchStaleClear(long markerRunId, long currentRunId)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][relaunch] cleared stale marker run={markerRunId} (now settled out, currentRun={currentRunId})");
+    }
+
+    // Diagnostics-gated trace of what LoadActiveRunMarker read at startup — confirms a prior session wrote a
+    // marker and this session read it across the relaunch (or that there was none: a clean session).
+    private void LogRelaunchMarkerLoaded(AutoArchive.ActiveRunMarker? marker)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(marker is { } m
+            ? $"[CombatMeter][relaunch] loaded marker level={m.LevelUuid} party={m.PartyId} start={m.DungeonStartMs} alive={m.LastAliveMs}"
+            : "[CombatMeter][relaunch] no marker on disk (clean session)");
+    }
+
+    // Diagnostics-gated: the exact run-identity an archive will UPLOAD (levelUuid + dungeon-start + party),
+    // so a relaunch re-test is verifiable straight from the client log — not inferred from the server.
+    private void LogArchiveIdentity(EncounterHistoryEntry entry)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][archive-id] levelUuid={entry.LevelUuid} dungeonStartMs={entry.DungeonStartMs} " +
+            $"runStartS={entry.DungeonStartMs / 1000} partyId={entry.PartyId} trigger={entry.Trigger}");
+    }
+
+    // Diagnostics-gated: a marker EXISTED but the restore declined — dump marker vs live so the reason
+    // (instance/party mismatch or stale gap) is readable without another blind test cycle.
+    private void LogRelaunchDeclined(AutoArchive.ActiveRunMarker m, long currentRunId, long currentPartyId, long nowMs)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _services.Log.Info(
+            $"[CombatMeter][relaunch] restore DECLINED — marker(level={m.LevelUuid} party={m.PartyId} start={m.DungeonStartMs} alive={m.LastAliveMs}) " +
+            $"vs live(run={currentRunId} party={currentPartyId} now={nowMs} gapMs={nowMs - m.LastAliveMs})");
+    }
+
     // One line when AutoArchive.KilledBossTracker evicts its OLDEST mark to make room for a new one
     // (review round, 2026-07-26) — deliberately UNGATED Warning, same reasoning as LogArchiveOutcome
     // above: the standing rule is diagnostics stay gated behind StellarDiagnostics.IsEnabled, but a

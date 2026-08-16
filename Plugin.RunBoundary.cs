@@ -82,6 +82,16 @@ public sealed partial class Plugin
         // boundary would re-key the next run under this run's DungeonStartMs. See _lastRunStartMs's doc
         // (Plugin.cs) + LatchRunStartMs (Plugin.History.cs).
         _lastRunStartMs = 0;
+        _relaunchPartyFallback = 0;   // per-run, same lifecycle as _lastRunStartMs (Plugin.RelaunchMarker.cs)
+        // Drop the mid-dungeon-relaunch marker ONLY when THIS boundary is the marked run actually ending —
+        // outgoingRunId (the run being banked) == the marker's run. A genuine leave/run-end clears it (so a
+        // later re-entry of the same instance is FRESH); a crash/relaunch never reaches this path, so its
+        // marker stands for recovery. CRITICAL: BankRunBoundary ALSO fires on a dungeon ENTRY (a reconnect
+        // loads into the instance → OnSceneChanged with outgoingRunId==0, BEFORE the first combat) — an
+        // unconditional clear there wiped the marker the restore needs (root cause of the first owner test's
+        // missing [relaunch] line). ShouldClearOnBoundary gates that out. See Plugin.RelaunchMarker.cs.
+        if (RelaunchMarker.ShouldClearOnBoundary(_activeRunMarker, outgoingRunId))
+            ClearActiveRunMarker();
         // New finding (re-review, 2026-08-13) — stage-boss latch staleness: _segmentStageBosses
         // (Plugin.BossDetection.cs) is otherwise only reset by Clear(), which ManualArchive's skip-empty
         // (Plugin.History.cs, `_stats.Count == 0` early return) and suppressed-junk (ShouldSuppressAutoArchive
