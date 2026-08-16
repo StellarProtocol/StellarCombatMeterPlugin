@@ -34,20 +34,31 @@ public sealed partial class Plugin
 
     private readonly UploadStatusTable _uploadStatus = new();
 
-    // Set by the fire-and-forget upload callback (thread-pool thread) whenever an entry's terminal
-    // upload phase changes; drained on the Unity main thread (PersistUploadStateIfDirty, called from
-    // OnUpdate) to re-persist history so a completed Done/Failed — including a manual retry's result,
-    // which has no surrounding archive save — survives a relaunch. The archive-time SaveHistory runs
-    // BEFORE the async upload finishes, so without this the most-recent upload would not be persisted.
-    private volatile bool _uploadStateDirty;
+    // Entries whose upload phase changed since the last drain — added by the fire-and-forget upload callback
+    // (thread-pool thread) and drained on the Unity main thread (PersistUploadStateIfDirty, from OnUpdate) to
+    // rewrite ONLY those runs' per-run history files. A completed Done/Failed/Outdated — including a manual
+    // retry's result, which has no surrounding archive write — thus survives a relaunch. Guarded by its own
+    // lock; the HashSet dedups an entry that changes phase more than once before the drain.
+    private readonly HashSet<EncounterHistoryEntry> _uploadStateDirty = new();
 
-    // Main-thread drain: re-persist history once after an async upload changed a terminal phase.
-    // A cheap volatile read per tick; SaveHistory runs only on the tick that observes the flag set.
+    private void MarkUploadStateDirty(EncounterHistoryEntry entry)
+    {
+        lock (_uploadStateDirty) _uploadStateDirty.Add(entry);
+    }
+
+    // Main-thread drain: rewrite the per-run history file for each entry whose upload phase changed. Only
+    // still-live entries are written (an evicted/deleted run's file is already gone).
     private void PersistUploadStateIfDirty()
     {
-        if (!_uploadStateDirty) return;
-        _uploadStateDirty = false;
-        SaveHistory();
+        EncounterHistoryEntry[] dirty;
+        lock (_uploadStateDirty)
+        {
+            if (_uploadStateDirty.Count == 0) return;
+            dirty = new EncounterHistoryEntry[_uploadStateDirty.Count];
+            _uploadStateDirty.CopyTo(dirty);
+            _uploadStateDirty.Clear();
+        }
+        foreach (var e in dirty) if (_history.Contains(e)) WriteHistoryFile(e);
     }
 
     internal UploadPhase UploadStateFor(EncounterHistoryEntry e) => _uploadStatus.PhaseFor(e);
@@ -144,6 +155,15 @@ public sealed partial class Plugin
     /// callback OWNS <paramref name="replayDoc"/> (uploads it per the merge verdict); <c>false</c>
     /// means no upload fired and the caller must upload <paramref name="replayDoc"/> itself.
     /// </summary>
+    /// <summary>Terminal phase for an upload completion. A server <b>426</b> means the run's captured
+    /// build is below the upload floor — the payload carries the OLD <c>pluginVer</c> baked in at capture,
+    /// so retrying (even from an upgraded client) can never succeed; it maps to <see cref="UploadPhase.Outdated"/>,
+    /// not the retryable <see cref="UploadPhase.Failed"/>. Everything else non-2xx stays a real retryable failure.</summary>
+    internal static UploadPhase PhaseFromResult(bool ok, int status)
+        => ok ? UploadPhase.Done
+         : status == 426 ? UploadPhase.Outdated
+         : UploadPhase.Failed;
+
     internal bool MaybeUploadLog(EncounterHistoryEntry entry, PositionUploadDoc? replayDoc = null)
     {
         // Compat floor (owner ask 2026-08-16): a build below the server floor would be 426'd, so withhold
@@ -228,7 +248,7 @@ public sealed partial class Plugin
                 $"[CombatMeter.SP1] stats upload withheld (manual): plugin below the server upload floor " +
                 $"(min {_uploadFloorMin ?? "?"}) — update to send.");
             _uploadStatus.Set(entry, UploadPhase.Outdated);
-            _uploadStateDirty = true;
+            MarkUploadStateDirty(entry);
             return;
         }
 
@@ -246,14 +266,14 @@ public sealed partial class Plugin
             // on a Giant Golem Crusade run (2026-07-29). The row still shows state, so the original
             // reason for reusing Failed — a click that looks like it did nothing — is still served.
             _uploadStatus.Set(entry, UploadPhase.Skipped);
-            _uploadStateDirty = true;
+            MarkUploadStateDirty(entry);
             return;
         }
 
         if (entry.LevelUuid == 0)   // pre-v3 archive (identity not persisted) — /run/0 would collide; refuse
         {
             _uploadStatus.Set(entry, UploadPhase.Failed);
-            _uploadStateDirty = true;
+            MarkUploadStateDirty(entry);
             _services.Log.Warning("[CombatMeter.SP1] Cannot upload: run has no levelUuid (archived before run-identity was persisted). Re-run the fight to upload it.");
             return;
         }
@@ -293,9 +313,9 @@ public sealed partial class Plugin
                 // numeric `url` here made every re-upload downgrade the entry's link (owner report
                 // 2026-07-30: "click upload segment and upload all both return number"), even though the
                 // worker returned shortId on all three segments — confirmed by tailing stellar-logs.
-                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
+                _uploadStatus.Set(entry, PhaseFromResult(ok, status),
                     UploadVerdict.PreferredUrl(verdict, url));
-                _uploadStateDirty = true;
+                MarkUploadStateDirty(entry);
                 if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
                 if (payload.Chunks.Count > 0)
                     ChunkUploader.PostRawEnvelopesFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.Chunks, m => _services.Log.Warning(m));
@@ -307,7 +327,7 @@ public sealed partial class Plugin
             // Defense-in-depth (body is non-throwing today, matching AssembleAndUpload's guard below):
             // a replay-kickoff fault must never propagate into the main-thread caller.
             _uploadStatus.Set(entry, UploadPhase.Failed, null);
-            _uploadStateDirty = true;
+            MarkUploadStateDirty(entry);
             _services.Log.Warning($"[CombatMeter.SP1] Re-upload replay threw: {ex.Message}");
         }
     }
@@ -417,9 +437,9 @@ public sealed partial class Plugin
                 // On success prefer the server's short run URL when the response carried one (a relative
                 // "/run/…" is absolutized against the same SiteBase as `url`); otherwise (old server,
                 // failure, or 409-resolved path whose body has no shortUrl) keep the constructed `url`.
-                _uploadStatus.Set(entry, ok ? UploadPhase.Done : UploadPhase.Failed,
+                _uploadStatus.Set(entry, PhaseFromResult(ok, status),
                     UploadVerdict.PreferredUrl(verdict, url));
-                _uploadStateDirty = true;
+                MarkUploadStateDirty(entry);
                 if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict, replaySendAllowed);
                 else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
             }, delayMs, skipPrecheck: !flushBuffer);   // manual re-upload (flushBuffer=false) forces full ingest so the server can REPAIR a bad run
@@ -435,7 +455,7 @@ public sealed partial class Plugin
         {
             // Any unhandled exception here must NOT propagate into the main-thread caller.
             _uploadStatus.Set(entry, UploadPhase.Failed, null);
-            _uploadStateDirty = true;
+            MarkUploadStateDirty(entry);
             _logBuffer.Clear();
             _services.Log.Warning($"[CombatMeter.SP1] Log assembly/upload threw: {ex.Message}");
             return fired;

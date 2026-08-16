@@ -32,6 +32,16 @@ public sealed class UploadCompatTests
         => Assert.False(UploadCompat.IsBelowFloor(current, min));
 
     [Fact]
+    public void PhaseFromResult_maps_426_to_Outdated_and_other_failures_to_Failed()
+    {
+        Assert.Equal(UploadPhase.Done, Plugin.PhaseFromResult(true, 200));
+        Assert.Equal(UploadPhase.Outdated, Plugin.PhaseFromResult(false, 426)); // server floor: old-build payload, retrying can't help
+        Assert.Equal(UploadPhase.Failed, Plugin.PhaseFromResult(false, 500));   // real transient failure — stays retryable
+        Assert.Equal(UploadPhase.Failed, Plugin.PhaseFromResult(false, 400));
+        Assert.Equal(UploadPhase.Failed, Plugin.PhaseFromResult(false, 0));     // transport error
+    }
+
+    [Fact]
     public void TryParseCompat_reads_minPluginVer_and_message()
     {
         var json = "{\"minPluginVer\":\"2.2.1\",\"message\":\"Your CombatMeter is out of date. Update it.\"}";
