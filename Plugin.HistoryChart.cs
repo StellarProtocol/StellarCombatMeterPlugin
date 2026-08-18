@@ -76,7 +76,7 @@ public sealed partial class Plugin
 
         long teamTotalValue = ComputeSessionMetricTotal(h, _historyMetric);
         series.Add(new ChartSeries(
-            "Team total", TeamTotalColor,
+            _loc.T("history.chart.teamTotal"), TeamTotalColor,
             ToFloat(SeriesOrBucketZero(TeamTotalSeries(h, _historyMetric), teamTotalValue)),
             Emphasis: true));
 
