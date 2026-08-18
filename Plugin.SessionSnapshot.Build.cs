@@ -160,7 +160,7 @@ public sealed partial class Plugin
     private IWindowControl RegisterSnapshotWindow() => _services.Windows.Register(new WindowRegistration(
         new WindowSpec(
             Id:          "combatmeter.session-snapshot",
-            Title:       "Session Snapshot",
+            Title:       _loc.T("snapshot.title"),   // baked at registration; rebuilt on LanguageChanged
             DefaultRect: new WindowRect(1040f, 120f, 460f, 520f),
             Category:    WindowCategory.Tools,
             Style:       WindowPanelStyle.GlassMenu)

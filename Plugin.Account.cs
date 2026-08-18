@@ -41,7 +41,7 @@ public sealed partial class Plugin
         => _services.Windows.Register(new WindowRegistration(
             new WindowSpec(
                 Id:          "combatmeter.account",
-                Title:       "Link to site",
+                Title:       _loc.T("header.linkToSite"),   // baked at registration; rebuilt on LanguageChanged
                 DefaultRect: new WindowRect(900f, 120f, 360f, 250f),
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)

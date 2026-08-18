@@ -214,16 +214,22 @@ public sealed partial class Plugin : IStellarPlugin
 
         OnSkillBreakdownRequested += HandleSkillBreakdownRequested;
         OnInspectRequested += HandleInspectRequested;
+
+        // i18n P1: draw-time Func labels re-poll each frame and switch live for free; baked-at-registration
+        // window titles + registered context-menu labels + the cached chart series do not — re-register them.
+        _loc.LanguageChanged += OnLanguageChanged;
     }
 
     private void RegisterColours()
     {
         var registry = _services.Theme.ColorRegistry;
-        _roleDpsSlot    = registry.Register("CombatMeter.Role.Dps",    "Role: DPS",    RoleClassifier.DefaultColor(Role.Dps));
-        _roleTankSlot   = registry.Register("CombatMeter.Role.Tank",   "Role: Tank",   RoleClassifier.DefaultColor(Role.Tank));
-        _roleHealerSlot = registry.Register("CombatMeter.Role.Healer", "Role: Healer", RoleClassifier.DefaultColor(Role.Healer));
-        _hpSlot = registry.Register("CombatMeter.Hp", "HP bar", new ColorRgba(0.25f, 0.70f, 0.30f));
-        _selfAccentSlot = registry.Register("CombatMeter.SelfAccent", "Self-row highlight", new ColorRgba(0.12f, 0.30f, 0.33f, 0.70f));
+        // Theme-editor color labels (shown in the framework Themes panel). Resolved once at registration in
+        // the active language; not re-registered on language change (that could reset user color overrides).
+        _roleDpsSlot    = registry.Register("CombatMeter.Role.Dps",    _loc.T("theme.color.roleDps"),    RoleClassifier.DefaultColor(Role.Dps));
+        _roleTankSlot   = registry.Register("CombatMeter.Role.Tank",   _loc.T("theme.color.roleTank"),   RoleClassifier.DefaultColor(Role.Tank));
+        _roleHealerSlot = registry.Register("CombatMeter.Role.Healer", _loc.T("theme.color.roleHealer"), RoleClassifier.DefaultColor(Role.Healer));
+        _hpSlot = registry.Register("CombatMeter.Hp", _loc.T("theme.color.hpBar"), new ColorRgba(0.25f, 0.70f, 0.30f));
+        _selfAccentSlot = registry.Register("CombatMeter.SelfAccent", _loc.T("theme.color.selfAccent"), new ColorRgba(0.12f, 0.30f, 0.33f, 0.70f));
     }
 
     private void BuildWindows()
@@ -291,6 +297,7 @@ public sealed partial class Plugin : IStellarPlugin
 
     public void Dispose()
     {
+        _loc.LanguageChanged -= OnLanguageChanged;   // i18n P1 live-switch handler
         CaptureModeGeometry(); PersistPrefs();   // remember the active view's size/position across reloads
         DisposeLogUpload();    // SP1: clear the event buffer
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;

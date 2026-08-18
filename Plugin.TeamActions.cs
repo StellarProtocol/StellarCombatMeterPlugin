@@ -55,6 +55,18 @@ public sealed partial class Plugin
             onClick: _ => _services.PartyControl.LeaveParty());
     }
 
+    // Re-register under a new UI language: the labels are captured by IEntityContextMenu.Register once,
+    // so a language change requires disposing the old registrations and registering fresh (i18n P1).
+    private void ReRegisterTeamContextMenuItems()
+    {
+        _transferLeaderReg.Dispose();
+        _kickMemberReg.Dispose();
+        _inviteToTeamReg.Dispose();
+        _createPartyReg.Dispose();
+        _leavePartyReg.Dispose();
+        RegisterTeamContextMenuItems();
+    }
+
     // Returns true when the entity is already a party member (skip self — the row menu
     // already filters self out at the OpenRowMenu call site).
     private bool IsInParty(EntityId e)
