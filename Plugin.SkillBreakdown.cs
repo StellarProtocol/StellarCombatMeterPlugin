@@ -72,10 +72,10 @@ public sealed partial class Plugin
             new SeparatorElement(),
             new RowElement(new HudElement[]
             {
-                new CellElement(new TextElement(() => "Skill", MutedCol), Weight: 1f),
-                NumCell(() => _skillBreakdown is { } sb ? MetricColumnLabel(sb.Metric) : "TOTAL", SkillColTotal, muted: true),
-                NumCell(() => _skillBreakdown is { } sb ? MetricRateLabel(sb.Metric) : "DPS", SkillColDps, muted: true),
-                NumCell(() => "HITS", SkillColCount, muted: true),
+                new CellElement(new TextElement(() => _loc.T("skill.col.skill"), MutedCol), Weight: 1f),
+                NumCell(() => _skillBreakdown is { } sb ? MetricColumnLabel(sb.Metric) : _loc.T("skill.col.total"), SkillColTotal, muted: true),
+                NumCell(() => _skillBreakdown is { } sb ? MetricRateLabel(sb.Metric) : _loc.T("list.rate.dps"), SkillColDps, muted: true),
+                NumCell(() => _loc.T("skill.col.hits"), SkillColCount, muted: true),
             }, Gap: 6f),
             new ConditionalElement(() => _skillRows.Count == 0,
                 new TextElement(SkillEmptyCaption, MutedCol)),
@@ -86,18 +86,18 @@ public sealed partial class Plugin
 
     private string SkillHeader()
     {
-        if (_skillBreakdown is not { } sb) return "Skill Breakdown";
+        if (_skillBreakdown is not { } sb) return _loc.T("skill.window.title");
         EntityId self = _services.CombatSnapshot.LocalEntityId;
         var name = EntityLabel.Resolve(sb.Source, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members);
-        return $"{name} — {MetricColumnLabel(sb.Metric)} by skill";
+        return _loc.TFormat("skill.title.bySkill", name, MetricColumnLabel(sb.Metric));
     }
 
     private string SkillEmptyCaption()
         => _skillBreakdown?.Metric switch
         {
-            Metric.Taken => "No incoming damage recorded.",
-            Metric.Hps   => "No healing recorded for this source.",
-            _            => "No skills recorded for this source.",
+            Metric.Taken => _loc.T("skill.empty.taken"),
+            Metric.Hps   => _loc.T("skill.empty.healing"),
+            _            => _loc.T("skill.empty.skills"),
         };
 
     private string SkillMeta()
@@ -147,7 +147,7 @@ public sealed partial class Plugin
             {
                 Rank = $"#{i + 1}",
                 Name = ResolveSkillName(rows[i].Key),
-                Sub = $"% {MetricColumnLabel(metric)} {pct:F1}%   Count {sk.Hits}   Crit {critPct:F1}%   Luck {luckPct:F1}%",
+                Sub = _loc.TFormat("skill.sub.damage", MetricColumnLabel(metric), pct, sk.Hits, critPct, luckPct),
                 Total = FormatAmount(value),
                 Dps = FormatAmount(ComputeArchivedDps(value, durationMs)),
                 Count = sk.Hits.ToString(),
@@ -170,7 +170,7 @@ public sealed partial class Plugin
             {
                 Rank = $"#{i + 1}",
                 Name = ResolveSkillName(r.SkillId),
-                Sub = $"Count {r.Hits}   Max {FormatAmount(r.TopHit)}",
+                Sub = _loc.TFormat("skill.sub.taken", r.Hits, FormatAmount(r.TopHit)),
                 Total = FormatAmount(r.Total),
                 Dps = FormatAmount(ComputeArchivedDps(r.Total, durationMs)),
                 Count = r.Hits.ToString(),
@@ -227,7 +227,7 @@ public sealed partial class Plugin
     private IWindowControl RegisterSkillBreakdownWindow() => _services.Windows.Register(new WindowRegistration(
         new WindowSpec(
             Id:          "combatmeter.skill-breakdown",
-            Title:       "Skill Breakdown",
+            Title:       _loc.T("skill.window.title"),   // baked at registration; rebuilt on LanguageChanged
             DefaultRect: new WindowRect(1000f, 80f, 460f, 520f),
             Category:    WindowCategory.Tools,
             Style:       WindowPanelStyle.GlassMenu)   // dark-slate frosted dialog: free-drag + ✕ close (see history above)

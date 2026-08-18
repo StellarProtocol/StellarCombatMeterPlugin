@@ -60,9 +60,9 @@ public sealed partial class Plugin
     private void OpenInviteMenu()
     {
         _rowMenuItems.Clear();
-        _rowMenuItems.Add(new EntityMenuItem("Invite to Party",
+        _rowMenuItems.Add(new EntityMenuItem(_loc.T("menu.inviteToParty"),
             () => _services.Lua.DoString("pcall(function() (Z.UIMgr):OpenView('team_invite_popup') end)")));
-        _rowMenuName = "Party";
+        _rowMenuName = _loc.T("menu.party");
         ShowRowMenuAtCursor();
     }
 
