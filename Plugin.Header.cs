@@ -13,8 +13,17 @@ public sealed partial class Plugin
 {
     private bool _mainMenuOpen;
 
-    private static readonly string[] MetricDrop = { "DPS ▾", "HPS ▾", "Taken ▾" };
-    private static readonly string[] ModePill   = { "List", "Party-focus" };
+    private const int MetricCount = 3;   // Dps, Hps, Taken — used by CycleMetric wraparound
+
+    // Localized metric name (DPS/HPS acronyms stay per language; "Taken" translates). The dropdown button
+    // appends " ▾" at its call site; the metric row-menu reuses the bare name. Resolved live via _loc.
+    private string MetricName(Metric m) => m switch
+    {
+        Metric.Dps => _loc.T("list.metric.dps"),
+        Metric.Hps => _loc.T("list.metric.hps"),
+        _          => _loc.T("list.metric.taken"),
+    };
+    private string ModeLabel(ViewMode v) => v == ViewMode.List ? _loc.T("header.mode.list") : _loc.T("header.mode.partyFocus");
 
     private ColorRgba? MutedCol() => new ColorRgba(0.66f, 0.70f, 0.73f, 1f);
 
@@ -43,8 +52,8 @@ public sealed partial class Plugin
 
     private HudElement BuildHeaderBar() => new RowElement(new HudElement[]
     {
-        new TextElement(() => "Meter", Emphasis: true),
-        new ButtonElement(() => "Reset", Clear),
+        new TextElement(() => _loc.T("header.title"), Emphasis: true),
+        new ButtonElement(() => _loc.T("common.reset"), Clear),
         new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
             new ButtonElement(() => "", TogglePunctuate, Icon: () => _locationPinPng)), Width: 28f),
         new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
@@ -56,9 +65,9 @@ public sealed partial class Plugin
         new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
             new ButtonElement(() => "", LeaderCountdown, Icon: () => _countdownPng)), Width: 28f),
         new SpacerElement(),
-        new ButtonElement(() => MetricDrop[(int)_metric], static () => { })
+        new ButtonElement(() => MetricName(_metric) + " ▾", static () => { })
             { OnClickWithRect = OpenMetricMenu },
-        new ButtonElement(() => ModePill[(int)_viewMode], ToggleViewMode),
+        new ButtonElement(() => ModeLabel(_viewMode), ToggleViewMode),
         // Expand/collapse caret for the inline menu below (▾ expand · ▴ collapse) — not a hamburger, since it
         // now toggles the inline Scope/Pause/Archive/History panel rather than opening a floating popover.
         new ButtonElement(() => _mainMenuOpen ? "▴" : "▾", ToggleMainMenu, Active: () => _mainMenuOpen, Width: 30f),
@@ -74,11 +83,11 @@ public sealed partial class Plugin
         new ConditionalElement(() => _viewMode == ViewMode.List || ShowPartySizeControl, new SeparatorElement()),
         new RowElement(new HudElement[]
         {
-            new ButtonElement(() => _paused ? "Resume" : "Pause", TogglePause),
-            new ButtonElement(() => "Archive", ManualArchiveFromMenu),
-            new ButtonElement(() => $"History ({_history.Count})", ToggleHistory, Active: () => _historyWindow.IsShown),
-            new ButtonElement(() => "Appearance", ToggleAppearance, Active: () => _settingsWindow.IsShown),
-            new ButtonElement(() => "Link to site", ToggleAccount, Active: () => _accountWindow.IsShown),
+            new ButtonElement(() => _paused ? _loc.T("common.resume") : _loc.T("common.pause"), TogglePause),
+            new ButtonElement(() => _loc.T("common.archive"), ManualArchiveFromMenu),
+            new ButtonElement(() => _loc.TFormat("header.historyCount", _history.Count), ToggleHistory, Active: () => _historyWindow.IsShown),
+            new ButtonElement(() => _loc.T("header.appearance"), ToggleAppearance, Active: () => _settingsWindow.IsShown),
+            new ButtonElement(() => _loc.T("header.linkToSite"), ToggleAccount, Active: () => _accountWindow.IsShown),
             // Settings gear: a BARE clickable icon (no button chrome / fill / border), right-aligned —
             // the StatInspector mini-HUD pattern (CellElement > SelectableElement > ImageElement). An
             // ImageElement carries no button styling, so it reads as a standalone cog like the sibling
@@ -90,10 +99,10 @@ public sealed partial class Plugin
 
     private HudElement BuildScopeRow() => new RowElement(new HudElement[]
     {
-        new TextElement(() => "Scope:", MutedCol),
-        ScopeItem("Self", FilterMode.Self),
-        ScopeItem("Party", FilterMode.Party),
-        ScopeItem("All", FilterMode.All),
+        new TextElement(() => _loc.T("header.scope"), MutedCol),
+        ScopeItem("scope.self", FilterMode.Self),
+        ScopeItem("scope.party", FilterMode.Party),
+        ScopeItem("scope.all", FilterMode.All),
     }, Gap: 4f);
 
     // 5/20 party-size control. The active pill reflects the live party size (the grid auto-follows server
@@ -101,7 +110,7 @@ public sealed partial class Plugin
     // the game's own ChangeTeamMemberType (policy-clean, never crafts a packet).
     private HudElement BuildPartySizeRow() => new RowElement(new HudElement[]
     {
-        new TextElement(() => "Party:", MutedCol),
+        new TextElement(() => _loc.T("header.party"), MutedCol),
         PartySizeItem("5",  PartyType.Regular5),
         PartySizeItem("20", PartyType.Raid20),
     }, Gap: 4f);
@@ -110,18 +119,18 @@ public sealed partial class Plugin
         => new ButtonElement(() => label, () => RequestPartySize(size),
                              Active: () => _services.PartySnapshot.PartyType == size);
 
-    private HudElement ScopeItem(string label, FilterMode f)
-        => new ButtonElement(() => label, () => SelectScope(f), Active: () => _filter == f);
+    private HudElement ScopeItem(string key, FilterMode f)
+        => new ButtonElement(() => _loc.T(key), () => SelectScope(f), Active: () => _filter == f);
 
     // ----- menu actions -----
 
     private void OpenMetricMenu(WindowRect anchor)
     {
         _rowMenuItems.Clear();
-        _rowMenuItems.Add(new EntityMenuItem("DPS",   () => SelectMetric(Metric.Dps)));
-        _rowMenuItems.Add(new EntityMenuItem("HPS",   () => SelectMetric(Metric.Hps)));
-        _rowMenuItems.Add(new EntityMenuItem("Taken", () => SelectMetric(Metric.Taken)));
-        _rowMenuName = "Metric";
+        _rowMenuItems.Add(new EntityMenuItem(MetricName(Metric.Dps),   () => SelectMetric(Metric.Dps)));
+        _rowMenuItems.Add(new EntityMenuItem(MetricName(Metric.Hps),   () => SelectMetric(Metric.Hps)));
+        _rowMenuItems.Add(new EntityMenuItem(MetricName(Metric.Taken), () => SelectMetric(Metric.Taken)));
+        _rowMenuName = _loc.T("menu.metric");
         ShowRowMenuBelow(anchor);
     }
 
@@ -132,7 +141,7 @@ public sealed partial class Plugin
     private void SelectMetric(Metric m) { _metric = m; PersistPrefs(); }
 
     // Advance to the next metric (DPS → HPS → Taken → DPS). Wired to the combatmeter.mode hotkey.
-    private void CycleMetric() => SelectMetric((Metric)(((int)_metric + 1) % MetricDrop.Length));
+    private void CycleMetric() => SelectMetric((Metric)(((int)_metric + 1) % MetricCount));
     private void SelectScope(FilterMode f) { _filter = f; PersistPrefs(); }
 
     // Invoke the game's OWN ChangeTeamMemberType through IPartyControl (Lua bridge) — never a hand-built
@@ -166,7 +175,7 @@ public sealed partial class Plugin
     // Called from ManualArchive only when reason == Manual, so auto archives (scene/stage/boss/idle)
     // don't spam the toast surface. Fire-and-forget on the main thread (INotifications enqueues).
     private void NotifyManualArchived(long durationMs)
-        => _services.Notifications.Notify($"Archived ✓ ({durationMs / 1000} s)", NotificationKind.Success);
+        => _services.Notifications.Notify(_loc.TFormat("archive.saved.toast", durationMs / 1000), NotificationKind.Success);
 
     private void ToggleHistory()
     {

@@ -19,37 +19,41 @@ public sealed partial class Plugin
         _            => s.TotalDamage,
     };
 
-    internal static string MetricColumnLabel(Metric m) => m switch
+    // Pure metric→catalog-key mappers (static, unit-testable); the instance labels below resolve them via _loc
+    // so table headers / axis titles switch language live. DPS/HPS/DTPS acronyms are kept per language.
+    internal static string MetricColumnKey(Metric m) => m switch
     {
-        Metric.Hps   => "HEAL",
-        Metric.Taken => "TAKEN",
-        _            => "DMG",
+        Metric.Hps   => "list.col.heal",
+        Metric.Taken => "list.col.taken",
+        _            => "list.col.dmg",
+    };
+    internal static string MetricRateKey(Metric m) => m switch
+    {
+        Metric.Hps   => "list.rate.hps",
+        Metric.Taken => "list.rate.dtps",
+        _            => "list.rate.dps",
+    };
+    internal static string MetricAxisKey(Metric m) => m switch
+    {
+        Metric.Hps   => "history.axis.heal",
+        Metric.Taken => "history.axis.taken",
+        _            => "history.axis.dmg",
     };
 
-    internal static string MetricRateLabel(Metric m) => m switch
-    {
-        Metric.Hps   => "HPS",
-        Metric.Taken => "DTPS",
-        _            => "DPS",
-    };
-
-    internal static string MetricAxisTitle(Metric m) => m switch
-    {
-        Metric.Hps   => "Healing / sec",
-        Metric.Taken => "Damage taken / sec",
-        _            => "Damage / sec",
-    };
+    private string MetricColumnLabel(Metric m) => _loc.T(MetricColumnKey(m));
+    private string MetricRateLabel(Metric m)   => _loc.T(MetricRateKey(m));
+    private string MetricAxisTitle(Metric m)   => _loc.T(MetricAxisKey(m));
 
     // History-window metric toggle (mirrors Plugin.Header.cs MetricItem).
     private HudElement BuildHistoryMetricRow() => new RowElement(new HudElement[]
     {
-        HistoryMetricItem("DPS", Metric.Dps),
-        HistoryMetricItem("HPS", Metric.Hps),
-        HistoryMetricItem("Taken", Metric.Taken),
+        HistoryMetricItem("list.metric.dps", Metric.Dps),
+        HistoryMetricItem("list.metric.hps", Metric.Hps),
+        HistoryMetricItem("list.metric.taken", Metric.Taken),
     }, Gap: 6f);
 
-    private HudElement HistoryMetricItem(string label, Metric m)
-        => new ButtonElement(() => label, () => SelectHistoryMetric(m), Active: () => _historyMetric == m);
+    private HudElement HistoryMetricItem(string key, Metric m)
+        => new ButtonElement(() => _loc.T(key), () => SelectHistoryMetric(m), Active: () => _historyMetric == m);
 
     private void SelectHistoryMetric(Metric m)
     {
