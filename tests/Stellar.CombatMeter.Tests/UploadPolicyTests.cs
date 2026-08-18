@@ -80,12 +80,13 @@ public class UploadPolicyTests
     [Fact]
     public void Label_MatchesTheSiteFeedTabNames()
     {
-        Assert.Equal("Dungeons",   UploadPolicy.Label(ContentKind.Dungeon));
-        Assert.Equal("Raids",      UploadPolicy.Label(ContentKind.Raid));
-        Assert.Equal("World Boss", UploadPolicy.Label(ContentKind.WorldBoss));
-        // Master-data spelling: "Stimen", not the owner's "Stiment" — keeps name resolution working.
-        Assert.Equal("Stimen Vaults", UploadPolicy.Label(ContentKind.Vault));
-        Assert.Equal("Other",      UploadPolicy.Label(ContentKind.Other));
+        // i18n P1: Label now returns a catalog KEY; the site-aligned display text ("Dungeons"/"Raids"/…)
+        // lives in Lang/en.json under these keys.
+        Assert.Equal("upload.kind.dungeon",   UploadPolicy.Label(ContentKind.Dungeon));
+        Assert.Equal("upload.kind.raid",      UploadPolicy.Label(ContentKind.Raid));
+        Assert.Equal("upload.kind.worldBoss", UploadPolicy.Label(ContentKind.WorldBoss));
+        Assert.Equal("upload.kind.vault",     UploadPolicy.Label(ContentKind.Vault));
+        Assert.Equal("upload.kind.other",     UploadPolicy.Label(ContentKind.Other));
     }
 
     [Fact]

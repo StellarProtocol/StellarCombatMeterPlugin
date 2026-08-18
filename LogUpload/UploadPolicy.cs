@@ -70,15 +70,15 @@ internal static class UploadPolicy
     internal static string PrefKey(ContentKind kind, UploadArtifact artifact)
         => "logUpload.policy." + KindKey(kind) + "." + ArtifactKey(artifact);
 
-    /// <summary>Settings-pane row label (matches the site's feed tab names).</summary>
+    /// <summary>Catalog KEY for the settings-pane row label (en.json values match the site's feed tab names).</summary>
     internal static string Label(ContentKind kind) => kind switch
     {
-        ContentKind.Dungeon   => "Dungeons",
-        ContentKind.Raid      => "Raids",
-        ContentKind.WorldBoss => "World Boss",
-        // Master-data spelling is "Stimen" (the owner wrote "Stiment") — keep it aligned with the site.
-        ContentKind.Vault     => "Stimen Vaults",
-        _                     => "Other",
+        ContentKind.Dungeon   => "upload.kind.dungeon",
+        ContentKind.Raid      => "upload.kind.raid",
+        ContentKind.WorldBoss => "upload.kind.worldBoss",
+        // Value is a catalog KEY now; en.json carries the site-aligned "Stimen Vaults" spelling.
+        ContentKind.Vault     => "upload.kind.vault",
+        _                     => "upload.kind.other",
     };
 }
 
