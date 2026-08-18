@@ -54,17 +54,17 @@ public sealed partial class Plugin
     {
         var snap = s.Snap;
         var liveName = _services.CombatLookup.GetEntityName(s.Source);
-        var name = !string.IsNullOrEmpty(liveName) ? liveName! : snap.Name is { Length: > 0 } ? snap.Name : "Unknown";
-        s.Identity = $"{name} — Session Snapshot";
+        var name = !string.IsNullOrEmpty(liveName) ? liveName! : snap.Name is { Length: > 0 } ? snap.Name : _loc.T("common.unknown");
+        s.Identity = _loc.TFormat("snapshot.identity", name);
 
         var prof = ResolveSnapProfession(snap);
         var level = SnapAttr(snap, AttrLevel);
         var ci = CultureInfo.InvariantCulture;
         var parts = new System.Collections.Generic.List<string>(4);
         if (prof.Length > 0) parts.Add(prof);
-        if (level > 0) parts.Add($"Lv {level.ToString(ci)}");
-        if (snap.FightPoint > 0) parts.Add($"Ability Score {snap.FightPoint.ToString("N0", ci)}");
-        if (snap.MaxHp > 0) parts.Add($"HP {snap.Hp.ToString("N0", ci)} / {snap.MaxHp.ToString("N0", ci)}");
+        if (level > 0) parts.Add(_loc.TFormat("snapshot.sub.level", level.ToString(ci)));
+        if (snap.FightPoint > 0) parts.Add(_loc.TFormat("snapshot.sub.abilityScore", snap.FightPoint.ToString("N0", ci)));
+        if (snap.MaxHp > 0) parts.Add(_loc.TFormat("snapshot.sub.hp", snap.Hp.ToString("N0", ci), snap.MaxHp.ToString("N0", ci)));
         s.SubIdentity = string.Join("   ·   ", parts);
     }
 
