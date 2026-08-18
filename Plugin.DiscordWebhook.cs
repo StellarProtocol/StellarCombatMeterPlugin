@@ -70,7 +70,7 @@ public sealed partial class Plugin
         var probe = new DiscordRunSummary("CombatMeter", "test", 0, 1,
             new[] { new DiscordPlayerRow("Webhook connected ✓", 0, 0, 0) }, null);
         DiscordWebhookPoster.PostFireAndForget(_discordWebhookUrl, DiscordMessageBuilder.Build(probe),
-            (ok, status, err) => _discordTestResult = ok ? "Sent ✓" : $"Failed: {(status == 0 ? err : status.ToString())}");
+            (ok, status, err) => _discordTestResult = ok ? _loc.T("discord.test.sent") : _loc.TFormat("discord.test.failed", status == 0 ? err : status.ToString()));
     }
 
     // Renders the run card IN-GAME (main thread, from the settings button) from your latest banked run's
@@ -83,7 +83,7 @@ public sealed partial class Plugin
         _discordTestResult = "Rendering… sending card";
         DiscordWebhookPoster.PostImage(_discordWebhookUrl, png,
             "{\"content\":\"Run card — rendered in-game.\"}",
-            onComplete: (ok, status, err) => _discordTestResult = ok ? "Card sent ✓" : $"Card failed: {(status == 0 ? err : status.ToString())}");
+            onComplete: (ok, status, err) => _discordTestResult = ok ? _loc.T("discord.test.cardSent") : _loc.TFormat("discord.test.cardFailed", status == 0 ? err : status.ToString()));
     }
 
     private sealed class CardAgg

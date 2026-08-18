@@ -47,7 +47,7 @@ public sealed partial class Plugin
     private HudElement BuildGroupColumn(int group)
     {
         var children = new HudElement[1 + MeterAggregator.SlotsPerGroup];
-        children[0] = new TextElement(() => $"Group {group + 1}", MutedCol, Emphasis: true);
+        children[0] = new TextElement(() => _loc.TFormat("partyFocus.group", group + 1), MutedCol, Emphasis: true);
         for (var slot = 0; slot < MeterAggregator.SlotsPerGroup; slot++)
         {
             var idx = group * MeterAggregator.SlotsPerGroup + slot;
