@@ -30,6 +30,7 @@ public sealed partial class Plugin : IStellarPlugin
     private const float MainMenuPanelH   = 72f;   // Scope/party-size row + separator + Pause/Archive/History row + spacer
 
     private readonly IPluginServices _services;
+    private readonly ILocalization _loc;   // plugin-scoped UI-text resolver (framework 2.1.0); reads only, never sets the language
 
     private IWindowControl _mainWindow = null!;
     private IWindowControl _historyWindow = null!;
@@ -171,6 +172,7 @@ public sealed partial class Plugin : IStellarPlugin
     public Plugin(IPluginServices services)
     {
         _services = services;
+        _loc = services.Localization;   // i18n P1: plugin-scoped catalog façade (auto-discovers embedded Lang/*.json)
         _services.Log.Info("[CombatMeter] plugin constructed");
 
         _inspectIconPng  = BuildInspectMagnifierPng();   // procedural magnifier for the history Inspect button (main thread)

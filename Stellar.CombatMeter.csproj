@@ -14,9 +14,9 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Requires IGameAssets.LoadByPath (framework main PR #61). Publishes with the next framework release
-         (expected 2.0.3); this ref must match that release version — ships together (no release yet). -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.0.3" />
+    <!-- Requires IPluginServices.Localization (ILocalization, framework 2.1.0, i18n P1). Ships with
+         framework 2.1.0 — no release yet; build locally against <devkit>/.localfeed (dotnet pack). -->
+    <PackageReference Include="Stellar.Abstractions" Version="2.1.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
@@ -34,6 +34,13 @@
     <EmbeddedResource Include="Resources/headphone.png" LogicalName="Stellar.CombatMeter.headphone.png" />
     <EmbeddedResource Include="Resources/mute.png" LogicalName="Stellar.CombatMeter.mute.png" />
     <EmbeddedResource Include="Resources/settings-gear.png" LogicalName="Stellar.CombatMeter.settings-gear.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- i18n catalogs: auto-discovered by the framework via the Lang.<code>.json suffix (framework 2.1.0). -->
+    <EmbeddedResource Include="Lang/en.json" LogicalName="Stellar.CombatMeter.Lang.en.json" />
+    <EmbeddedResource Include="Lang/ja.json" LogicalName="Stellar.CombatMeter.Lang.ja.json" />
+    <EmbeddedResource Include="Lang/th.json" LogicalName="Stellar.CombatMeter.Lang.th.json" />
+    <EmbeddedResource Include="Lang/id.json" LogicalName="Stellar.CombatMeter.Lang.id.json" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests/**/*.cs" />
