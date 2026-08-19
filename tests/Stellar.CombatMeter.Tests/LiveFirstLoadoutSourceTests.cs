@@ -101,4 +101,46 @@ public class LiveFirstLoadoutSourceTests
         };
         Assert.Equal("right-class", Plugin.PickSlot(slots, professionId: 2)!.Name);
     }
+
+    // --- ResolveTalents: live talents beat any saved plan's (owner rule; Phase 2) ---
+
+    [Fact]
+    public void ResolveTalents_LiveStateForTheActiveClass_BeatsTheSlot()
+    {
+        var live = new LiveLoadoutState(2, 205, new[] { 9, 9, 9 });
+        var slot = Slot(1, professionId: 2, isCurrent: true) with { TalentStageId = 201, TalentNodes = new[] { 1 } };
+        var (stage, nodes) = Plugin.ResolveTalents(live, slot, professionId: 2);
+        Assert.Equal(205, stage);
+        Assert.Equal(new[] { 9, 9, 9 }, nodes);
+    }
+
+    [Fact]
+    public void ResolveTalents_LiveOfAnotherClass_FallsBackToSlot()
+    {
+        var live = new LiveLoadoutState(5, 505, new[] { 7 });
+        var slot = Slot(1, professionId: 2) with { TalentStageId = 201, TalentNodes = new[] { 1, 2 } };
+        var (stage, nodes) = Plugin.ResolveTalents(live, slot, professionId: 2);
+        Assert.Equal(201, stage);
+        Assert.Equal(new[] { 1, 2 }, nodes);
+    }
+
+    [Fact]
+    public void ResolveTalents_NoLiveNoSlot_IsEmpty()
+    {
+        var (stage, nodes) = Plugin.ResolveTalents(null, null, professionId: 2);
+        Assert.Equal(0, stage);
+        Assert.Null(nodes);
+    }
+
+    [Fact]
+    public void ResolveTalents_LiveWithZeroStage_StillWins_NeverMixedWithSlot()
+    {
+        // A live read that resolved the class but not the stage must NOT splice in a saved plan's
+        // stage — half-live half-plan talents would mislabel the spec.
+        var live = new LiveLoadoutState(2, 0, null);
+        var slot = Slot(1, professionId: 2) with { TalentStageId = 201, TalentNodes = new[] { 1 } };
+        var (stage, nodes) = Plugin.ResolveTalents(live, slot, professionId: 2);
+        Assert.Equal(0, stage);
+        Assert.Null(nodes);
+    }
 }

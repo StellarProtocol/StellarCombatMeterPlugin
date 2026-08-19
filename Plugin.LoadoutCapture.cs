@@ -208,15 +208,25 @@ public sealed partial class Plugin
 
     // The active class's project name + talent stage + allocated talent nodes, from the framework's
     // loadout entries. FindLoadoutSlot prefers the live-synthesized "Current" (-1) entry — the only
-    // entry whose talents are LIVE — then the plan the player is ON; a saved plan's entry carries its
-    // own parsed talents, so a respec without a plan save can be stale until the next refresh (full
-    // talent liveness lands in Phase 2, ILoadout.LiveState). Never an arbitrary same-class sibling.
-    // Absent (0/null) when nothing currently describes this class.
+    // entry whose talents are live via ILoadout.LiveState since Phase 2 — then the plan the player is ON;
+    // a saved plan's entry carries its own parsed talents, so a respec without a plan save can be stale
+    // until the next refresh. Never an arbitrary same-class sibling. Absent (0/null) when nothing
+    // currently describes this class.
     private (string? ProjectName, int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveActiveProject(int professionId)
     {
         var slot = FindLoadoutSlot(professionId);
-        return slot is null ? (null, 0, null) : (slot.Name, slot.TalentStageId, slot.TalentNodes);
+        var (stage, nodes) = ResolveTalents(_services.Loadout.LiveState, slot, professionId);
+        return (slot?.Name, stage, nodes);
     }
+
+    /// <summary>Talent source for the ACTIVE class: the framework's LIVE state when it describes
+    /// this class (never a saved plan — owner rule), else the picked slot's parsed talents, else
+    /// empty. All-or-nothing per source: live talents are never spliced with a plan's.</summary>
+    internal static (int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveTalents(
+        LiveLoadoutState? live, LoadoutSlot? slot, int professionId)
+        => live is not null && live.ProfessionId == professionId
+            ? (live.TalentStageId, live.TalentNodes)
+            : (slot?.TalentStageId ?? 0, slot?.TalentNodes);
 
     // Best LoadoutSlot describing this class, or null — see PickSlot for the preference order.
     private LoadoutSlot? FindLoadoutSlot(int professionId) => PickSlot(_services.Loadout.GetSlots(), professionId);
