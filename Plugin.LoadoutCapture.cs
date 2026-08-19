@@ -12,6 +12,11 @@ namespace Stellar.CombatMeter;
 /// per-class-loadout plan) maps this onto.</summary>
 internal sealed record CapturedModule(int Slot, int ConfigId, int Quality, IReadOnlyList<int[]> Parts);
 
+/// <summary>Archive-time source for a captured class's gear/modules — see
+/// <see cref="Plugin.ResolveGearSource"/>. Live-first, loadout-never (owner rulings 2026-08-05 +
+/// 2026-08-19): a saved plan is reached only when no live data ever resolved for the class.</summary>
+internal enum LoadoutGearSource { Live, Captured, SavedSlot }
+
 /// <summary>
 /// A full snapshot of ONE played class's loadout — gear (ids + self-only rolled detail), modules,
 /// skills, fashion, its project name, and active talent stage. Captured self-only, latest-wins per
@@ -207,14 +212,35 @@ public sealed partial class Plugin
         return slot is null ? (null, 0, null) : (slot.Name, slot.TalentStageId, slot.TalentNodes);
     }
 
-    // First saved LoadoutSlot whose class matches, or null. The framework populates each slot's
-    // per-class Gear/Modules from its saved plan's item container (class-blind live IInventory can't).
-    private LoadoutSlot? FindLoadoutSlot(int professionId)
+    // Best LoadoutSlot describing this class, or null — see PickSlot for the preference order.
+    private LoadoutSlot? FindLoadoutSlot(int professionId) => PickSlot(_services.Loadout.GetSlots(), professionId);
+
+    /// <summary>Preference order for the entry describing a class: the framework's live-synthesized
+    /// "Current" entry (Index -1 — IS the live state) beats the plan the player is ON (IsCurrent) beats
+    /// any other same-class plan. The old first-match-by-profession pick is what shipped a sibling plan's
+    /// saved modules as "the" build (owner report 2026-08-19, run sea/YcVuYojHoD: tank archive carried
+    /// the Frostbeam plan's modules).</summary>
+    internal static LoadoutSlot? PickSlot(IReadOnlyList<LoadoutSlot> slots, int professionId)
     {
-        foreach (var slot in _services.Loadout.GetSlots())
-            if (slot.ProfessionId == professionId) return slot;
-        return null;
+        LoadoutSlot? current = null, first = null;
+        foreach (var slot in slots)
+        {
+            if (slot.ProfessionId != professionId) continue;
+            if (slot.Index == -1) return slot;
+            if (slot.IsCurrent) current ??= slot;
+            first ??= slot;
+        }
+        return current ?? first;
     }
+
+    /// <summary>Which source fills a captured class's gear/modules at archive. LIVE for the class the
+    /// player is on (the setup this combat actually used); otherwise the values frozen while the class
+    /// was active; a saved LoadoutSlot only as last resort when live never resolved for it. Pure — the
+    /// regression tests pin that an available live/captured set is NEVER passed over for a saved plan.</summary>
+    internal static LoadoutGearSource ResolveGearSource(bool isActiveClass, bool liveHasData, bool capturedHasData)
+        => isActiveClass && liveHasData ? LoadoutGearSource.Live
+         : capturedHasData ? LoadoutGearSource.Captured
+         : LoadoutGearSource.SavedSlot;
 
     // At archive (Plugin.AttrRange.cs ApplyAttrRanges): fill each played class's gear/modules from its
     // matching LoadoutSlot — the saved-loadout base (distinct per class), which the framework overlays with
