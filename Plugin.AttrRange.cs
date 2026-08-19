@@ -124,6 +124,9 @@ public sealed partial class Plugin
             WriteRangeToSnapshot(snap, _attrRange.Base(prof), _attrRange.Peaks(prof));
 
         if (entry.Loadouts.Count == 0) return;
+        // One live-container read per archive: the read walks the full item container to build a uuid
+        // index, so it is hoisted out of the per-class loop (review finding 2026-08-19).
+        var live = _services.Inventory.GetLiveEquipped();
         var resolved = new List<CapturedLoadout>(entry.Loadouts.Count);
         foreach (var l in entry.Loadouts)
         {
@@ -133,7 +136,7 @@ public sealed partial class Plugin
             // Fill each played class's gear/modules live-first: the ACTIVE class re-reads the live
             // equipped containers, earlier-played classes keep their frozen at-play capture (saved
             // loadouts only as a never-saw-live fallback) — Plugin.LoadoutCapture.cs ApplyLiveEquipment.
-            resolved.Add(ApplyLiveEquipment(withAttrs));
+            resolved.Add(ApplyLiveEquipment(withAttrs, live));
         }
         entry.Loadouts = resolved;
     }

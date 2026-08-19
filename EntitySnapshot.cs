@@ -129,11 +129,16 @@ public sealed partial class Plugin
 
     // Self-only per-piece instance detail (rolls / refine / perfection / gem) from the local
     // inventory — other players never broadcast it. Feeds the upload's `gearDetail` block.
-    // Live containers first (reflect mid-session equips/refines); the method-21 full-sync cache only
-    // when live hasn't resolved — same live-first rule as the per-class loadout capture.
+    // Live containers first (reflect mid-session equips/refines) — but ONLY for a capture that will
+    // be frozen as populated (attrs resolved; CaptureAttributes runs before this): the 1 Hz
+    // sticky-retry loop (Plugin.EntitySnapshotSticky.cs) re-captures self until populated, and the
+    // live read is a full-inventory reflection walk, so an unpopulated retry must not pay it.
+    // Unpopulated stubs keep the cheap method-21 cache and are replaced the moment attrs resolve.
     private void CaptureSelfGearDetail(EntitySnapshot snap)
     {
-        var gear = _services.Inventory.GetLiveEquipped().Gear;
+        var gear = snap.AttrIds.Length > 0
+            ? _services.Inventory.GetLiveEquipped().Gear
+            : System.Array.Empty<GearInstance>();
         if (gear.Count == 0) gear = _services.Inventory.GetSelfGear();
         var n = gear.Count;
         snap.GdSlots = new int[n]; snap.GdQuality = new int[n]; snap.GdRefine = new int[n];

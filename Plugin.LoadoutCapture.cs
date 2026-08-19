@@ -206,10 +206,11 @@ public sealed partial class Plugin
         return list;
     }
 
-    // The active class's project name + talent stage + allocated talent nodes. Talent data rides the
-    // framework's loadout entries but is read LIVE per class from professionList.talentList (framework
-    // refresh chunk); FindLoadoutSlot prefers the live-synthesized entry, then the current plan, so the
-    // stage/nodes reflect what the player is actually on — never an arbitrary same-class sibling plan.
+    // The active class's project name + talent stage + allocated talent nodes, from the framework's
+    // loadout entries. FindLoadoutSlot prefers the live-synthesized "Current" (-1) entry — the only
+    // entry whose talents are LIVE — then the plan the player is ON; a saved plan's entry carries its
+    // own parsed talents, so a respec without a plan save can be stale until the next refresh (full
+    // talent liveness lands in Phase 2, ILoadout.LiveState). Never an arbitrary same-class sibling.
     // Absent (0/null) when nothing currently describes this class.
     private (string? ProjectName, int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveActiveProject(int professionId)
     {
@@ -251,9 +252,8 @@ public sealed partial class Plugin
     // containers so the archive carries exactly the setup this combat used (module/gear edits mid-run
     // included, class change or not). Earlier-played classes keep the live values frozen at their last
     // active moment. The saved-slot fallback exists only for a capture that never saw live data.
-    private CapturedLoadout ApplyLiveEquipment(CapturedLoadout l)
+    private CapturedLoadout ApplyLiveEquipment(CapturedLoadout l, EquippedLoadout live)
     {
-        var live = _services.Inventory.GetLiveEquipped();
         var isActive = l.ProfessionId != 0 && l.ProfessionId == _services.PlayerState.Profession;
         var liveHasData = live.Gear.Count > 0 || live.Modules.Count > 0;
         var capturedHasData = l.Gear.Count > 0 || l.Modules.Count > 0;
