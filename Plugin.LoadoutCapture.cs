@@ -168,22 +168,25 @@ public sealed partial class Plugin
         if (!self.IsPlayer) return;
 
         var (projectName, talentStageId, talentNodes) = ResolveActiveProject(professionId);
-        // Gear/modules are filled at ARCHIVE from the matching LoadoutSlot (saved-loadout base, per class,
-        // + the live overlay for the current class) — see ApplyPerClassGear. Here we only capture the
-        // active-class skills/fashion/attrs/talents/abilityScore (the data LoadoutSlot doesn't carry).
+        // Gear/modules come from the LIVE equipped containers (owner ruling 2026-08-05, re-escalated
+        // 2026-08-19: "I don't want any loadout, I want what user currently is using") — NEVER from a
+        // saved LoadoutSlot. Captured here while the class is active, refreshed on every SelfGearChanged
+        // (gear field 12 + module field 57 deltas both raise it), and the ACTIVE class re-reads live once
+        // more at archive (ApplyLiveEquipment) so the snapshot is the setup the combat actually used.
         // AbilityScore (FightPoint) is gear-dependent, so we read it HERE while this class is the active
         // one — the broadcast per-entity value reflects only whatever class the player is on now. A class
         // swap re-syncs gear a moment later (TickGearRecapture re-fires this), and latest-wins overwrites
         // the stale read with the settled per-class value (same lifecycle as the gear re-capture).
+        var live = _services.Inventory.GetLiveEquipped();
         _loadoutCapture.Capture(new CapturedLoadout(
             ProfessionId:  professionId,
             ProjectName:   projectName,
             TalentStageId: talentStageId,
-            Gear:          System.Array.Empty<int[]>(),
-            GearDetail:    System.Array.Empty<GearDetail>(),
+            Gear:          BuildGearPairs(live.Gear),
+            GearDetail:    BuildLoadoutGearDetail(live.Gear),
             Skills:        BuildLoadoutSkills(self),
             Fashion:       BuildLoadoutFashion(self),
-            Modules:       System.Array.Empty<CapturedModule>(),
+            Modules:       BuildLoadoutModulesFromSlot(live.Modules),
             TalentNodes:   talentNodes,
             Attributes:    BuildLoadoutAttributes(self),
             AbilityScore:  _services.CombatLookup.GetFightPoint(self)));
@@ -203,9 +206,11 @@ public sealed partial class Plugin
         return list;
     }
 
-    // The active class's saved-loadout name + talent stage + allocated talent nodes (the enriched
-    // LoadoutSlot) — the data IInventory cannot give. Absent (0/null) when no saved slot currently
-    // matches this class.
+    // The active class's project name + talent stage + allocated talent nodes. Talent data rides the
+    // framework's loadout entries but is read LIVE per class from professionList.talentList (framework
+    // refresh chunk); FindLoadoutSlot prefers the live-synthesized entry, then the current plan, so the
+    // stage/nodes reflect what the player is actually on — never an arbitrary same-class sibling plan.
+    // Absent (0/null) when nothing currently describes this class.
     private (string? ProjectName, int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveActiveProject(int professionId)
     {
         var slot = FindLoadoutSlot(professionId);
@@ -242,20 +247,37 @@ public sealed partial class Plugin
          : capturedHasData ? LoadoutGearSource.Captured
          : LoadoutGearSource.SavedSlot;
 
-    // At archive (Plugin.AttrRange.cs ApplyAttrRanges): fill each played class's gear/modules from its
-    // matching LoadoutSlot — the saved-loadout base (distinct per class), which the framework overlays with
-    // the LIVE equipped set for the class currently active (so manual edits show). No-op when the slot's
-    // gear hasn't resolved yet (keeps the empty capture; the site falls back gracefully).
-    private CapturedLoadout ApplyPerClassGear(CapturedLoadout l)
+    // At archive (Plugin.AttrRange.cs ApplyAttrRanges): re-read the ACTIVE class from the live equipped
+    // containers so the archive carries exactly the setup this combat used (module/gear edits mid-run
+    // included, class change or not). Earlier-played classes keep the live values frozen at their last
+    // active moment. The saved-slot fallback exists only for a capture that never saw live data.
+    private CapturedLoadout ApplyLiveEquipment(CapturedLoadout l)
     {
-        var slot = FindLoadoutSlot(l.ProfessionId);
-        if (slot?.Gear is not { Count: > 0 } gear) return l;
-        return l with
+        var live = _services.Inventory.GetLiveEquipped();
+        var isActive = l.ProfessionId != 0 && l.ProfessionId == _services.PlayerState.Profession;
+        var liveHasData = live.Gear.Count > 0 || live.Modules.Count > 0;
+        var capturedHasData = l.Gear.Count > 0 || l.Modules.Count > 0;
+        switch (ResolveGearSource(isActive, liveHasData, capturedHasData))
         {
-            Gear       = BuildGearPairs(gear),
-            GearDetail = BuildLoadoutGearDetail(gear),
-            Modules    = BuildLoadoutModulesFromSlot(slot.Modules),
-        };
+            case LoadoutGearSource.Live:
+                return l with
+                {
+                    Gear       = BuildGearPairs(live.Gear),
+                    GearDetail = BuildLoadoutGearDetail(live.Gear),
+                    Modules    = BuildLoadoutModulesFromSlot(live.Modules),
+                };
+            case LoadoutGearSource.Captured:
+                return l;
+            default:
+                var slot = FindLoadoutSlot(l.ProfessionId);
+                if (slot?.Gear is not { Count: > 0 } gear) return l;
+                return l with
+                {
+                    Gear       = BuildGearPairs(gear),
+                    GearDetail = BuildLoadoutGearDetail(gear),
+                    Modules    = BuildLoadoutModulesFromSlot(slot.Modules),
+                };
+        }
     }
 
     // Maps a LoadoutSlot's per-class module set (slot → ModuleInfo, framework-resolved with rolled parts)

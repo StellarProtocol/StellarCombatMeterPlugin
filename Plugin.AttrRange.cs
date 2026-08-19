@@ -130,9 +130,10 @@ public sealed partial class Plugin
             var withAttrs = _attrRange.Has(l.ProfessionId)
                 ? l with { Attributes = _attrRange.Base(l.ProfessionId), AttrPeaks = _attrRange.Peaks(l.ProfessionId) }
                 : l;
-            // Fill each played class's gear/modules from its LoadoutSlot (saved-loadout base + live overlay
-            // for the current class) — the actual per-class gear/modules.
-            resolved.Add(ApplyPerClassGear(withAttrs));
+            // Fill each played class's gear/modules live-first: the ACTIVE class re-reads the live
+            // equipped containers, earlier-played classes keep their frozen at-play capture (saved
+            // loadouts only as a never-saw-live fallback) — Plugin.LoadoutCapture.cs ApplyLiveEquipment.
+            resolved.Add(ApplyLiveEquipment(withAttrs));
         }
         entry.Loadouts = resolved;
     }
