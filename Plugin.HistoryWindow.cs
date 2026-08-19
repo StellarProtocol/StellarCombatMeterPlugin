@@ -95,7 +95,7 @@ public sealed partial class Plugin
         return new ColumnElement(new HudElement[]
         {
             new ConditionalElement(() => _history.Count == 0,
-                new TextElement(() => "No archived encounters yet.", MutedCol)),
+                new TextElement(() => _loc.T("history.empty.noEncounters"), MutedCol)),
             BuildHistorySearchRow(),
             new ConditionalElement(() => _history.Count > 0,
                 new ScrollElement(new ListElement(() => _historyView.Count, slots), HistListHeight)),
@@ -109,7 +109,7 @@ public sealed partial class Plugin
         {
             new SpacerElement(),   // push the button to the right edge
             new ButtonElement(
-                () => _clearAllArmed ? "Confirm clear all?" : "Clear all",
+                () => _clearAllArmed ? _loc.T("history.clearAll.confirm") : _loc.T("history.clearAll"),
                 ClearAllClicked,
                 Active: () => _clearAllArmed),
         }, Gap: 6f));
@@ -138,7 +138,7 @@ public sealed partial class Plugin
         return new ColumnElement(new HudElement[]
         {
             new ConditionalElement(() => _selectedSession is null,
-                new TextElement(() => "Pick a session on the left.", MutedCol)),
+                new TextElement(() => _loc.T("history.pickSession"), MutedCol)),
             // Fill:true so the detail column grows to the (resizable) window height and the table's ScrollElement
             // (the only flexible-height child in `table`) absorbs the slack — the chart + navigator keep their
             // fixed heights and stay stacked above it. When the window is dragged SHORT the table area shrinks
@@ -164,23 +164,23 @@ public sealed partial class Plugin
         // A weighted cell absorbs the leftover and lets the URL truncate, so Copy link keeps its place.
         new CellElement(new TextElement(UploadStatusText, MutedCol, NoWrap: true), Weight: 1f),
         new ConditionalElement(() => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done,
-            new ButtonElement(() => "Copy link", CopyUploadLink)),
+            new ButtonElement(() => _loc.T("common.copyLink"), CopyUploadLink)),
     }, Gap: 8f);
 
     private string UploadButtonLabel()
     {
         if (_selectedSession is not { } s) return SegmentUploadVerb();
-        if (s.LevelUuid == 0) return "⚠ No run id";   // pre-update archive: identity wasn't persisted
+        if (s.LevelUuid == 0) return _loc.T("upload.noRunId.button");   // pre-update archive: identity wasn't persisted
         return UploadStateFor(s) switch
         {
-            UploadPhase.InFlight => "Uploading…",
-            UploadPhase.Done     => "✓ Uploaded",
-            UploadPhase.Failed   => "✗ Failed — Retry",
+            UploadPhase.InFlight => _loc.T("upload.uploading"),
+            UploadPhase.Done     => _loc.T("upload.uploaded"),
+            UploadPhase.Failed   => _loc.T("upload.failedRetry"),
             // Not a failure and not retryable: the send was withheld by this content's upload cell.
-            UploadPhase.Skipped  => "⃠ Uploads off for this content",
+            UploadPhase.Skipped  => _loc.T("upload.offForContent"),
             // Recorded by a build below the server upload floor — the payload's baked-in old pluginVer is
             // 426'd forever (even after upgrading), so this run can't upload and it isn't retryable.
-            UploadPhase.Outdated => "⚠ Old-version run",
+            UploadPhase.Outdated => _loc.T("upload.oldVersion"),
             _                    => SegmentUploadVerb(),
         };
     }
@@ -188,11 +188,11 @@ public sealed partial class Plugin
     private string UploadStatusText()
     {
         if (_selectedSession is not { } s) return "";
-        if (s.LevelUuid == 0) return "Archived before run-id was saved — re-run the fight to upload it.";
+        if (s.LevelUuid == 0) return _loc.T("upload.status.noRunId");
         if (UploadStateFor(s) == UploadPhase.Skipped)
-            return "This content's upload is set to off — the run is still recorded locally. Turn its cell on in Settings to send it.";
+            return _loc.T("upload.status.offForContent");
         if (UploadStateFor(s) == UploadPhase.Outdated)
-            return "Recorded by an out-of-date build — saved locally, but the server won't accept it (even after you update). Update the plugin so new runs upload.";
+            return _loc.T("upload.status.oldVersion");
         return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? ShortRunLabel(u) : "";
     }
 
@@ -215,7 +215,7 @@ public sealed partial class Plugin
         FormatY:         v => FormatAmount((long)v),
         FormatX:         FormatChartX,
         TitleY:          () => MetricAxisTitle(_historyMetric),
-        TitleX:          () => "Encounter time (m:ss)",
+        TitleX:          () => _loc.T("history.chart.xTitle"),
         VisibleRange:    () => _chartVisibleRange,
         SetVisibleRange: r => _chartVisibleRange = r,
         Width:           360f,    // minimum/initial width; FillWidth lets the plot grow with the window
@@ -226,7 +226,7 @@ public sealed partial class Plugin
     // Metric-aware column header — the primary value column + rate column relabel with _historyMetric.
     private HudElement BuildDetailHeaderRow() => new RowElement(new HudElement[]
     {
-        new CellElement(new TextElement(() => "Source", MutedCol), Weight: 1f),
+        new CellElement(new TextElement(() => _loc.T("history.col.source"), MutedCol), Weight: 1f),
         NumCell(() => MetricColumnLabel(_historyMetric), ColPrimary, muted: true),
         NumCell(() => MetricRateLabel(_historyMetric), ColRate, muted: true),
         NumCell(() => "%", ColPct, muted: true),
@@ -299,7 +299,7 @@ public sealed partial class Plugin
         new CellElement(new TextElement(SessionSummary, Emphasis: true), Weight: 1f),
         // Fixed width so the row RESERVES the button's space — otherwise the weight-1 summary cell takes the full
         // width and the button overdraws the wrapped meta text when the window is narrowed (#delete-overlap).
-        new ButtonElement(() => "Delete session", DeleteSelectedSession,
+        new ButtonElement(() => _loc.T("history.deleteSession"), DeleteSelectedSession,
             Enabled: () => _selectedSession is not null, Width: DeleteSessionBtnW),
     }, Gap: 6f);
 
@@ -313,21 +313,21 @@ public sealed partial class Plugin
     private string SessionSummary()
     {
         if (_selectedSession is not { } h) return "";
-        return $"Map: {ResolveSceneName(h.SceneName)}   ·   "
-             + $"Time: {FormatSessionTimestampLong(h.ArchivedAtMs)}   ·   "
-             + $"Duration: {FormatRowDuration(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs)}   ·   "
-             + $"Players: {h.MemberCount}   ·   "
-             + $"Scene: {h.SceneName ?? "—"}";
+        return _loc.TFormat("history.detail.map", ResolveSceneName(h.SceneName)) + "   ·   "
+             + _loc.TFormat("history.detail.time", FormatSessionTimestampLong(h.ArchivedAtMs)) + "   ·   "
+             + _loc.TFormat("history.detail.duration", FormatRowDuration(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs, _loc.T("history.duration.detail"))) + "   ·   "
+             + _loc.TFormat("history.detail.players", h.MemberCount) + "   ·   "
+             + _loc.TFormat("history.detail.scene", h.SceneName ?? "—");
     }
 
     // Resolve a stored scene token (a raw id string like "7") to a friendly map/dungeon name via the live game
     // World table. Falls back to "Scene {id}" for an unknown numeric id, or the raw token when non-numeric/empty.
     private string ResolveSceneName(string? sceneToken)
     {
-        if (string.IsNullOrEmpty(sceneToken)) return "Unknown";
+        if (string.IsNullOrEmpty(sceneToken)) return _loc.T("common.unknown");
         if (!int.TryParse(sceneToken, out var id)) return sceneToken;
         var name = _services.GameData.World.GetScene(id)?.Name;
-        return string.IsNullOrEmpty(name) ? $"Scene {id}" : name;
+        return string.IsNullOrEmpty(name) ? _loc.TFormat("history.scene.numbered", id) : name;
     }
 
     private void SelectSession(int historyIndex)
@@ -353,7 +353,7 @@ public sealed partial class Plugin
     private IWindowControl RegisterHistoryWindow() => _services.Windows.Register(new WindowRegistration(
         new WindowSpec(
             Id:          "combatmeter.history",
-            Title:       "Combat History",
+            Title:       _loc.T("history.window.title"),   // baked at registration; rebuilt on LanguageChanged (see OnLanguageChanged)
             DefaultRect: new WindowRect(900f, 380f, 780f, 640f),
             Category:    WindowCategory.Tools,
             Style:       WindowPanelStyle.GlassMenu)
@@ -489,7 +489,7 @@ public sealed partial class Plugin
     private string ProfessionDisplayName(int profId)
     {
         var prof = _services.GameData.Combat.GetProfession(profId);
-        return prof is { Name: { Length: > 0 } n } ? n : $"Class {profId}";
+        return prof is { Name: { Length: > 0 } n } ? n : _loc.TFormat("common.classNumbered", profId);
     }
 
     // ----- pure formatting helpers (carried over from the IMGUI build) -----
@@ -548,7 +548,9 @@ public sealed partial class Plugin
     /// Display only — <c>CombatDurationMs</c> is reported verbatim and never adjusted, because DPS
     /// divides by it.
     /// </summary>
-    internal static string FormatRowDuration(long realMs, long combatMs)
+    // combinedFormat carries the localized "{0} ({1} combat)" template (default = English) so the pinned
+    // RealDurationTests keep asserting the exact English strings while the display path localizes the word.
+    internal static string FormatRowDuration(long realMs, long combatMs, string combinedFormat = "{0} ({1} combat)")
     {
         if (realMs < 0) realMs = 0;
         if (combatMs < 0) combatMs = 0;
@@ -558,7 +560,7 @@ public sealed partial class Plugin
         if (realMs / 1000 == combatMs / 1000) return FormatDurationWithTenths(realMs);
         // Combat span uses the same whole-second formatter as the rest of the UI, so a 0 span reads
         // "0s combat" exactly as the owner specified — not "0.0s".
-        return $"{FormatDurationWithTenths(realMs)} ({FormatSessionDurationShort(combatMs)} combat)";
+        return string.Format(combinedFormat, FormatDurationWithTenths(realMs), FormatSessionDurationShort(combatMs));
     }
 
     /// <summary>

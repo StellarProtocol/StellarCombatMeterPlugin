@@ -16,7 +16,7 @@ public sealed partial class Plugin
     private readonly List<MeterRowData> _listRows = new(MaxListRows);
     private readonly Dictionary<EntityId, float> _barAnim = new();
     private bool _listEmpty = true;
-    private string _listEmptyCaption = "Waiting for combat...";
+    private string _listEmptyCaptionKey = "list.empty.waiting";   // catalog key; resolved via _loc at draw time so it live-switches
 
     // Per-mode element toggle instances — lazy-loaded from config so they never touch the Plugin.cs constructor.
     // Task 8 settings panel will expose accessors to mutate/persist these.
@@ -39,7 +39,7 @@ public sealed partial class Plugin
         }
         // Empty → caption; else the scroll. Fill:true so the scroll grows with the (resizable) window height.
         return new ConditionalElement(() => _listEmpty,
-            new TextElement(() => _listEmptyCaption, MutedCol),
+            new TextElement(() => _loc.T(_listEmptyCaptionKey), MutedCol),
             new ScrollElement(new ListElement(() => _listRows.Count, slots), ListScrollHeight),
             Fill: true);
     }
@@ -48,11 +48,11 @@ public sealed partial class Plugin
     {
         _listRows.Clear();
 
-        if (_stats.Count == 0) { _listEmpty = true; _listEmptyCaption = "Waiting for combat..."; return; }
+        if (_stats.Count == 0) { _listEmpty = true; _listEmptyCaptionKey = "list.empty.waiting"; return; }
 
         double elapsed = EncounterElapsedSeconds();
         var rows = _agg.Rows(_metric, elapsed);
-        if (rows.Count == 0) { _listEmpty = true; _listEmptyCaption = EmptyMetricCaption(); return; }
+        if (rows.Count == 0) { _listEmpty = true; _listEmptyCaptionKey = EmptyMetricCaptionKey(); return; }
 
         var visible = 0;
         for (var i = 0; i < rows.Count; i++)
@@ -63,14 +63,14 @@ public sealed partial class Plugin
             visible++;
         }
         _listEmpty = visible == 0;
-        if (_listEmpty) _listEmptyCaption = "No players in scope.";
+        if (_listEmpty) _listEmptyCaptionKey = "list.empty.noScope";
     }
 
-    private string EmptyMetricCaption() => _metric switch
+    private string EmptyMetricCaptionKey() => _metric switch
     {
-        Metric.Hps   => "No healing yet.",
-        Metric.Taken => "No damage taken yet.",
-        _            => "No players in combat.",
+        Metric.Hps   => "list.empty.noHealing",
+        Metric.Taken => "list.empty.noTaken",
+        _            => "list.empty.noCombat",
     };
 
     // Map an aggregator MeterRow → the framework MeterRowData (the renderer-neutral row snapshot).

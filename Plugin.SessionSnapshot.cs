@@ -49,7 +49,7 @@ public sealed partial class Plugin
 
     private HudElement BuildSnapshotRoot() => new ColumnElement(new HudElement[]
     {
-        new TextElement(() => _snapshot?.Identity ?? "Session Snapshot", Emphasis: true),
+        new TextElement(() => _snapshot?.Identity ?? _loc.T("snapshot.title"), Emphasis: true),
         new TextElement(() => _snapshot?.SubIdentity ?? "", MutedCol),
         new SeparatorElement(),
         new ScrollElement(new ColumnElement(new HudElement[]
@@ -76,9 +76,9 @@ public sealed partial class Plugin
         }
         return new ColumnElement(new HudElement[]
         {
-            new TextElement(() => "Key Stats", () => AccentCol),
+            new TextElement(() => _loc.T("snapshot.keyStats"), () => AccentCol),
             new ConditionalElement(() => (_snapshot?.Stats.Count ?? 0) == 0,
-                new TextElement(() => "No attributes recorded.", MutedCol)),
+                new TextElement(() => _loc.T("snapshot.noAttributes"), MutedCol)),
             new ListElement(() => _snapshot?.Stats.Count ?? 0, slots),
         }, Gap: 2f);
     }
@@ -100,9 +100,9 @@ public sealed partial class Plugin
         }
         return new ColumnElement(new HudElement[]
         {
-            new TextElement(() => "Gear", () => AccentCol),
+            new TextElement(() => _loc.T("snapshot.gear"), () => AccentCol),
             new ConditionalElement(() => (_snapshot?.Gear.Count ?? 0) == 0,
-                new TextElement(() => "No equipment recorded.", MutedCol)),
+                new TextElement(() => _loc.T("snapshot.noEquipment"), MutedCol)),
             new ListElement(() => _snapshot?.Gear.Count ?? 0, slots),
         }, Gap: 2f);
     }
@@ -125,9 +125,9 @@ public sealed partial class Plugin
         }
         return new ColumnElement(new HudElement[]
         {
-            new TextElement(() => "Skills", () => AccentCol),
+            new TextElement(() => _loc.T("snapshot.skills"), () => AccentCol),
             new ConditionalElement(() => (_snapshot?.Skills.Count ?? 0) == 0,
-                new TextElement(() => "No skill loadout recorded.", MutedCol)),
+                new TextElement(() => _loc.T("snapshot.noSkills"), MutedCol)),
             new ListElement(() => _snapshot?.Skills.Count ?? 0, slots),
         }, Gap: 2f);
     }
@@ -136,7 +136,7 @@ public sealed partial class Plugin
         () => (_snapshot?.Fashion.Count ?? 0) > 0,
         new ColumnElement(new HudElement[]
         {
-            new TextElement(() => "Fashion", () => AccentCol),
+            new TextElement(() => _loc.T("snapshot.fashion"), () => AccentCol),
             new TextElement(() => _snapshot is { } s ? string.Join("   ", s.Fashion) : "", MutedCol),
         }, Gap: 2f));
 

@@ -17,7 +17,7 @@ public sealed partial class Plugin
         => _services.Windows.Register(new WindowRegistration(
             new WindowSpec(
                 Id:          "combatmeter.settings",
-                Title:       "CombatMeter Appearance",
+                Title:       _loc.T("settings.appearance.title"),   // baked at registration; rebuilt on LanguageChanged
                 DefaultRect: new WindowRect(900f, 120f, 380f, 640f),
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
@@ -35,19 +35,19 @@ public sealed partial class Plugin
     }
 
     private string ActiveModeLabel()
-        => _viewMode == ViewMode.List ? "List" : IsRaid20View ? "Party (20)" : "Party (5)";
+        => _viewMode == ViewMode.List ? _loc.T("header.mode.list") : IsRaid20View ? _loc.T("settings.mode.party20") : _loc.T("settings.mode.party5");
 
     private HudElement BuildSettingsRoot()
         => new ColumnElement(new HudElement[]
         {
-            new TextElement(() => "Appearance — show/hide row elements", Emphasis: true),
-            new TextElement(() => $"Active → {ActiveModeLabel()}", MutedCol),
+            new TextElement(() => _loc.T("settings.appearance.subtitle"), Emphasis: true),
+            new TextElement(() => _loc.TFormat("settings.appearance.active", ActiveModeLabel()), MutedCol),
             new SeparatorElement(),
             new RowElement(new HudElement[]
             {
-                new ButtonElement(() => "List",       () => _settingsTab = 0, Active: () => _settingsTab == 0, Width: 96f),
-                new ButtonElement(() => "Party (5)",  () => _settingsTab = 1, Active: () => _settingsTab == 1, Width: 96f),
-                new ButtonElement(() => "Party (20)", () => _settingsTab = 2, Active: () => _settingsTab == 2, Width: 96f),
+                new ButtonElement(() => _loc.T("header.mode.list"),       () => _settingsTab = 0, Active: () => _settingsTab == 0, Width: 96f),
+                new ButtonElement(() => _loc.T("settings.mode.party5"),  () => _settingsTab = 1, Active: () => _settingsTab == 1, Width: 96f),
+                new ButtonElement(() => _loc.T("settings.mode.party20"), () => _settingsTab = 2, Active: () => _settingsTab == 2, Width: 96f),
             }, Gap: 6f),
             new SeparatorElement(),
             new ScrollElement(
@@ -64,43 +64,44 @@ public sealed partial class Plugin
     private HudElement ToggleGroup(MeterElementToggles t)
         => new ColumnElement(new HudElement[]
         {
-            SectionLabel("Identity"),
-            ToggleRow("Rank",        () => t.Rank,      v => t.Rank = v),
-            ToggleRow("Class crest", () => t.Crest,     v => t.Crest = v),
-            ToggleRow("Spec name",   () => t.Spec,      v => t.Spec = v),
-            ToggleRow("Class name",  () => t.ClassName, v => t.ClassName = v),
+            SectionLabel("settings.section.identity"),
+            ToggleRow("settings.toggle.rank",        () => t.Rank,      v => t.Rank = v),
+            ToggleRow("settings.toggle.crest", () => t.Crest,     v => t.Crest = v),
+            ToggleRow("settings.toggle.spec",   () => t.Spec,      v => t.Spec = v),
+            ToggleRow("settings.toggle.className",  () => t.ClassName, v => t.ClassName = v),
 
             new SpacerElement(Height: 10f),
-            SectionLabel("Bars"),
+            SectionLabel("settings.section.bars"),
             MainBarRow(t),
             VerticalBarRow(t),
             SpineWidthRow(t),
 
             new SpacerElement(Height: 10f),
-            SectionLabel("Metrics"),
-            ToggleRow("Per-second", () => t.Primary, v => t.Primary = v),
-            ToggleRow("Total",      () => t.Total,   v => t.Total = v),
-            ToggleRow("Share %",    () => t.Share,   v => t.Share = v),
+            SectionLabel("settings.section.metrics"),
+            ToggleRow("settings.toggle.perSecond", () => t.Primary, v => t.Primary = v),
+            ToggleRow("settings.toggle.total",      () => t.Total,   v => t.Total = v),
+            ToggleRow("settings.toggle.sharePct",    () => t.Share,   v => t.Share = v),
 
             new SpacerElement(Height: 10f),
-            SectionLabel("Battle Imagine"),
+            SectionLabel("settings.section.battleImagine"),
             ImagineShowRow(t),
             ImagineSizeRow(t),
             ImaginePositionRow(t),
 
             new SpacerElement(Height: 10f),
-            SectionLabel("Other"),
-            ToggleRow("Leader flag",        () => t.LeaderFlag,    v => t.LeaderFlag = v),
-            ToggleRow("Ability score",      () => t.AbilityScore,  v => t.AbilityScore = v),
-            ToggleRow("Illusion-Break Str", () => t.IllusionBreak, v => t.IllusionBreak = v),
-            ToggleRow("Voice icon",         () => t.VoiceIcon,     v => t.VoiceIcon = v),
+            SectionLabel("settings.section.other"),
+            ToggleRow("settings.toggle.leaderFlag",        () => t.LeaderFlag,    v => t.LeaderFlag = v),
+            ToggleRow("settings.toggle.abilityScore",      () => t.AbilityScore,  v => t.AbilityScore = v),
+            ToggleRow("settings.toggle.illusionBreak", () => t.IllusionBreak, v => t.IllusionBreak = v),
+            ToggleRow("settings.toggle.voiceIcon",         () => t.VoiceIcon,     v => t.VoiceIcon = v),
 
             new SpacerElement(Height: 10f),
-            new TextElement(() => "Self · leader · dead · offline states are styled automatically.", MutedCol),
+            new TextElement(() => _loc.T("settings.appearance.autoStyled"), MutedCol),
         }, Gap: 3f);
 
+    // text is a catalog key (resolved live so the section header switches language in place).
     private HudElement SectionLabel(string text)
-        => new TextElement(() => text, MutedCol);
+        => new TextElement(() => _loc.T(text), MutedCol);
 
     // indent=true prepends a small spacer so the toggle (checkbox + label) nests visually under a
     // parent trigger row — the same left inset PillRow uses — for a sub-option like "Ignore when
@@ -108,7 +109,7 @@ public sealed partial class Plugin
     private HudElement ToggleRow(string label, Func<bool> get, Action<bool> set, Func<bool>? enabled = null, bool indent = false)
     {
         var toggle = new ToggleElement(() => "", get, v => { set(v); PersistToggles(); }, enabled);
-        var text   = new TextElement(() => label);
+        var text   = new TextElement(() => _loc.T(label));   // label is a catalog key
         return indent
             ? new RowElement(new HudElement[] { new SpacerElement(Width: 8f), toggle, text }, Gap: 8f)
             : new RowElement(new HudElement[] { toggle, text }, Gap: 8f);
@@ -118,62 +119,62 @@ public sealed partial class Plugin
         => new RowElement(new HudElement[]
         {
             new ToggleElement(() => "", () => t.Imagine,         v => { t.Imagine = v;         PersistToggles(); }),
-            new TextElement(() => "Show"),
+            new TextElement(() => _loc.T("settings.imagine.show")),
             new ToggleElement(() => "", () => t.ImagineCooldown, v => { t.ImagineCooldown = v; PersistToggles(); }, () => t.Imagine),
-            new TextElement(() => "Cooldown"),
+            new TextElement(() => _loc.T("settings.imagine.cooldown")),
         }, Gap: 8f);
 
     private HudElement ImagineSizeRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
         {
-            new TextElement(() => "Size", MutedCol, Width: 80f),
-            new ButtonElement(() => "Small", () => { t.ImagineSize = ImagineSize.Small; PersistToggles(); },
+            new TextElement(() => _loc.T("settings.imagine.size"), MutedCol, Width: 80f),
+            new ButtonElement(() => _loc.T("common.small"), () => { t.ImagineSize = ImagineSize.Small; PersistToggles(); },
                 Active: () => t.ImagineSize == ImagineSize.Small, Width: 72f),
-            new ButtonElement(() => "Large", () => { t.ImagineSize = ImagineSize.Large; PersistToggles(); },
+            new ButtonElement(() => _loc.T("common.large"), () => { t.ImagineSize = ImagineSize.Large; PersistToggles(); },
                 Active: () => t.ImagineSize == ImagineSize.Large, Width: 72f),
         }, Gap: 6f);
 
     private HudElement ImaginePositionRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
         {
-            new TextElement(() => "Position", MutedCol, Width: 80f),
-            PosBtn(t, "Top-R", ImaginePosition.TopRight),
-            PosBtn(t, "Right", ImaginePosition.RightColumn),
-            PosBtn(t, "Left",  ImaginePosition.Left),
+            new TextElement(() => _loc.T("settings.imagine.position"), MutedCol, Width: 80f),
+            PosBtn(t, "settings.pos.topRight", ImaginePosition.TopRight),
+            PosBtn(t, "settings.pos.right", ImaginePosition.RightColumn),
+            PosBtn(t, "settings.pos.left",  ImaginePosition.Left),
         }, Gap: 6f);
 
     private HudElement PosBtn(MeterElementToggles t, string label, ImaginePosition pos)
-        => new ButtonElement(() => label, () => { t.ImaginePosition = pos; PersistToggles(); },
+        => new ButtonElement(() => _loc.T(label), () => { t.ImaginePosition = pos; PersistToggles(); },
             Active: () => t.ImaginePosition == pos, Width: 72f);
 
     private HudElement VerticalBarRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
         {
-            new TextElement(() => "Spine bar", Width: 80f),
-            new ButtonElement(() => "Off", () => { t.VerticalBar = VerticalBarMode.Off; PersistToggles(); },
+            new TextElement(() => _loc.T("settings.bar.spineBar"), Width: 80f),
+            new ButtonElement(() => _loc.T("common.off"), () => { t.VerticalBar = VerticalBarMode.Off; PersistToggles(); },
                 Active: () => t.VerticalBar == VerticalBarMode.Off, Width: 72f),
-            new ButtonElement(() => "DPS", () => { t.VerticalBar = VerticalBarMode.Dps; PersistToggles(); },
+            new ButtonElement(() => _loc.T("list.metric.dps"), () => { t.VerticalBar = VerticalBarMode.Dps; PersistToggles(); },
                 Active: () => t.VerticalBar == VerticalBarMode.Dps, Width: 72f),
-            new ButtonElement(() => "HP",  () => { t.VerticalBar = VerticalBarMode.Hp;  PersistToggles(); },
+            new ButtonElement(() => _loc.T("common.hp"),  () => { t.VerticalBar = VerticalBarMode.Hp;  PersistToggles(); },
                 Active: () => t.VerticalBar == VerticalBarMode.Hp,  Width: 72f),
         }, Gap: 6f);
 
     private HudElement SpineWidthRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
         {
-            new TextElement(() => "Spine width", MutedCol, Width: 80f),
-            new ButtonElement(() => "Thin",   () => { t.SpineWidth = 3f; PersistToggles(); }, Active: () => t.SpineWidth <= 3f,            Width: 72f),
-            new ButtonElement(() => "Normal", () => { t.SpineWidth = 5f; PersistToggles(); }, Active: () => t.SpineWidth is > 3f and <= 5f, Width: 72f),
-            new ButtonElement(() => "Wide",   () => { t.SpineWidth = 8f; PersistToggles(); }, Active: () => t.SpineWidth > 5f,              Width: 72f),
+            new TextElement(() => _loc.T("settings.bar.spineWidth"), MutedCol, Width: 80f),
+            new ButtonElement(() => _loc.T("settings.width.thin"),   () => { t.SpineWidth = 3f; PersistToggles(); }, Active: () => t.SpineWidth <= 3f,            Width: 72f),
+            new ButtonElement(() => _loc.T("settings.width.normal"), () => { t.SpineWidth = 5f; PersistToggles(); }, Active: () => t.SpineWidth is > 3f and <= 5f, Width: 72f),
+            new ButtonElement(() => _loc.T("settings.width.wide"),   () => { t.SpineWidth = 8f; PersistToggles(); }, Active: () => t.SpineWidth > 5f,              Width: 72f),
         }, Gap: 6f);
 
     private HudElement MainBarRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
         {
-            new TextElement(() => "Main bar", Width: 80f),
-            new ButtonElement(() => "DPS", () => { t.MainBarIsHp = false; PersistToggles(); },
+            new TextElement(() => _loc.T("settings.bar.mainBar"), Width: 80f),
+            new ButtonElement(() => _loc.T("list.metric.dps"), () => { t.MainBarIsHp = false; PersistToggles(); },
                 Active: () => !t.MainBarIsHp, Width: 72f),
-            new ButtonElement(() => "HP",  () => { t.MainBarIsHp = true;  PersistToggles(); },
+            new ButtonElement(() => _loc.T("common.hp"),  () => { t.MainBarIsHp = true;  PersistToggles(); },
                 Active: () => t.MainBarIsHp,  Width: 72f),
         }, Gap: 6f);
 

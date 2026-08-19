@@ -21,11 +21,12 @@ public sealed class HistoryChartProjectionTests
     }
 
     [Fact]
-    public void MetricColumnLabel_matches_metric()
+    public void MetricColumnKey_matches_metric()
     {
-        Assert.Equal("DMG",   Plugin.MetricColumnLabel(Metric.Dps));
-        Assert.Equal("HEAL",  Plugin.MetricColumnLabel(Metric.Hps));
-        Assert.Equal("TAKEN", Plugin.MetricColumnLabel(Metric.Taken));
+        // The display label is now resolved via _loc; the pure metric→key mapping is what stays testable.
+        Assert.Equal("list.col.dmg",   Plugin.MetricColumnKey(Metric.Dps));
+        Assert.Equal("list.col.heal",  Plugin.MetricColumnKey(Metric.Hps));
+        Assert.Equal("list.col.taken", Plugin.MetricColumnKey(Metric.Taken));
     }
 
     [Fact]

@@ -67,7 +67,7 @@ public sealed partial class Plugin
     private HudElement BuildHistorySearchRow() => new ConditionalElement(() => _history.Count > 0,
         new RowElement(new HudElement[]
         {
-            new TextElement(() => "Search", MutedCol, Width: 52f),
+            new TextElement(() => _loc.T("common.search"), MutedCol, Width: 52f),
             new InputElement(() => _historySearch, _ => { }, 180f, OnChange: s => _historySearch = s),
         }, Gap: 4f));
 
@@ -198,14 +198,14 @@ public sealed partial class Plugin
 
     /// <summary>Label for the per-SEGMENT button. Reads "segment" only when there is more than one, so a
     /// single-archive run keeps the plain wording.</summary>
-    private string SegmentUploadVerb() => _selectedSegments.Length > 1 ? "⤓ Upload segment" : "⤓ Upload this run";
+    private string SegmentUploadVerb() => _selectedSegments.Length > 1 ? _loc.T("upload.segment") : _loc.T("upload.thisRun");
 
     /// <summary>"Upload all (N)" — visible only for a grouped run. Owner: "sometimes I just don't wanna click
     /// upload manually 6 seqments."</summary>
     private HudElement BuildUploadRunButton() => new ConditionalElement(
         () => _selectedSegments.Length > 1,
         new ButtonElement(
-            () => _runUploadQueue.Count > 0 ? $"Uploading {_runUploadQueue.Count} left…" : $"⤓ Upload all ({_selectedSegments.Length})",
+            () => _runUploadQueue.Count > 0 ? _loc.TFormat("upload.uploadingLeft", _runUploadQueue.Count) : _loc.TFormat("upload.uploadAll", _selectedSegments.Length),
             QueueRunUpload,
             Enabled: () => _runUploadQueue.Count == 0));
 

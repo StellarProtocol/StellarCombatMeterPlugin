@@ -17,15 +17,15 @@ public sealed partial class Plugin
     {
         new RowElement(new HudElement[]
         {
-            DetailStat(() => "TOTAL", () => SkillDetail(0)),
+            DetailStat(() => _loc.T("skill.detail.total"), () => SkillDetail(0)),
             DetailStat(() => DetailRateKey(), () => SkillDetail(1)),
             DetailStat(() => DetailKey2(), () => SkillDetail(2)),
             DetailStat(() => DetailKeyLuck(), () => SkillDetail(8)),
-            DetailStat(() => "MAX", () => SkillDetail(3)),
+            DetailStat(() => _loc.T("skill.detail.max"), () => SkillDetail(3)),
         }, Gap: 10f),
         new RowElement(new HudElement[]
         {
-            DetailStat(() => "HITS", () => SkillDetail(4)),
+            DetailStat(() => _loc.T("skill.col.hits"), () => SkillDetail(4)),
             DetailStat(() => DetailKey5(), () => SkillDetail(5)),
             DetailStat(() => DetailKey6(), () => SkillDetail(6)),
             DetailStat(() => DetailOtherKey(), () => SkillDetail(7)),
@@ -49,8 +49,8 @@ public sealed partial class Plugin
     {
         if (_skillBreakdown is not { } sb || sb.Metric == Metric.Taken) return "";
         return sb.Metric == Metric.Hps
-            ? col switch { 0 => "C.HEAL", 1 => "L.HEAL", 2 => "CL.HEAL", 3 => "EFFECTIVE", _ => "OVERHEAL" }
-            : col switch { 0 => "C.DMG", 1 => "L.DMG", 2 => "CL.DMG", 3 => "SHLD BRK", _ => "ACTIVE" };
+            ? col switch { 0 => _loc.T("skill.detail.cheal"), 1 => _loc.T("skill.detail.lheal"), 2 => _loc.T("skill.detail.clheal"), 3 => _loc.T("skill.detail.effective"), _ => _loc.T("skill.detail.overheal") }
+            : col switch { 0 => _loc.T("skill.detail.cdmg"), 1 => _loc.T("skill.detail.ldmg"), 2 => _loc.T("skill.detail.cldmg"), 3 => _loc.T("skill.detail.shldBrk"), _ => _loc.T("skill.detail.active") };
     }
 
     private HudElement DetailStat(Func<string> key, Func<string> value)
@@ -62,15 +62,15 @@ public sealed partial class Plugin
 
     private bool IsTakenDetail => _skillBreakdown?.Metric == Metric.Taken;
 
-    private string DetailRateKey() => _skillBreakdown is { } sb ? MetricRateLabel(sb.Metric) : "DPS";
+    private string DetailRateKey() => _skillBreakdown is { } sb ? MetricRateLabel(sb.Metric) : _loc.T("list.rate.dps");
 
     // Taken mode replaces the outgoing-only CRIT%/LUCK%/KILLS/UPTIME slots with taken-appropriate labels.
-    private string DetailKey2() => IsTakenDetail ? "" : "CRIT %";
-    private string DetailKeyLuck() => IsTakenDetail ? "" : "LUCK %";
-    private string DetailKey5() => IsTakenDetail ? "SKILLS" : "KILLS";
-    private string DetailKey6() => IsTakenDetail ? "" : "UPTIME";
+    private string DetailKey2() => IsTakenDetail ? "" : _loc.T("skill.detail.critPct");
+    private string DetailKeyLuck() => IsTakenDetail ? "" : _loc.T("skill.detail.luckPct");
+    private string DetailKey5() => IsTakenDetail ? _loc.T("skill.detail.skills") : _loc.T("skill.detail.kills");
+    private string DetailKey6() => IsTakenDetail ? "" : _loc.T("skill.detail.uptime");
 
-    private string DetailOtherKey() => _skillBreakdown?.Metric == Metric.Hps ? "DMG" : "HEAL";
+    private string DetailOtherKey() => _skillBreakdown?.Metric == Metric.Hps ? _loc.T("list.col.dmg") : _loc.T("list.col.heal");
 
     // Index → formatted aggregate value for the drilled source under its captured metric.
     private string SkillDetail(int slot)

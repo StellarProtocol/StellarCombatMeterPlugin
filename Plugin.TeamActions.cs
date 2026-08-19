@@ -16,7 +16,7 @@ public sealed partial class Plugin
     private void RegisterTeamContextMenuItems()
     {
         _transferLeaderReg = _services.EntityContextMenu.Register(
-            "Transfer Leader",
+            _loc.T("menu.transferLeader"),
             isVisible: e => _viewMode == ViewMode.PartyFocus
                          && _services.PartySnapshot.IsLeader
                          && e != _services.CombatSnapshot.LocalEntityId
@@ -24,7 +24,7 @@ public sealed partial class Plugin
             onClick: e => _services.PartyControl.TransferLeader(e.Value >> 16));
 
         _kickMemberReg = _services.EntityContextMenu.Register(
-            "Kick from Party",
+            _loc.T("menu.kickFromParty"),
             isVisible: e => _viewMode == ViewMode.PartyFocus
                          && _services.PartySnapshot.IsLeader
                          && e != _services.CombatSnapshot.LocalEntityId
@@ -32,7 +32,7 @@ public sealed partial class Plugin
             onClick: e => _services.PartyControl.KickMember(e.Value >> 16));
 
         _inviteToTeamReg = _services.EntityContextMenu.Register(
-            "Invite to Party",
+            _loc.T("menu.inviteToParty"),
             isVisible: e => _viewMode == ViewMode.PartyFocus
                          && PartyExists
                          && _services.PartySnapshot.IsLeader
@@ -41,18 +41,30 @@ public sealed partial class Plugin
             onClick: e => _services.PartyControl.InviteToTeam(e.Value >> 16));
 
         _createPartyReg = _services.EntityContextMenu.Register(
-            "Create Party",
+            _loc.T("menu.createParty"),
             isVisible: e => _viewMode == ViewMode.PartyFocus
                          && e == _services.CombatSnapshot.LocalEntityId
                          && !PartyExists,
             onClick: _ => _services.Lua.DoString("pcall(function() (Z.CoroUtil).create_coro_xpcall(function() local vm=(Z.VMMgr).GetVM('team') if vm then local cs=(Z.CancelSource).Rent() vm.AsyncCreatTeam(1000,cs:CreateToken()) end end,function() end)() end)"));
 
         _leavePartyReg = _services.EntityContextMenu.Register(
-            "Leave Party",
+            _loc.T("menu.leaveParty"),
             isVisible: e => _viewMode == ViewMode.PartyFocus
                          && e == _services.CombatSnapshot.LocalEntityId
                          && PartyExists,
             onClick: _ => _services.PartyControl.LeaveParty());
+    }
+
+    // Re-register under a new UI language: the labels are captured by IEntityContextMenu.Register once,
+    // so a language change requires disposing the old registrations and registering fresh (i18n P1).
+    private void ReRegisterTeamContextMenuItems()
+    {
+        _transferLeaderReg.Dispose();
+        _kickMemberReg.Dispose();
+        _inviteToTeamReg.Dispose();
+        _createPartyReg.Dispose();
+        _leavePartyReg.Dispose();
+        RegisterTeamContextMenuItems();
     }
 
     // Returns true when the entity is already a party member (skip self — the row menu

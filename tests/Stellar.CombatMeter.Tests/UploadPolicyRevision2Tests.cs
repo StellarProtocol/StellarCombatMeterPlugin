@@ -30,8 +30,8 @@ public class UploadPolicyRevision2Tests
         // The key must match FEED_KINDS in services/stellar-logs/src/worker/routes/site.ts.
         Assert.Equal("vault", UploadPolicy.KindKey(ContentKind.Vault));
         Assert.Equal("logUpload.policy.vault.stats", UploadPolicy.PrefKey(ContentKind.Vault, UploadArtifact.Stats));
-        // Master-data spelling is "Stimen" (the owner wrote "Stiment").
-        Assert.Equal("Stimen Vaults", UploadPolicy.Label(ContentKind.Vault));
+        // i18n P1: Label returns a catalog key; en.json carries the "Stimen Vaults" spelling (owner wrote "Stiment").
+        Assert.Equal("upload.kind.vault", UploadPolicy.Label(ContentKind.Vault));
     }
 
     [Fact]

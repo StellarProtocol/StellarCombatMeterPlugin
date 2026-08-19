@@ -41,7 +41,7 @@ public sealed partial class Plugin
         => _services.Windows.Register(new WindowRegistration(
             new WindowSpec(
                 Id:          "combatmeter.account",
-                Title:       "Link to site",
+                Title:       _loc.T("header.linkToSite"),   // baked at registration; rebuilt on LanguageChanged
                 DefaultRect: new WindowRect(900f, 120f, 360f, 250f),
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
@@ -56,18 +56,18 @@ public sealed partial class Plugin
     private HudElement BuildAccountRoot()
         => new ColumnElement(new HudElement[]
         {
-            new TextElement(() => "Link this character to your StellarLogs account.", Emphasis: true),
-            new TextElement(() => "On the site: account menu → Claim a character. Enter its code here.", MutedCol),
+            new TextElement(() => _loc.T("account.linkTitle"), Emphasis: true),
+            new TextElement(() => _loc.T("account.linkHelp"), MutedCol),
             new SeparatorElement(),
             new RowElement(new HudElement[]
             {
-                new TextElement(() => "Code", MutedCol, Width: 54f),
+                new TextElement(() => _loc.T("account.code"), MutedCol, Width: 54f),
                 new InputElement(() => _linkCode, OnSubmitLinkCode, 180f, OnChange: s => _linkCode = s),
             }, Gap: 8f),
             new RowElement(new HudElement[]
             {
                 new SpacerElement(Width: 0f),
-                new ButtonElement(() => "Link", SubmitLinkCode),
+                new ButtonElement(() => _loc.T("account.link"), SubmitLinkCode),
             }, Gap: 8f),
             new TextElement(() => _linkStatus, MutedCol),
         }, Gap: 6f);
@@ -84,11 +84,11 @@ public sealed partial class Plugin
     private void SubmitLinkCode()
     {
         var code = (_linkCode ?? string.Empty).Trim();
-        if (code.Length == 0) { SetLinkStatus("Enter the code shown on the site."); return; }
+        if (code.Length == 0) { SetLinkStatus(_loc.T("account.status.enterCode")); return; }
         var localUid = LocalUidForUpload();
-        if (localUid <= 0) { SetLinkStatus("Log into a character first."); return; }
+        if (localUid <= 0) { SetLinkStatus(_loc.T("account.status.loginFirst")); return; }
 
-        SetLinkStatus("Linking…");
+        SetLinkStatus(_loc.T("account.status.linking"));
         var nonce = Guid.NewGuid().ToString("N");
         var canonical = CanonicalPayload.BuildClaim(localUid, code, nonce);
         string pubkey = string.Empty, installSig = string.Empty, sig = string.Empty;
@@ -109,16 +109,16 @@ public sealed partial class Plugin
             using var resp = await AccountHttp.PostAsync(ClaimApiBase() + "/claim/submit", content).ConfigureAwait(false);
             SetLinkStatus(resp.StatusCode switch
             {
-                HttpStatusCode.OK        => "✓ Linked! Refresh the site.",
-                HttpStatusCode.Conflict  => "This character is owned by another account (dispute on the site).",
-                HttpStatusCode.Gone      => "Code expired — mint a new one on the site.",
-                HttpStatusCode.Unauthorized => "Signature rejected — update the plugin.",
-                _                        => $"Link failed ({(int)resp.StatusCode}). Try a fresh code.",
+                HttpStatusCode.OK        => _loc.T("account.status.linked"),
+                HttpStatusCode.Conflict  => _loc.T("account.err.conflict"),
+                HttpStatusCode.Gone      => _loc.T("account.err.gone"),
+                HttpStatusCode.Unauthorized => _loc.T("account.err.unauthorized"),
+                _                        => _loc.TFormat("account.err.failed", (int)resp.StatusCode),
             });
         }
         catch (Exception ex)
         {
-            SetLinkStatus("Link failed (network). Try again.");
+            SetLinkStatus(_loc.T("account.err.network"));
             _services.Log.Warning($"[CombatMeter] link-to-site POST failed: {ex.Message}");
         }
     }

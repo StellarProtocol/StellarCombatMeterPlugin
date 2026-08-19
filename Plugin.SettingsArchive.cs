@@ -39,7 +39,7 @@ public sealed partial class Plugin
         => _services.Windows.Register(new WindowRegistration(
             new WindowSpec(
                 Id:          "combatmeter.archiveSettings",
-                Title:       "CombatMeter Settings",
+                Title:       _loc.T("settings.window.title"),   // baked; rebuilt on LanguageChanged
                 DefaultRect: new WindowRect(900f, 120f, 380f, 620f),
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
@@ -59,25 +59,25 @@ public sealed partial class Plugin
         var rows = new List<HudElement>
         {
             new SeparatorElement(),
-            new TextElement(() => "Discord webhook", Emphasis: true),
-            new TextElement(() => "   Auto-posts a run's link + party scores to your Discord webhook when a run ends.", MutedCol),
-            ToggleRow("Enabled", () => DiscordEnabled, v => DiscordEnabled = v),
+            new TextElement(() => _loc.T("discord.section"), Emphasis: true),
+            new TextElement(() => _loc.T("discord.help"), MutedCol),
+            ToggleRow("common.enabled", () => DiscordEnabled, v => DiscordEnabled = v),
             new RowElement(new HudElement[]
             {
                 new SpacerElement(Width: 8f),
-                new TextElement(() => "URL", MutedCol, Width: 40f),
+                new TextElement(() => _loc.T("discord.url"), MutedCol, Width: 40f),
                 new InputElement(() => DiscordWebhookUrl, s => DiscordWebhookUrl = s, 300f, OnChange: s => DiscordWebhookUrl = s),
             }, Gap: 6f),
             new TextElement(DiscordUrlStatus, MutedCol),
-            new TextElement(() => "   Post for:", MutedCol),
+            new TextElement(() => _loc.T("discord.postFor"), MutedCol),
         };
         foreach (ContentKind k in System.Enum.GetValues(typeof(ContentKind)))
             rows.Add(ToggleRow(UploadPolicy.Label(k), () => DiscordContentFor(k), v => SetDiscordContent(k, v), () => DiscordEnabled, indent: true));
         rows.Add(new RowElement(new HudElement[]
         {
             new SpacerElement(Width: 8f),
-            new ButtonElement(() => "Send test message", SendDiscordTest, Width: 150f),
-            new ButtonElement(() => "Send test card", SendDiscordCardTest, Width: 140f),
+            new ButtonElement(() => _loc.T("discord.testMessage"), SendDiscordTest, Width: 150f),
+            new ButtonElement(() => _loc.T("discord.testCard"), SendDiscordCardTest, Width: 140f),
             new TextElement(() => DiscordTestResult, MutedCol),
         }, Gap: 6f));
         return rows;
@@ -91,49 +91,49 @@ public sealed partial class Plugin
     {
         var url = DiscordWebhookUrl;
         if (string.IsNullOrWhiteSpace(url))
-            return "   Paste your Discord channel webhook URL (discord.com/api/webhooks/…).";
+            return _loc.T("discord.url.paste");
         return DiscordLink.IsValidWebhookUrl(url)
             ? "   ✓ " + DiscordLink.MaskWebhook(url)
-            : "   ✗ Not a Discord webhook URL — check the link.";
+            : _loc.T("discord.url.invalid");
     }
 
     private HudElement BuildAutoArchiveSettingsRoot()
     {
         var rows = new List<HudElement>
         {
-            new TextElement(() => "Auto archive", Emphasis: true),
-            ToggleRow("Auto-archive (off = manual only)", () => AutoArchiveEnabled, v => AutoArchiveEnabled = v),
+            new TextElement(() => _loc.T("archive.section"), Emphasis: true),
+            ToggleRow("archive.autoArchive", () => AutoArchiveEnabled, v => AutoArchiveEnabled = v),
             new TextElement(LastArchiveLabel, MutedCol),
-            PillRow("Min gap",   () => AutoArchiveCooldownS,      v => AutoArchiveCooldownS = v, 5, 10, 30, 60),
-            PillRow("Settle",    () => AutoArchiveSettleS,        v => AutoArchiveSettleS   = v, 0, 1, 2, 5),
+            PillRow("archive.minGap",   () => AutoArchiveCooldownS,      v => AutoArchiveCooldownS = v, 5, 10, 30, 60),
+            PillRow("archive.settle",    () => AutoArchiveSettleS,        v => AutoArchiveSettleS   = v, 0, 1, 2, 5),
             new SeparatorElement(),
 
-            ToggleRow("Team wipe", () => AutoArchiveWipe, v => AutoArchiveWipe = v),
-            new TextElement(() => "   Archives when everyone (or you, solo) goes down.", MutedCol),
-            PillRow("Revive grace", () => AutoArchiveWipeGraceS, v => AutoArchiveWipeGraceS = v, new[] { 0, 2, 5 }, () => AutoArchiveWipe),
-            ToggleRow("Ignore when solo", () => AutoArchiveWipeIgnoreSolo, v => AutoArchiveWipeIgnoreSolo = v, () => AutoArchiveWipe, indent: true),
+            ToggleRow("archive.teamWipe", () => AutoArchiveWipe, v => AutoArchiveWipe = v),
+            new TextElement(() => _loc.T("archive.teamWipe.help"), MutedCol),
+            PillRow("archive.reviveGrace", () => AutoArchiveWipeGraceS, v => AutoArchiveWipeGraceS = v, new[] { 0, 2, 5 }, () => AutoArchiveWipe),
+            ToggleRow("archive.ignoreSolo", () => AutoArchiveWipeIgnoreSolo, v => AutoArchiveWipeIgnoreSolo = v, () => AutoArchiveWipe, indent: true),
 
-            ToggleRow("Boss phase", () => AutoArchiveBoss, v => AutoArchiveBoss = v),
-            new TextElement(() => "   Cuts a fresh segment when a boss fight starts, and archives the fight when the boss dies.", MutedCol),
-            PillRow("Keep before", () => AutoArchiveKeepBeforeS, v => AutoArchiveKeepBeforeS = v, new[] { 0, 3, 5 }, () => AutoArchiveBoss),
+            ToggleRow("archive.bossPhase", () => AutoArchiveBoss, v => AutoArchiveBoss = v),
+            new TextElement(() => _loc.T("archive.bossPhase.help"), MutedCol),
+            PillRow("archive.keepBefore", () => AutoArchiveKeepBeforeS, v => AutoArchiveKeepBeforeS = v, new[] { 0, 3, 5 }, () => AutoArchiveBoss),
 
-            ToggleRow("Combat idle", () => AutoArchiveIdle, v => AutoArchiveIdle = v),
-            new TextElement(() => "   Archives after no combat for a while.", MutedCol),
-            PillRow("Idle timeout", () => AutoArchiveIdleTimeoutS, v => AutoArchiveIdleTimeoutS = v, new[] { 30, 60, 120, 300 }, () => AutoArchiveIdle),
+            ToggleRow("archive.combatIdle", () => AutoArchiveIdle, v => AutoArchiveIdle = v),
+            new TextElement(() => _loc.T("archive.combatIdle.help"), MutedCol),
+            PillRow("archive.idleTimeout", () => AutoArchiveIdleTimeoutS, v => AutoArchiveIdleTimeoutS = v, new[] { 30, 60, 120, 300 }, () => AutoArchiveIdle),
 
-            ToggleRow("Dungeon stage change", () => AutoArchiveStage, v => AutoArchiveStage = v),
+            ToggleRow("archive.stageChange", () => AutoArchiveStage, v => AutoArchiveStage = v),
             // Caption corrected: the old "Archives when the dungeon advances (floor clear / settlement)"
             // misdescribed it — only run-END states ever arm this, never a mid-run advance.
-            new TextElement(() => "   Cuts an archive when the run ends. Pick which stages.", MutedCol),
+            new TextElement(() => _loc.T("archive.stageChange.help"), MutedCol),
             StageChipRow(),
 
             new SeparatorElement(),
-            new TextElement(() => "History", Emphasis: true),
+            new TextElement(() => _loc.T("settings.section.history"), Emphasis: true),
             HistoryRetentionRow(),
-            new TextElement(() => "   How many past archives the local list keeps. Higher = more history, bigger config.", MutedCol),
+            new TextElement(() => _loc.T("settings.history.help"), MutedCol),
 
             new SeparatorElement(),
-            new TextElement(() => "Uploads", Emphasis: true),
+            new TextElement(() => _loc.T("settings.section.uploads"), Emphasis: true),
         };
         rows.AddRange(UploadsSection());
         rows.AddRange(DiscordSectionRows());
@@ -175,14 +175,14 @@ public sealed partial class Plugin
             // is the one-shot, this persists until the launcher updates the plugin.
             new ConditionalElement(() => UploadBelowFloor,
                 new TextElement(() => UploadFloorNoticeLine, () => new ColorRgba(0.95f, 0.55f, 0.15f, 1f))),
-            new TextElement(() => "   auto = uploads itself · manual = only when you press upload · off = never.", MutedCol),
+            new TextElement(() => _loc.T("upload.policy.help"), MutedCol),
             // Column header names both axes ONCE, which is what let the duplicated "Replay position track"
             // section (5 rows + its own header) be deleted outright — design 3d73f7a.
             new RowElement(new HudElement[]
             {
                 new SpacerElement(Width: 106f),
-                new TextElement(() => "run stats", MutedCol, Width: PolicyDropdownWidth),
-                new TextElement(() => "replay", MutedCol, Width: PolicyDropdownWidth),
+                new TextElement(() => _loc.T("upload.col.runStats"), MutedCol, Width: PolicyDropdownWidth),
+                new TextElement(() => _loc.T("upload.col.replay"), MutedCol, Width: PolicyDropdownWidth),
             }, Gap: 6f),
         };
         foreach (var kind in UploadPolicyTable.Kinds)
@@ -201,7 +201,7 @@ public sealed partial class Plugin
         rows.Add(new RowElement(new HudElement[]
         {
             new SpacerElement(Width: 8f),
-            new ButtonElement(() => "Refresh content list", RefreshContentKindsNow, Width: 150f),
+            new ButtonElement(() => _loc.T("upload.refreshContent"), RefreshContentKindsNow, Width: 150f),
         }, Gap: 6f));
         return rows.ToArray();
     }
@@ -244,7 +244,7 @@ public sealed partial class Plugin
         => new RowElement(new HudElement[]
         {
             new SpacerElement(Width: 8f),
-            new TextElement(() => UploadPolicy.Label(kind), MutedCol, Width: 92f),
+            new TextElement(() => _loc.T(UploadPolicy.Label(kind)), MutedCol, Width: 92f),
             PolicyDropdown(kind, UploadArtifact.Stats),
             PolicyDropdown(kind, UploadArtifact.Replay),
         }, Gap: 6f);
@@ -279,7 +279,7 @@ public sealed partial class Plugin
         var kids = new List<HudElement>
         {
             new SpacerElement(Width: 16f),
-            new TextElement(() => "tiers", MutedCol, Width: 44f),
+            new TextElement(() => _loc.T("upload.col.tiers"), MutedCol, Width: 44f),
         };
         foreach (var t in tiers)
         {
@@ -312,7 +312,7 @@ public sealed partial class Plugin
         => new RowElement(new HudElement[]
         {
             new SpacerElement(Width: 16f),
-            new TextElement(() => "level", MutedCol, Width: 44f),
+            new TextElement(() => _loc.T("upload.col.level"), MutedCol, Width: 44f),
             new SliderElement(() => MinMasterLevel, v => SetMinMasterLevel((int)v),
                               UploadTierFilter.MinMasterLevelFloor, UploadTierFilter.MaxMasterLevel)
                 // SquareHandle: Unity's Slider drives the handle's cross-axis anchors to full stretch, so
@@ -330,8 +330,8 @@ public sealed partial class Plugin
     // (Plugin.History.cs, internal static — same class via this partial, no qualifier needed).
     private string LastArchiveLabel()
         => LastArchive is { } la
-            ? $"Last archive: {ArchiveReasonTag(la.reason)} · {(_services.CombatSnapshot.ServerNowMs - la.ms) / 1000}s ago"
-            : "Last archive: —";
+            ? _loc.TFormat("archive.lastArchive", ArchiveReasonTag(la.reason), (_services.CombatSnapshot.ServerNowMs - la.ms) / 1000)
+            : _loc.T("archive.lastArchive.none");
 
     // A labelled row of second-value pills (generalises the old IdleTimeoutRow/IdleTimeoutBtn). `get`
     // is read LIVE on every poll (Active: () => get() == sec) — NOT a value captured at build time —
@@ -351,7 +351,7 @@ public sealed partial class Plugin
         var kids = new List<HudElement>
         {
             new SpacerElement(Width: 16f),
-            new TextElement(() => "stages", MutedCol, Width: 44f),
+            new TextElement(() => _loc.T("upload.col.stages"), MutedCol, Width: 44f),
         };
         foreach (var s in AutoArchive.AutoArchiveEngine.SelectableStages)
         {
@@ -385,7 +385,7 @@ public sealed partial class Plugin
     private HudElement HistoryRetentionRow() => new RowElement(new HudElement[]
     {
         new SpacerElement(Width: 8f),
-        new TextElement(() => "Keep runs", MutedCol, Width: 96f),
+        new TextElement(() => _loc.T("settings.history.keepRuns"), MutedCol, Width: 96f),
         new DropdownElement(
             () => IndexOfRetention(HistoryRetention),
             () => RetentionOptionLabels,
@@ -409,11 +409,11 @@ public sealed partial class Plugin
 
     private HudElement PillRow(string label, Func<int> get, Action<int> set, int[] seconds, Func<bool>? enabled)
     {
-        var kids = new List<HudElement> { new SpacerElement(Width: 8f), new TextElement(() => label, MutedCol, Width: 96f) };
+        var kids = new List<HudElement> { new SpacerElement(Width: 8f), new TextElement(() => _loc.T(label), MutedCol, Width: 96f) };
         foreach (var s in seconds)
         {
             var sec = s;
-            kids.Add(new ButtonElement(() => sec == 0 ? "off" : sec + "s", () => set(sec),
+            kids.Add(new ButtonElement(() => sec == 0 ? _loc.T("pill.off") : sec + "s", () => set(sec),
                 Active: () => get() == sec, Enabled: enabled ?? (() => true), Width: 48f));
         }
         return new RowElement(kids.ToArray(), Gap: 6f);
