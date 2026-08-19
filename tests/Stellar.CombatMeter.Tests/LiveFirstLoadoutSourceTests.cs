@@ -143,4 +143,37 @@ public class LiveFirstLoadoutSourceTests
         Assert.Equal(0, stage);
         Assert.Null(nodes);
     }
+
+    // --- PreferNonEmpty: component-wise fill must never overwrite non-empty captured data with an
+    // empty fresh read. PINNED regression — owner-verified 2026-08-19 in-game bug:
+    // IInventory.GetLiveEquipped() returned a stale method-21-latched Modules set PLUS an EMPTY Gear
+    // set on two different-class runs; ApplyLiveEquipment's old liveHasData OR-check (any component
+    // non-empty ⇒ "live has data") treated that as live and overwrote a populated captured Gear with
+    // []. PreferNonEmpty (Plugin.LoadoutCapture.cs) is the pure per-component seam that fixes this: a
+    // freshly-read component only replaces the captured one when the fresh read is ITSELF non-empty.
+    // Do not weaken — a future refactor that goes back to an OR'd whole-record swap reopens this bug.
+
+    [Fact]
+    public void ActiveClass_ComponentNeverOverwrittenByEmptySource()
+    {
+        var kept = new[] { new[] { 1, 100 }, new[] { 2, 200 } };
+        var emptyFresh = System.Array.Empty<int[]>();
+        Assert.Same(kept, Plugin.PreferNonEmpty(emptyFresh, kept));
+    }
+
+    [Fact]
+    public void PreferNonEmpty_NonEmptyFresh_ReplacesKept()
+    {
+        var kept = new[] { new[] { 1, 100 } };
+        var fresh = new[] { new[] { 2, 200 }, new[] { 3, 300 } };
+        Assert.Same(fresh, Plugin.PreferNonEmpty(fresh, kept));
+    }
+
+    [Fact]
+    public void PreferNonEmpty_BothEmpty_ReturnsKept()
+    {
+        var kept = System.Array.Empty<int[]>();
+        var fresh = System.Array.Empty<int[]>();
+        Assert.Same(kept, Plugin.PreferNonEmpty(fresh, kept));
+    }
 }

@@ -124,19 +124,19 @@ public sealed partial class Plugin
             WriteRangeToSnapshot(snap, _attrRange.Base(prof), _attrRange.Peaks(prof));
 
         if (entry.Loadouts.Count == 0) return;
-        // One live-container read per archive: the read walks the full item container to build a uuid
-        // index, so it is hoisted out of the per-class loop (review finding 2026-08-19).
-        var live = _services.Inventory.GetLiveEquipped();
+        // No live-container read to hoist here anymore: the picked-slot read (FindLoadoutSlot) is a
+        // cheap dictionary/list lookup per class, not a full item-container reflection walk — see
+        // Plugin.LoadoutCapture.cs ApplyLiveEquipment.
         var resolved = new List<CapturedLoadout>(entry.Loadouts.Count);
         foreach (var l in entry.Loadouts)
         {
             var withAttrs = _attrRange.Has(l.ProfessionId)
                 ? l with { Attributes = _attrRange.Base(l.ProfessionId), AttrPeaks = _attrRange.Peaks(l.ProfessionId) }
                 : l;
-            // Fill each played class's gear/modules live-first: the ACTIVE class re-reads the live
-            // equipped containers, earlier-played classes keep their frozen at-play capture (saved
-            // loadouts only as a never-saw-live fallback) — Plugin.LoadoutCapture.cs ApplyLiveEquipment.
-            resolved.Add(ApplyLiveEquipment(withAttrs, live));
+            // Fill each played class's gear/modules from its picked loadout slot: the ACTIVE class's
+            // slot carries the live overlay, earlier-played classes keep their frozen at-play capture
+            // (saved plans only as a never-saw-live-or-capture fallback) — ApplyLiveEquipment above.
+            resolved.Add(ApplyLiveEquipment(withAttrs));
         }
         entry.Loadouts = resolved;
     }
