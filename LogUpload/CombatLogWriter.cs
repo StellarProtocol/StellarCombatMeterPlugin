@@ -240,6 +240,7 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             if (a.TalentStageId > 0) w.Name("talentStageId").Number(a.TalentStageId);
             if (a.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
             if (a.Loadouts is { Count: > 0 } l) { w.Name("loadouts"); WriteLoadouts(w, l); }
+            if (a.DeepSlumber is { } ds) { w.Name("deepSlumber"); WriteDeepSlumber(w, ds); }
         }
         w.EndObject();
     }
@@ -346,6 +347,37 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             w.EndArray();
         }
         w.EndArray();
+    }
+
+    private static void WriteDeepSlumber(JsonWriter w, DeepSlumberEntry ds)
+    {
+        w.BeginObject();
+        w.Name("seasonLevels"); WriteIntArrays(w, ds.SeasonLevels);
+        w.Name("lines");
+        w.BeginArray();
+        foreach (var l in ds.Lines)
+        {
+            w.BeginObject();
+            w.Name("lineId").Number(l.LineId);
+            w.Name("subType").Number(l.SubType);
+            w.Name("areas");
+            w.BeginArray();
+            foreach (var a in l.Areas)
+            {
+                w.BeginObject();
+                w.Name("areaId").Number(a.AreaId);
+                w.Name("active").Bool(a.Active);
+                w.Name("score").Number(a.Score);
+                w.Name("big"); WriteIntArrays(w, a.Big);
+                w.Name("mid"); WriteIntArrays(w, a.Mid);
+                w.Name("nodes"); WriteIntArrays(w, a.Nodes);
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+        }
+        w.EndArray();
+        w.EndObject();
     }
 
     private static void WriteEvents(JsonWriter w, IReadOnlyList<CombatLogEvent> events)
