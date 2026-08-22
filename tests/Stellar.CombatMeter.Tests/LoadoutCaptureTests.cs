@@ -351,6 +351,80 @@ public class LoadoutCaptureTests
     }
 
     // -------------------------------------------------------------------------
+    // Login-order race (review finding, 2026-08-22): IResonanceState.Installed starts [] right after
+    // login and only populates via a 1 Hz latched poll, while the combat marker can advance on the
+    // very first hit. Without the empty-is-no-signal rule, run-start capture (Imagines=[]) + a fight
+    // advancing the marker + the 1 Hz probe landing (Installed flips []->[real pair]) looked exactly
+    // like "different content, marker advanced" -> APPEND, minting a phantom second setup that differs
+    // from the first ONLY by empty->real Imagines, with no actual swap. Pinned here so it can never
+    // regress; see LoadoutCapture.ImaginesDiffer / SameSetup docs for the rule.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ImagineSentinel_UnsyncedAtRunStart_ThenPopulatedAfterCombat_HealsInPlace_NeverAppends()
+    {
+        // Exact login sequence from the finding: capture with imagines=[] while marker is still at its
+        // starting value, a fight advances the marker, then the 1 Hz resonance probe lands and the
+        // recapture carries the real pair — everything else (gear/modules/talents) identical throughout.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: System.Array.Empty<int>()), combatMarker: 0);
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 3);   // marker advanced by the fight
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);   // NOT two — the []->populated transition must never mint a phantom setup
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSentinel_NullAtRunStart_ThenPopulatedAfterCombat_HealsInPlace_NeverAppends()
+    {
+        // Same race, but the first capture's Imagines is null rather than an empty array (SameIntSequence
+        // already treats null as empty; ImaginesDiffer must too).
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: null), combatMarker: 0);
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 3);
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSentinel_BothSidesNonEmptyAndDiffering_AfterCombat_StillAppends()
+    {
+        // Guard against overcorrecting: a REAL swap (both sides non-empty, genuinely different) after
+        // combat must still append a new entry — this is ImagineSwap_FoughtWith_ThenSwapped's exact
+        // shape, re-pinned here alongside the empty-side fix so the two behaviors are compared side by
+        // side and neither can quietly weaken the other.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 3);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+        Assert.Equal(new[] { 10085, 10086 }, entries[1].Imagines);
+    }
+
+    [Fact]
+    public void ImaginesDiffer_EmptyEitherSide_IsNeverADifference()
+    {
+        Assert.False(LoadoutCapture.ImaginesDiffer(System.Array.Empty<int>(), new[] { 1, 2 }));
+        Assert.False(LoadoutCapture.ImaginesDiffer(new[] { 1, 2 }, System.Array.Empty<int>()));
+        Assert.False(LoadoutCapture.ImaginesDiffer(null, new[] { 1, 2 }));
+        Assert.False(LoadoutCapture.ImaginesDiffer(null, null));
+        Assert.False(LoadoutCapture.ImaginesDiffer(System.Array.Empty<int>(), System.Array.Empty<int>()));
+    }
+
+    [Fact]
+    public void ImaginesDiffer_BothNonEmpty_MatchesSameIntSequence()
+    {
+        Assert.False(LoadoutCapture.ImaginesDiffer(new[] { 1, 2 }, new[] { 1, 2 }));
+        Assert.True(LoadoutCapture.ImaginesDiffer(new[] { 1, 2 }, new[] { 2, 1 }));
+        Assert.True(LoadoutCapture.ImaginesDiffer(new[] { 1 }, new[] { 1, 2 }));
+    }
+
+    // -------------------------------------------------------------------------
     // LastImagines — the cheap tick-time comparison seam TickImagineRecapture polls against.
     // -------------------------------------------------------------------------
 

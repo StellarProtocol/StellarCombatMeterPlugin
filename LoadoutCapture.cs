@@ -42,11 +42,14 @@ internal sealed record CapturedLoadout(
     long AbilityScore = 0,                       // this class's combat power (FightPoint) read while it was ACTIVE;
                                                   // gear-dependent, so per-class. 0 when unread. (self-only)
     IReadOnlyList<int>? Imagines = null);        // equipped Battle Imagine ids, slot-ordered [X, Z] (self-only),
-                                                  // a copy of IResonanceState.Installed at capture. Empty/null
-                                                  // when unsynced. Owner gap, run B47O8jx6wp retest (2026-08-22):
-                                                  // an Imagine swap alone must mint a new fought-with setup —
-                                                  // see LoadoutCapture.SameSetup (ORDER-SENSITIVE: slots X/Z
-                                                  // are distinct).
+                                                  // a copy of IResonanceState.Installed at capture. Empty (never
+                                                  // null from a live capture — BuildLoadoutImagines always
+                                                  // returns a non-null array) when unsynced; the nullable
+                                                  // annotation only covers test/fake fixtures that omit it.
+                                                  // Owner gap, run B47O8jx6wp retest (2026-08-22): an Imagine
+                                                  // swap alone must mint a new fought-with setup — see
+                                                  // LoadoutCapture.SameSetup (ORDER-SENSITIVE: slots X/Z are
+                                                  // distinct — but empty is no-signal, see ImaginesDiffer).
 
 /// <summary>
 /// Pure per-class loadout accumulator — an ORDERED LIST of captures per professionId (oldest first),
@@ -155,19 +158,39 @@ internal sealed class LoadoutCapture
     /// capture-order jitter alone can never split one setup into two), and Imagines (owner gap, run
     /// B47O8jx6wp retest, 2026-08-22 — equipped Battle Imagines join the identity). Imagines is
     /// compared ORDER-SENSITIVE, unlike TalentNodes/gear/modules: slot X and slot Z are distinct, so
-    /// [Predator Spider, Muku Chief] is a different setup from [Muku Chief, Predator Spider].
-    /// Deliberately EXCLUDES GearDetail (self-only enrichment jitter — refine/enchant/roll detail can
-    /// read differently capture-to-capture for the identical physical gear) and Attributes/AttrPeaks/
-    /// Skills/Fashion/ProjectName/AbilityScore, which drift without the player changing anything.
-    /// Mirrors the worker's setup-identity rationale (<c>loadoutVariantKey</c>,
-    /// services/stellar-logs/src/do/mergeActors.ts) so the plugin and the server agree on what counts
-    /// as "a different build" — including Quality in the module identity, matching that key exactly.</summary>
+    /// [Predator Spider, Muku Chief] is a different setup from [Muku Chief, Predator Spider] — but only
+    /// when BOTH sides are non-empty (<see cref="ImaginesDiffer"/>): a login-order race lets the first
+    /// capture of a run land before the 1 Hz <c>IResonanceState.Installed</c> poll ever populates, so an
+    /// empty side is "not yet known", not "no Imagines equipped" — treating it as a real difference let
+    /// the []→populated transition APPEND a phantom second setup with no actual swap (review finding,
+    /// 2026-08-22; mirrors the <see cref="Plugin.PreferNonEmpty{T}"/> empty-is-no-signal rule already
+    /// used for gear/modules at archive time). Deliberately EXCLUDES GearDetail (self-only enrichment
+    /// jitter — refine/enchant/roll detail can read differently capture-to-capture for the identical
+    /// physical gear) and Attributes/AttrPeaks/Skills/Fashion/ProjectName/AbilityScore, which drift
+    /// without the player changing anything. Mirrors the worker's setup-identity rationale
+    /// (<c>loadoutVariantKey</c>, services/stellar-logs/src/do/mergeActors.ts) so the plugin and the
+    /// server agree on what counts as "a different build" — including Quality in the module identity,
+    /// matching that key exactly.</summary>
     internal static bool SameSetup(CapturedLoadout a, CapturedLoadout b)
         => a.TalentStageId == b.TalentStageId
         && SameGear(a.Gear, b.Gear)
         && SameIntSet(a.TalentNodes, b.TalentNodes)
         && SameModules(a.Modules, b.Modules)
-        && SameIntSequence(a.Imagines, b.Imagines);
+        && !ImaginesDiffer(a.Imagines, b.Imagines);
+
+    /// <summary>Whether Imagines contributes a genuine "different setup" signal to <see cref="SameSetup"/>
+    /// — true only when BOTH sides are non-empty and the order-sensitive pair differs. An empty side
+    /// (either) means "not yet known" (the 1 Hz resonance poll hasn't landed since login/class-swap),
+    /// never "no Imagines equipped" (a live capture's <see cref="BuildLoadoutImagines"/>-style read is
+    /// empty only while unsynced), so it can never itself mint a difference. This is what lets the
+    /// []→populated transition route through <see cref="Capture"/>'s same-setup REPLACE branch — which
+    /// carries the NEW capture's (non-empty) Imagines forward — instead of APPEND, healing the sentinel
+    /// in place rather than minting a phantom second entry for a swap that never happened.</summary>
+    internal static bool ImaginesDiffer(IReadOnlyList<int>? a, IReadOnlyList<int>? b)
+    {
+        if ((a?.Count ?? 0) == 0 || (b?.Count ?? 0) == 0) return false;
+        return !SameIntSequence(a, b);
+    }
 
     private static bool SameGear(IReadOnlyList<int[]> a, IReadOnlyList<int[]> b)
     {
