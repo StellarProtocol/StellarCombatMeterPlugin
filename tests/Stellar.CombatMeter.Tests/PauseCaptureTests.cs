@@ -67,6 +67,31 @@ public class PauseCaptureTests
         Assert.False(Plugin.ResolveCombatEventWork(paused: true).accrue);                      // …but is unreachable
     }
 
+    // ── "fought-with marker advances while paused" (review 2026-08-22) ──────────────────────────────
+    //
+    // Finding: _combatEventMarker++ sat AFTER the `accrue` veto, so a fight fought entirely while the
+    // meter was PAUSED never advanced it — LoadoutCapture.Capture's append-vs-replace decision then
+    // misclassified that fought-with setup as an unfought draft and REPLACED it (the exact silent-loss
+    // class this arc fixes). Fix: the increment is now gated on ShouldAdvanceFoughtWithMarker(capture),
+    // never on accrue. Never weaken: this pin is what keeps the marker pause-immune.
+    [Fact]
+    public void FoughtWithMarker_advances_while_paused_even_though_accrue_does_not()
+    {
+        var (capture, accrue) = Plugin.ResolveCombatEventWork(paused: true);
+        Assert.False(accrue);                                    // numbers stop…
+        Assert.True(Plugin.ShouldAdvanceFoughtWithMarker(capture)); // …but the fought-with marker still moves
+    }
+
+    [Fact]
+    public void FoughtWithMarker_guard_is_tied_to_capture_not_accrue()
+    {
+        // Unpaused: both true, so the guard being tied to `capture` rather than `accrue` is invisible —
+        // the differential above is what actually pins the split.
+        var (capture, accrue) = Plugin.ResolveCombatEventWork(paused: false);
+        Assert.True(accrue);
+        Assert.True(Plugin.ShouldAdvanceFoughtWithMarker(capture));
+    }
+
     // ── "boss engaged while paused → admitted, and it reaches bosses[]" ──────────────────────────────
     //
     // Admission's guard has ONE term (inRun) and never had a paused one — fix 4 moved its CALL SITE out
