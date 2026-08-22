@@ -9,6 +9,16 @@ namespace Stellar.CombatMeter;
 // keep each file under the 500-LoC cap (Phase 3 adds more here). Behaviour is identical.
 public sealed partial class Plugin
 {
+    // Monotonically increasing combat-activity marker — bumped once per event that actually ACCRUES
+    // (paused numbers never bump it: owner pause doctrine 2026-08-14, "pause stops the numbers, never
+    // the tracking"). Never reset — not by Clear() (per-archive), not by a run boundary — because
+    // Plugin.LoadoutCapture.cs's LoadoutCapture only ever compares it against the value SAMPLED when a
+    // class's previous entry was captured; only whether it MOVED matters, never its absolute value.
+    // This is the fought-with-setup signal for that fix (owner run B47O8jx6wp, verbatim: "when any
+    // equipment change such as module,talents,equipments... and use have a combat with that setup it
+    // require plugin to take snapshot of it even class has no change").
+    private long _combatEventMarker;
+
     private void OnCombatEvent(CombatEvent evt)
     {
         // SP1: capture every event into the log buffer (runs even when the meter display is paused).
@@ -39,6 +49,12 @@ public sealed partial class Plugin
 
         // ---- Everything below is a DECISION or an ACCUMULATION: paused-gated (numbers stop here). ----
         if (!accrue) return;
+
+        // Fought-with-setup marker (see the field's doc above) — bumped BEFORE the per-channel
+        // branches below so it covers damage dealt, taken (target-side; not gated on
+        // d.SourceId.IsPlayer, which only guards the per-source dicts further down), and healing
+        // alike, matching the junk-classification rule (DPS/HPS/Taken all count as real activity).
+        _combatEventMarker++;
 
         // Inline boss-phase cut (Task 7, 2026-07-21). Capture whether combat was ALREADY running before
         // this event establishes it, then — on the FIRST combat event involving the boss — cut the

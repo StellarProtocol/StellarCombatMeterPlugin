@@ -127,16 +127,29 @@ public sealed partial class Plugin
         // No live-container read to hoist here anymore: the picked-slot read (FindLoadoutSlot) is a
         // cheap dictionary/list lookup per class, not a full item-container reflection walk — see
         // Plugin.LoadoutCapture.cs ApplyLiveEquipment.
+        //
+        // The active class may hold MULTIPLE entries (a fought-with setup preserved alongside a
+        // later, different one — owner run B47O8jx6wp): only the LAST one is the setup currently
+        // equipped and eligible for the live overlay below; an earlier entry for the SAME class stays
+        // frozen exactly as captured. Loadouts is in capture order (LoadoutCapture.Snapshot), so a
+        // single forward scan finds it.
+        var lastActiveIndex = -1;
+        var activeProfession = _services.PlayerState.Profession;
+        if (activeProfession != 0)
+            for (var i = 0; i < entry.Loadouts.Count; i++)
+                if (entry.Loadouts[i].ProfessionId == activeProfession) lastActiveIndex = i;
+
         var resolved = new List<CapturedLoadout>(entry.Loadouts.Count);
-        foreach (var l in entry.Loadouts)
+        for (var i = 0; i < entry.Loadouts.Count; i++)
         {
+            var l = entry.Loadouts[i];
             var withAttrs = _attrRange.Has(l.ProfessionId)
                 ? l with { Attributes = _attrRange.Base(l.ProfessionId), AttrPeaks = _attrRange.Peaks(l.ProfessionId) }
                 : l;
             // Fill each played class's gear/modules from its picked loadout slot: the ACTIVE class's
-            // slot carries the live overlay, earlier-played classes keep their frozen at-play capture
+            // LAST entry carries the live overlay, every other entry keeps its frozen at-play capture
             // (saved plans only as a never-saw-live-or-capture fallback) — ApplyLiveEquipment above.
-            resolved.Add(ApplyLiveEquipment(withAttrs));
+            resolved.Add(ApplyLiveEquipment(withAttrs, isLastOfActiveClass: i == lastActiveIndex));
         }
         entry.Loadouts = resolved;
     }

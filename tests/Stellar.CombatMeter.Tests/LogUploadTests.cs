@@ -979,6 +979,31 @@ public sealed class LogUploadTests
         Assert.Null(talentNodes);   // no matching class → no top-level nodes
     }
 
+    // Fought-with-setup preservation (owner run B47O8jx6wp, Plugin.LoadoutCapture.cs
+    // LoadoutCapture.Capture) can now carry TWO entries for the SAME professionId — the fought-with
+    // setup, then the changed one. Regression pin for the exact risk this task flagged: the top-level
+    // mirror must pick the LATEST (list-order) entry, not the first.
+    [Fact]
+    public void ResolveLoadoutFields_local_multipleEntriesSameClass_topLevelMirrorsTheLatestEntry()
+    {
+        var olderModules = new List<CapturedModule> { new(0, 111, 5, new List<int[]>()) };
+        var newerModules = new List<CapturedModule> { new(0, 222, 5, new List<int[]>()) };
+        var runLoadouts = new List<CapturedLoadout>
+        {
+            MakeCapturedLoadout(2, projectName: "fought-with-5-module", talentStageId: 100, modules: olderModules),
+            MakeCapturedLoadout(2, projectName: "changed-4-module", talentStageId: 104, modules: newerModules),
+        };
+
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
+            isLocal: true, professionId: 2, runLoadouts);
+
+        Assert.NotNull(loadouts);
+        Assert.Equal(2, loadouts!.Count);                 // both entries still ride along
+        Assert.NotNull(modules);
+        Assert.Equal(222, modules!.Single().ConfigId);    // mirrors the LATEST (changed-4-module) entry
+        Assert.Equal(104, talentStageId);
+    }
+
     // -------------------------------------------------------------------------
     // Task 11: BuildPrecheckHeader carries the real region from the log header.
     // -------------------------------------------------------------------------

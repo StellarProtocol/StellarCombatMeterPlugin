@@ -409,9 +409,15 @@ internal sealed class CombatLogAssembler
     /// classes, so without this gate every teammate's Actor would wrongly carry the uploader's own
     /// loadout data (the flattened list has no per-teammate distinction). When local,
     /// <c>Loadouts</c> carries every class played so far this run; the top-level
-    /// <c>Modules</c>/<c>TalentStageId</c> mirror whichever captured class matches the actor's
-    /// (final) <paramref name="professionId"/> — null/0 if that class was never captured (e.g. the
-    /// player never triggered a profession-change poll this run, or captured before Task 2 shipped).
+    /// <c>Modules</c>/<c>TalentStageId</c> mirror the LATEST entry matching the actor's (final)
+    /// <paramref name="professionId"/> — null/0 if that class was never captured (e.g. the player
+    /// never triggered a profession-change poll this run, or captured before Task 2 shipped).
+    ///
+    /// "Latest" matters since the fought-with-setup fix (owner run B47O8jx6wp, Plugin.LoadoutCapture.cs
+    /// LoadoutCapture.Capture): one professionId can now carry MULTIPLE entries in capture order (a
+    /// fought-with setup preserved, then a later, different one), and the top-level mirror must
+    /// describe the setup currently equipped — the LAST entry — never whichever one happened to be
+    /// captured first.
     /// </summary>
     internal static (IReadOnlyList<LoadoutEntry>? Loadouts, IReadOnlyList<ModuleEntry>? Modules, int TalentStageId, IReadOnlyList<int>? TalentNodes)
         ResolveLoadoutFields(bool isLocal, int professionId, IReadOnlyList<CapturedLoadout> runLoadouts)
@@ -419,8 +425,11 @@ internal sealed class CombatLogAssembler
         if (!isLocal || runLoadouts.Count == 0) return (null, null, 0, null);
 
         var loadouts = BuildLoadoutEntries(runLoadouts);
-        foreach (var l in runLoadouts)
+        for (var i = runLoadouts.Count - 1; i >= 0; i--)
+        {
+            var l = runLoadouts[i];
             if (l.ProfessionId == professionId) return (loadouts, BuildModuleEntries(l.Modules), l.TalentStageId, l.TalentNodes);
+        }
         return (loadouts, null, 0, null);
     }
 
