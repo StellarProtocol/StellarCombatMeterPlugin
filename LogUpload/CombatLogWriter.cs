@@ -276,6 +276,9 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             if (l.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
             if (l.TalentStageId > 0) w.Name("talentStageId").Number(l.TalentStageId);
             if (l.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
+            // Equipped Battle Imagine ids, slot-ordered [X, Z] — owner gap, run B47O8jx6wp retest
+            // (2026-08-22). Same presence-guard idiom as talentNodes above.
+            if (l.Imagines is { Count: > 0 } im) { w.Name("imagines"); WriteIntList(w, im); }
             if (l.Attributes is { Count: > 0 } at) { w.Name("attributes"); WriteLongPairs(w, at); }
             if (l.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
             w.EndObject();

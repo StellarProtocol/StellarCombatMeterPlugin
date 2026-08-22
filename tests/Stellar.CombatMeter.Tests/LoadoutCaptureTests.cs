@@ -38,8 +38,9 @@ public class LoadoutCaptureTests
 {
     // gearItemId defaults to professionId (matching the ORIGINAL fixture shape) so pre-existing tests
     // that never pass it keep comparing byte-identical content across "revisits" — only tests that
-    // need a genuinely DIFFERENT setup pass a distinct value.
-    private static CapturedLoadout Fake(int professionId, string tag, int? gearItemId = null) => new(
+    // need a genuinely DIFFERENT setup pass a distinct value. imagines defaults to null (unsynced) —
+    // matching every pre-existing fixture's implicit "no Imagine data" shape.
+    private static CapturedLoadout Fake(int professionId, string tag, int? gearItemId = null, IReadOnlyList<int>? imagines = null) => new(
         ProfessionId:  professionId,
         ProjectName:   tag,
         TalentStageId: professionId * 100,
@@ -47,7 +48,8 @@ public class LoadoutCaptureTests
         GearDetail:    new List<GearDetail>(),
         Skills:        new List<int[]>(),
         Fashion:       new List<Fashion>(),
-        Modules:       new List<CapturedModule>());
+        Modules:       new List<CapturedModule>(),
+        Imagines:      imagines);
 
     [Fact]
     public void SnapshotHoldsOneEntryPerDistinctClassPlayed()
@@ -272,5 +274,106 @@ public class LoadoutCaptureTests
         var a = Fake(2, "x");
         var b = a with { TalentStageId = a.TalentStageId + 1 };
         Assert.False(LoadoutCapture.SameSetup(a, b));
+    }
+
+    // -------------------------------------------------------------------------
+    // Equipped Battle Imagines join the setup identity (owner gap, run B47O8jx6wp retest,
+    // 2026-08-22): swapping the equipped pair (e.g. Predator Spider -> Muku Chief) is a content
+    // change exactly like a gear/module/talent edit, so it goes through the SAME fought-with-vs-
+    // unfought-draft decision table in LoadoutCapture.Capture — these fixtures mirror the
+    // gear-based ones above but vary Imagines only.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void SameSetup_ImagineOrderMatters_PermutedPairIsADifferentSetup()
+    {
+        // Slot X and slot Z are distinct positions — Imagines is the one component in SameSetup that
+        // is ORDER-SENSITIVE (gear/talent-node sets are permutation-tolerant).
+        var a = Fake(2, "x", imagines: new[] { 10084, 10085 });
+        var b = Fake(2, "x", imagines: new[] { 10085, 10084 });   // same ids, swapped slots
+        Assert.False(LoadoutCapture.SameSetup(a, b));
+
+        var same = Fake(2, "x", imagines: new[] { 10084, 10085 });
+        Assert.True(LoadoutCapture.SameSetup(a, same));
+    }
+
+    [Fact]
+    public void SameSetup_ImagineDifference_IsADifferentSetup_EvenWithIdenticalGear()
+    {
+        var a = Fake(2, "x", imagines: new[] { 10084, 10085 });   // Predator Spider, Muku Chief
+        var b = Fake(2, "x", imagines: new[] { 10084, 10086 });   // slot Z swapped to a third Imagine
+        Assert.False(LoadoutCapture.SameSetup(a, b));
+    }
+
+    [Fact]
+    public void ImagineSwap_FoughtWith_ThenSwapped_PreservesBothEntriesInOrder()
+    {
+        // Fight with Predator Spider+Muku Chief (marker=0), then swap to Muku Chief+a third Imagine
+        // AFTER combat happened (marker advances to 3) — mirrors FoughtWithSetup_ThenChanged above,
+        // but the only thing that differs between the two captures is Imagines.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 3);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+        Assert.Equal(new[] { 10085, 10086 }, entries[1].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSwap_NoCombatSince_ReplacesRatherThanAppending()
+    {
+        // Same marker on both calls: swapping Imagines while just browsing (no fight in between) is
+        // an unfought draft, not a fought-with setup — mirrors UnfoughtDraft_DifferentContent above.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 0);
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal(new[] { 10085, 10086 }, entries[0].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSwap_SamePairRecaptured_RefreshesInPlace_NeverAppends()
+    {
+        // Re-equipping the IDENTICAL Imagine pair (e.g. a refresh from ApplyLiveEquipment / a
+        // no-op tick poll) must never mint a second entry — content identity is unchanged.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10084, 10085 }), combatMarker: 9);   // marker moved, same pair
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal("B", entries[0].ProjectName);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+    }
+
+    // -------------------------------------------------------------------------
+    // LastImagines — the cheap tick-time comparison seam TickImagineRecapture polls against.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void LastImagines_NoEntryYet_IsEmpty()
+        => Assert.Empty(new LoadoutCapture().LastImagines(2));
+
+    [Fact]
+    public void LastImagines_ReturnsTheNewestEntrysPair_NotAnEarlierOne()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 3);   // fought-with -> appended
+
+        Assert.Equal(new[] { 10085, 10086 }, capture.LastImagines(2));
+    }
+
+    [Fact]
+    public void SameIntSequence_OrderSensitive_NullTreatedAsEmpty()
+    {
+        Assert.True(LoadoutCapture.SameIntSequence(null, System.Array.Empty<int>()));
+        Assert.True(LoadoutCapture.SameIntSequence(new[] { 1, 2 }, new[] { 1, 2 }));
+        Assert.False(LoadoutCapture.SameIntSequence(new[] { 1, 2 }, new[] { 2, 1 }));
+        Assert.False(LoadoutCapture.SameIntSequence(new[] { 1 }, new[] { 1, 2 }));
     }
 }

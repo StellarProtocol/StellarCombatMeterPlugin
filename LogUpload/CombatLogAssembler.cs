@@ -468,7 +468,8 @@ internal sealed class CombatLogAssembler
                 TalentNodes:   l.TalentNodes,
                 Attributes:    l.Attributes,
                 AttrPeaks:     l.AttrPeaks,
-                AbilityScore:  l.AbilityScore));
+                AbilityScore:  l.AbilityScore,
+                Imagines:      l.Imagines));
         return list;
     }
 

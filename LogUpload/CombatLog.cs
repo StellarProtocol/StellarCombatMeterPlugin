@@ -208,7 +208,11 @@ internal sealed record LoadoutEntry(
     IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
     IReadOnlyList<long[]>? Attributes = null, // [attrId, value] attribute sheet for THIS class (self-only)
     IReadOnlyList<long[]>? AttrPeaks = null,  // [attrId, peakValue] sparse per-class combat peaks (self-only)
-    long AbilityScore = 0);                    // this class's combat power (FightPoint), read while active; 0 when unread
+    long AbilityScore = 0,                     // this class's combat power (FightPoint), read while active; 0 when unread
+    // Equipped Battle Imagine ids, slot-ordered [X, Z] (self-only). Additive/null on old uploads or
+    // when unsynced. Owner gap, run B47O8jx6wp retest (2026-08-22): a swap alone mints a new
+    // fought-with setup — see the plugin-internal CapturedLoadout.Imagines / LoadoutCapture.SameSetup.
+    IReadOnlyList<int>? Imagines = null);
 
 /// <summary>One Deep-Slumber area on the wire — activation, score, and node allocations as
 /// [nodeId, value] pairs (big = socketed fantasy card id, mid = socketed item id, nodes = level).
