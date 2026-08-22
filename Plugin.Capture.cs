@@ -9,6 +9,22 @@ namespace Stellar.CombatMeter;
 // keep each file under the 500-LoC cap (Phase 3 adds more here). Behaviour is identical.
 public sealed partial class Plugin
 {
+    // Monotonically increasing combat-activity marker — bumped once per DamageDealt event that is
+    // OBSERVED, gated on `capture` (unconditionally true from ResolveCombatEventWork), NEVER on
+    // `accrue`/pause. "Fought-with" is a TRACKING fact, not a displayed number (doctrine invariant 5,
+    // "pause stops the NUMBERS, never the TRACKING" — docs/recon/combatmeter-archive-flow.md; review
+    // 2026-08-22): the increment used to sit past the `accrue` veto, so a fight fought entirely while the
+    // meter was PAUSED never advanced the marker and its setup was misclassified as an unfought draft
+    // and REPLACED — the exact silent-loss class this arc fixes. See ShouldAdvanceFoughtWithMarker
+    // (Plugin.CaptureAlwaysOn.cs) for the pinned pure guard. Never reset — not by Clear() (per-archive),
+    // not by a run boundary — because Plugin.LoadoutCapture.cs's LoadoutCapture only ever compares it
+    // against the value SAMPLED when a class's previous entry was captured; only whether it MOVED
+    // matters, never its absolute value. This is the fought-with-setup signal for that fix (owner run
+    // B47O8jx6wp, verbatim: "when any equipment change such as module,talents,equipments... and use
+    // have a combat with that setup it require plugin to take snapshot of it even class has no
+    // change").
+    private long _combatEventMarker;
+
     private void OnCombatEvent(CombatEvent evt)
     {
         // SP1: capture every event into the log buffer (runs even when the meter display is paused).
@@ -31,6 +47,16 @@ public sealed partial class Plugin
         // the very same boundary from OnUpdate with no pause gate at all (~10 Hz), so gating the belt
         // would cost latency only — while exposing the admission below it to that stale-run latch.
         ResolveArmedBoundaryBelt();
+
+        // Fought-with-setup marker (see the field's doc above) — a TRACKING fact, not a displayed
+        // number, so it sits ABOVE the `accrue` veto and is gated on `capture` instead (doctrine
+        // invariant 5, "pause stops the NUMBERS, never the TRACKING"; review 2026-08-22). A fight fought
+        // entirely while the meter is PAUSED must still advance the marker, or its setup is
+        // misclassified as an unfought draft and REPLACED by LoadoutCapture.Capture's append-vs-replace
+        // decision. Covers damage dealt, taken (target-side; not gated on d.SourceId.IsPlayer, which
+        // only guards the per-source dicts further down), and healing alike, matching the
+        // junk-classification rule (DPS/HPS/Taken all count as real activity).
+        if (ShouldAdvanceFoughtWithMarker(capture)) _combatEventMarker++;
 
         // ALWAYS-ON CAPTURE (through pause): boss admission, elite candidates, replay entity noting.
         // `capture` is unconditionally true — the branch is here so production really flows through the

@@ -16,7 +16,7 @@
   <ItemGroup>
     <!-- Requires IPluginServices.Localization (ILocalization, framework 2.1.0, i18n P1). Ships with
          framework 2.1.0 — no release yet; build locally against <devkit>/.localfeed (dotnet pack). -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.1.0" />
+    <PackageReference Include="Stellar.Abstractions" Version="2.2.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws

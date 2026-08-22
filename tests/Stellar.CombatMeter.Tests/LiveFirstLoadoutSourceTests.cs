@@ -101,4 +101,79 @@ public class LiveFirstLoadoutSourceTests
         };
         Assert.Equal("right-class", Plugin.PickSlot(slots, professionId: 2)!.Name);
     }
+
+    // --- ResolveTalents: live talents beat any saved plan's (owner rule; Phase 2) ---
+
+    [Fact]
+    public void ResolveTalents_LiveStateForTheActiveClass_BeatsTheSlot()
+    {
+        var live = new LiveLoadoutState(2, 205, new[] { 9, 9, 9 });
+        var slot = Slot(1, professionId: 2, isCurrent: true) with { TalentStageId = 201, TalentNodes = new[] { 1 } };
+        var (stage, nodes) = Plugin.ResolveTalents(live, slot, professionId: 2);
+        Assert.Equal(205, stage);
+        Assert.Equal(new[] { 9, 9, 9 }, nodes);
+    }
+
+    [Fact]
+    public void ResolveTalents_LiveOfAnotherClass_FallsBackToSlot()
+    {
+        var live = new LiveLoadoutState(5, 505, new[] { 7 });
+        var slot = Slot(1, professionId: 2) with { TalentStageId = 201, TalentNodes = new[] { 1, 2 } };
+        var (stage, nodes) = Plugin.ResolveTalents(live, slot, professionId: 2);
+        Assert.Equal(201, stage);
+        Assert.Equal(new[] { 1, 2 }, nodes);
+    }
+
+    [Fact]
+    public void ResolveTalents_NoLiveNoSlot_IsEmpty()
+    {
+        var (stage, nodes) = Plugin.ResolveTalents(null, null, professionId: 2);
+        Assert.Equal(0, stage);
+        Assert.Null(nodes);
+    }
+
+    [Fact]
+    public void ResolveTalents_LiveWithZeroStage_StillWins_NeverMixedWithSlot()
+    {
+        // A live read that resolved the class but not the stage must NOT splice in a saved plan's
+        // stage — half-live half-plan talents would mislabel the spec.
+        var live = new LiveLoadoutState(2, 0, null);
+        var slot = Slot(1, professionId: 2) with { TalentStageId = 201, TalentNodes = new[] { 1 } };
+        var (stage, nodes) = Plugin.ResolveTalents(live, slot, professionId: 2);
+        Assert.Equal(0, stage);
+        Assert.Null(nodes);
+    }
+
+    // --- PreferNonEmpty: component-wise fill must never overwrite non-empty captured data with an
+    // empty fresh read. PINNED regression — owner-verified 2026-08-19 in-game bug:
+    // IInventory.GetLiveEquipped() returned a stale method-21-latched Modules set PLUS an EMPTY Gear
+    // set on two different-class runs; ApplyLiveEquipment's old liveHasData OR-check (any component
+    // non-empty ⇒ "live has data") treated that as live and overwrote a populated captured Gear with
+    // []. PreferNonEmpty (Plugin.LoadoutCapture.cs) is the pure per-component seam that fixes this: a
+    // freshly-read component only replaces the captured one when the fresh read is ITSELF non-empty.
+    // Do not weaken — a future refactor that goes back to an OR'd whole-record swap reopens this bug.
+
+    [Fact]
+    public void ActiveClass_ComponentNeverOverwrittenByEmptySource()
+    {
+        var kept = new[] { new[] { 1, 100 }, new[] { 2, 200 } };
+        var emptyFresh = System.Array.Empty<int[]>();
+        Assert.Same(kept, Plugin.PreferNonEmpty(emptyFresh, kept));
+    }
+
+    [Fact]
+    public void PreferNonEmpty_NonEmptyFresh_ReplacesKept()
+    {
+        var kept = new[] { new[] { 1, 100 } };
+        var fresh = new[] { new[] { 2, 200 }, new[] { 3, 300 } };
+        Assert.Same(fresh, Plugin.PreferNonEmpty(fresh, kept));
+    }
+
+    [Fact]
+    public void PreferNonEmpty_BothEmpty_ReturnsKept()
+    {
+        var kept = System.Array.Empty<int[]>();
+        var fresh = System.Array.Empty<int[]>();
+        Assert.Same(kept, Plugin.PreferNonEmpty(fresh, kept));
+    }
 }

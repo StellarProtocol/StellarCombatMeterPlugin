@@ -6,64 +6,10 @@ using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
 
-/// <summary>One equipped module captured from the local <c>IInventory</c> (self-only): slot, the
-/// module's config id + quality, and its rolled parts (attrId, value). Plugin-internal capture shape —
-/// distinct from any future upload-wire <c>ModuleEntry</c> DTO, which the assembler (Task 3 of the
-/// per-class-loadout plan) maps this onto.</summary>
-internal sealed record CapturedModule(int Slot, int ConfigId, int Quality, IReadOnlyList<int[]> Parts);
-
-/// <summary>Archive-time source for a captured class's gear/modules — see
-/// <see cref="Plugin.ResolveGearSource"/>. Live-first, loadout-never (owner rulings 2026-08-05 +
-/// 2026-08-19): a saved plan is reached only when no live data ever resolved for the class.</summary>
-internal enum LoadoutGearSource { Live, Captured, SavedSlot }
-
-/// <summary>
-/// A full snapshot of ONE played class's loadout — gear (ids + self-only rolled detail), modules,
-/// skills, fashion, its project name, and active talent stage. Captured self-only, latest-wins per
-/// <see cref="ProfessionId"/> (see <see cref="LoadoutCapture"/>). <see cref="GearDetail"/> and
-/// <see cref="Fashion"/> reuse the existing upload-wire record shapes (<c>LogUpload/CombatLog.cs</c>)
-/// so the future upload assembler can attach these with no conversion.
-/// </summary>
-internal sealed record CapturedLoadout(
-    int ProfessionId,
-    string? ProjectName,
-    int TalentStageId,
-    IReadOnlyList<int[]> Gear,               // [slot, itemId(=ConfigId)]
-    IReadOnlyList<GearDetail> GearDetail,     // self-only rolled detail — same shape as CaptureSelfGearDetail
-    IReadOnlyList<int[]> Skills,              // [skillId, level, tier]
-    IReadOnlyList<Fashion> Fashion,
-    IReadOnlyList<CapturedModule> Modules,
-    IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
-    IReadOnlyList<long[]>? Attributes = null,    // [attrId, value] self attribute sheet (BASE) at capture (self-only)
-    IReadOnlyList<long[]>? AttrPeaks  = null,    // [attrId, peakValue] sparse combat peaks (self-only)
-    long AbilityScore = 0);                       // this class's combat power (FightPoint) read while it was ACTIVE;
-                                                  // gear-dependent, so per-class. 0 when unread. (self-only)
-
-/// <summary>
-/// Pure per-class loadout accumulator — a plain latest-wins upsert keyed by professionId. Holds NO
-/// service dependency (plain data in, plain data out), so it is unit-testable without an
-/// IL2CPP/IPluginServices fake (see <c>LoadoutCaptureTests</c>). <see cref="Plugin"/>'s
-/// <c>PollLocalProfession</c>/<c>CaptureActiveClassLoadout</c> below do the live-service reads and hand
-/// the finished <see cref="CapturedLoadout"/> to <see cref="Capture"/> — that seam is deliberately thin
-/// and untested; only in-game verification exercises IInventory/ILoadout.
-/// </summary>
-internal sealed class LoadoutCapture
-{
-    private readonly Dictionary<int, CapturedLoadout> _byProfession = new();
-
-    /// <summary>Stores <paramref name="capture"/> under its <see cref="CapturedLoadout.ProfessionId"/> —
-    /// a later capture of a class already seen this run REPLACES the earlier one (latest wins: e.g.
-    /// returning to a class played earlier in the run, now with fresher gear/talents).</summary>
-    public void Capture(CapturedLoadout capture) => _byProfession[capture.ProfessionId] = capture;
-
-    /// <summary>Clears every captured class. Called at RUN START only — NOT on every archive
-    /// (<see cref="Plugin.Clear"/> fires per encounter within the same run and must not drop classes
-    /// captured earlier in that same run).</summary>
-    public void ResetForRun() => _byProfession.Clear();
-
-    /// <summary>One entry per distinct class played so far this run, for the upload assembler.</summary>
-    public IReadOnlyList<CapturedLoadout> Snapshot() => new List<CapturedLoadout>(_byProfession.Values);
-}
+// CapturedModule, LoadoutGearSource, CapturedLoadout, and the pure LoadoutCapture accumulator moved
+// to LoadoutCapture.cs (2026-08-22 split — this file had crossed the 500-LoC coding-standards
+// threshold; see that file's header comment). This file keeps only the Plugin partial class below,
+// which does the live-service reads and orchestrates the accumulator.
 
 /// <summary>
 /// Per-class loadout capture orchestration (owner design 2026-08-02): a class the player PLAYED was
@@ -100,6 +46,7 @@ public sealed partial class Plugin
         TickLoadoutRunBoundary();
         PollLocalProfession();
         TickGearRecapture();
+        TickImagineRecapture();
         TickAttrRangeSample();
         TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
     }
@@ -124,6 +71,21 @@ public sealed partial class Plugin
         var prof = _services.PlayerState.Profession;
         LogGearSyncDiag(prof);   // Part B gear investigation — no-op unless STELLAR_DIAGNOSTICS
         if (prof != 0) CaptureActiveClassLoadout(prof);
+    }
+
+    // Owner gap, run B47O8jx6wp retest (2026-08-22): swapping the equipped Battle Imagine (e.g.
+    // Predator Spider -> Muku Chief) never fires SelfGearChanged — that event covers IInventory
+    // gear/modules only, so without a poll here an Imagine-only swap silently never mints a new
+    // fought-with setup. Cheap: two IReadOnlyList<int> reads + an order-sensitive index compare
+    // (LoadoutCapture.SameIntSequence), allocation-free on the no-change path — CaptureActiveClassLoadout
+    // (and its allocations) only runs on an actual difference, same recapture flow as TickGearRecapture.
+    private void TickImagineRecapture()
+    {
+        var prof = _services.PlayerState.Profession;
+        if (prof == 0) return;
+        var installed = _services.Resonance.Installed;
+        if (LoadoutCapture.SameIntSequence(installed, _loadoutCapture.LastImagines(prof))) return;
+        CaptureActiveClassLoadout(prof);
     }
 
     /// <summary>True when <paramref name="newRunId"/> marks the START of a run the accumulator hasn't
@@ -168,28 +130,53 @@ public sealed partial class Plugin
         if (!self.IsPlayer) return;
 
         var (projectName, talentStageId, talentNodes) = ResolveActiveProject(professionId);
-        // Gear/modules come from the LIVE equipped containers (owner ruling 2026-08-05, re-escalated
-        // 2026-08-19: "I don't want any loadout, I want what user currently is using") — NEVER from a
-        // saved LoadoutSlot. Captured here while the class is active, refreshed on every SelfGearChanged
-        // (gear field 12 + module field 57 deltas both raise it), and the ACTIVE class re-reads live once
+        // Gear/modules come from the PICKED loadout entry (PickSlot: the live-synthesized "Current"
+        // entry, else the plan the player is ON) — the framework overlays the CURRENT plan with the
+        // LIVE equipped set read via the Lua bridge, the only in-game-verified live source.
+        // IInventory.GetLiveEquipped is NOT live in-game (stale method-21 latch; owner-verified
+        // 2026-08-19: frozen login modules + empty gear) — never source equipment from it. The owner's
+        // "never a saved loadout" rule (2026-08-05, re-escalated 2026-08-19: "I don't want any loadout,
+        // I want what user currently is using") still holds here: the picked entry IS live data, not a
+        // saved plan, because PickSlot prefers the live-synthesized "Current" (-1) entry over any saved
+        // plan. Captured here while the class is active; the ACTIVE class re-reads the picked slot once
         // more at archive (ApplyLiveEquipment) so the snapshot is the setup the combat actually used.
         // AbilityScore (FightPoint) is gear-dependent, so we read it HERE while this class is the active
         // one — the broadcast per-entity value reflects only whatever class the player is on now. A class
         // swap re-syncs gear a moment later (TickGearRecapture re-fires this), and latest-wins overwrites
         // the stale read with the settled per-class value (same lifecycle as the gear re-capture).
-        var live = _services.Inventory.GetLiveEquipped();
+        var slot = FindLoadoutSlot(professionId);
+        var slotGear = slot?.Gear;
+        // combatMarker: sampled NOW (Plugin.Capture.cs's _combatEventMarker) so LoadoutCapture.Capture
+        // can tell "this class was fought with since its last capture" from "this is just another
+        // unfought gear-browsing draft" — see that method's doc for the full decision table.
         _loadoutCapture.Capture(new CapturedLoadout(
             ProfessionId:  professionId,
             ProjectName:   projectName,
             TalentStageId: talentStageId,
-            Gear:          BuildGearPairs(live.Gear),
-            GearDetail:    BuildLoadoutGearDetail(live.Gear),
+            Gear:          slotGear is { Count: > 0 } ? BuildGearPairs(slotGear) : System.Array.Empty<int[]>(),
+            GearDetail:    slotGear is { Count: > 0 } ? BuildLoadoutGearDetail(slotGear) : System.Array.Empty<GearDetail>(),
             Skills:        BuildLoadoutSkills(self),
             Fashion:       BuildLoadoutFashion(self),
-            Modules:       BuildLoadoutModulesFromSlot(live.Modules),
+            Modules:       BuildLoadoutModulesFromSlot(slot?.Modules),
             TalentNodes:   talentNodes,
             Attributes:    BuildLoadoutAttributes(self),
-            AbilityScore:  _services.CombatLookup.GetFightPoint(self)));
+            AbilityScore:  _services.CombatLookup.GetFightPoint(self),
+            Imagines:      BuildLoadoutImagines()),
+            _combatEventMarker);
+    }
+
+    // Slot-ordered copy of the live equipped Battle Imagine pair (IResonanceState.Installed) at
+    // capture time — owner gap, run B47O8jx6wp retest (2026-08-22). A defensive copy: the
+    // implementation publishes an immutable snapshot per its own contract, but this accumulator's
+    // entries are meant to be frozen-at-capture like every other component here, so we never hold a
+    // reference that could be reinterpreted later. Empty (never null) when unsynced.
+    private IReadOnlyList<int> BuildLoadoutImagines()
+    {
+        var installed = _services.Resonance.Installed;
+        if (installed.Count == 0) return System.Array.Empty<int>();
+        var copy = new int[installed.Count];
+        for (var i = 0; i < installed.Count; i++) copy[i] = installed[i];
+        return copy;
     }
 
     // Snapshot the local player's non-zero attribute sheet ([attrId, value]) at capture time so the
@@ -208,15 +195,25 @@ public sealed partial class Plugin
 
     // The active class's project name + talent stage + allocated talent nodes, from the framework's
     // loadout entries. FindLoadoutSlot prefers the live-synthesized "Current" (-1) entry — the only
-    // entry whose talents are LIVE — then the plan the player is ON; a saved plan's entry carries its
-    // own parsed talents, so a respec without a plan save can be stale until the next refresh (full
-    // talent liveness lands in Phase 2, ILoadout.LiveState). Never an arbitrary same-class sibling.
-    // Absent (0/null) when nothing currently describes this class.
+    // entry whose talents are live via ILoadout.LiveState since Phase 2 — then the plan the player is ON;
+    // a saved plan's entry carries its own parsed talents, so a respec without a plan save can be stale
+    // until the next refresh. Never an arbitrary same-class sibling. Absent (0/null) when nothing
+    // currently describes this class.
     private (string? ProjectName, int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveActiveProject(int professionId)
     {
         var slot = FindLoadoutSlot(professionId);
-        return slot is null ? (null, 0, null) : (slot.Name, slot.TalentStageId, slot.TalentNodes);
+        var (stage, nodes) = ResolveTalents(_services.Loadout.LiveState, slot, professionId);
+        return (slot?.Name, stage, nodes);
     }
+
+    /// <summary>Talent source for the ACTIVE class: the framework's LIVE state when it describes
+    /// this class (never a saved plan — owner rule), else the picked slot's parsed talents, else
+    /// empty. All-or-nothing per source: live talents are never spliced with a plan's.</summary>
+    internal static (int TalentStageId, IReadOnlyList<int>? TalentNodes) ResolveTalents(
+        LiveLoadoutState? live, LoadoutSlot? slot, int professionId)
+        => live is not null && live.ProfessionId == professionId
+            ? (live.TalentStageId, live.TalentNodes)
+            : (slot?.TalentStageId ?? 0, slot?.TalentNodes);
 
     // Best LoadoutSlot describing this class, or null — see PickSlot for the preference order.
     private LoadoutSlot? FindLoadoutSlot(int professionId) => PickSlot(_services.Loadout.GetSlots(), professionId);
@@ -248,37 +245,61 @@ public sealed partial class Plugin
          : capturedHasData ? LoadoutGearSource.Captured
          : LoadoutGearSource.SavedSlot;
 
-    // At archive (Plugin.AttrRange.cs ApplyAttrRanges): re-read the ACTIVE class from the live equipped
-    // containers so the archive carries exactly the setup this combat used (module/gear edits mid-run
-    // included, class change or not). Earlier-played classes keep the live values frozen at their last
-    // active moment. The saved-slot fallback exists only for a capture that never saw live data.
-    private CapturedLoadout ApplyLiveEquipment(CapturedLoadout l, EquippedLoadout live)
+    // At archive (Plugin.AttrRange.cs ApplyAttrRanges): re-read the ACTIVE class's LAST entry from the
+    // picked loadout slot (live-overlaid — see CaptureActiveClassLoadout) so the archive carries
+    // exactly the setup this combat used (module/gear edits mid-run included, class change or not).
+    // Earlier-played classes, AND any earlier fought-with entry preserved for the same class (owner
+    // run B47O8jx6wp — see LoadoutCapture.Capture), keep the values frozen at their capture moment. A
+    // saved plan is read only as a never-saw-live-or-capture last resort (ResolveGearSource). Both the
+    // Live and SavedSlot outcomes now read from the SAME picked slot (the slot IS the live overlay for
+    // the active class, and IS the saved plan otherwise) — the only difference is which entry gets
+    // read at all.
+    //
+    // isLastOfActiveClass: true only for the newest entry of the class currently active (computed by
+    // the caller, which knows every entry's position — see ApplyAttrRanges). A class can now carry
+    // MULTIPLE entries; re-overlaying an EARLIER, already-fought-with entry with the CURRENT live gear
+    // would silently erase the very setup this fix exists to preserve, so only the last one is
+    // eligible for the live read.
+    private CapturedLoadout ApplyLiveEquipment(CapturedLoadout l, bool isLastOfActiveClass)
     {
-        var isActive = l.ProfessionId != 0 && l.ProfessionId == _services.PlayerState.Profession;
-        var liveHasData = live.Gear.Count > 0 || live.Modules.Count > 0;
+        var slot = FindLoadoutSlot(l.ProfessionId);
+        var slotHasData = slot?.Gear is { Count: > 0 } || slot?.Modules is { Count: > 0 };
         var capturedHasData = l.Gear.Count > 0 || l.Modules.Count > 0;
-        switch (ResolveGearSource(isActive, liveHasData, capturedHasData))
+
+        // Imagines: an INDEPENDENT live source (IResonanceState.Installed, not the loadout slot), so
+        // it refreshes for the active class's newest entry regardless of which way ResolveGearSource
+        // falls below — same PreferNonEmpty non-empty-wins rule as gear/modules, so an unsynced (empty)
+        // live read never blanks an already-captured pair. Owner gap, run B47O8jx6wp retest (2026-08-22).
+        var imagines = isLastOfActiveClass
+            ? PreferNonEmpty(_services.Resonance.Installed, l.Imagines ?? System.Array.Empty<int>())
+            : l.Imagines;
+
+        if (ResolveGearSource(isLastOfActiveClass, slotHasData, capturedHasData) == LoadoutGearSource.Captured)
+            return ReferenceEquals(imagines, l.Imagines) ? l : l with { Imagines = imagines };
+
+        // Fill each component ONLY when the slot actually has it — a slot with data in one component
+        // but not another (e.g. modules resolved, gear not yet) must never overwrite an already-captured
+        // component with an empty one (owner-verified 2026-08-19: this exact OR-gated overwrite emptied
+        // a run's gear while re-freezing stale modules). PreferNonEmpty is the pinned pure seam for that.
+        var gear = slot?.Gear;
+        var freshGear    = gear is { Count: > 0 } ? BuildGearPairs(gear) : (IReadOnlyList<int[]>)System.Array.Empty<int[]>();
+        var freshDetail  = gear is { Count: > 0 } ? BuildLoadoutGearDetail(gear) : (IReadOnlyList<GearDetail>)System.Array.Empty<GearDetail>();
+        var freshModules = slot?.Modules is { Count: > 0 } m ? BuildLoadoutModulesFromSlot(m) : (IReadOnlyList<CapturedModule>)System.Array.Empty<CapturedModule>();
+        return l with
         {
-            case LoadoutGearSource.Live:
-                return l with
-                {
-                    Gear       = BuildGearPairs(live.Gear),
-                    GearDetail = BuildLoadoutGearDetail(live.Gear),
-                    Modules    = BuildLoadoutModulesFromSlot(live.Modules),
-                };
-            case LoadoutGearSource.Captured:
-                return l;
-            default:
-                var slot = FindLoadoutSlot(l.ProfessionId);
-                if (slot?.Gear is not { Count: > 0 } gear) return l;
-                return l with
-                {
-                    Gear       = BuildGearPairs(gear),
-                    GearDetail = BuildLoadoutGearDetail(gear),
-                    Modules    = BuildLoadoutModulesFromSlot(slot.Modules),
-                };
-        }
+            Gear       = PreferNonEmpty(freshGear, l.Gear),
+            GearDetail = PreferNonEmpty(freshDetail, l.GearDetail),
+            Modules    = PreferNonEmpty(freshModules, l.Modules),
+            Imagines   = imagines,
+        };
     }
+
+    /// <summary>Pure component-wise fill rule: a freshly-read component (slot/live read) replaces the
+    /// captured one only when the fresh read actually has data — an empty fresh read NEVER overwrites a
+    /// non-empty captured component. Pinned regression seam for the empty-overwrite bug
+    /// (LiveFirstLoadoutSourceTests.ActiveClass_ComponentNeverOverwrittenByEmptySource).</summary>
+    internal static IReadOnlyList<T> PreferNonEmpty<T>(IReadOnlyList<T> fresh, IReadOnlyList<T> kept)
+        => fresh.Count > 0 ? fresh : kept;
 
     // Maps a LoadoutSlot's per-class module set (slot → ModuleInfo, framework-resolved with rolled parts)
     // to the plugin's CapturedModule upload shape.

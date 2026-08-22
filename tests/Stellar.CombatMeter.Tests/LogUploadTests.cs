@@ -709,7 +709,8 @@ public sealed class LogUploadTests
     private static ModuleEntry MakeModuleEntry(int slot = 0, int configId = 5500102, int quality = 5) =>
         new(slot, configId, quality, new List<int[]> { new[] { 1110, 5 } });
 
-    private static LoadoutEntry MakeLoadoutEntry(int professionId = 2, int talentStageId = 0, long abilityScore = 0) =>
+    private static LoadoutEntry MakeLoadoutEntry(int professionId = 2, int talentStageId = 0, long abilityScore = 0,
+        IReadOnlyList<int>? imagines = null) =>
         new(ProfessionId: professionId, ProjectName: null,
             Gear: new List<int[]> { new[] { 200, 2011227 } },
             GearDetail: null,
@@ -717,12 +718,13 @@ public sealed class LogUploadTests
             Fashion: new List<Fashion>(),
             Modules: null,
             TalentStageId: talentStageId,
-            AbilityScore: abilityScore);
+            AbilityScore: abilityScore,
+            Imagines: imagines);
 
     private static CapturedLoadout MakeCapturedLoadout(int professionId, string? projectName = null,
         int talentStageId = 0, IReadOnlyList<GearDetail>? gearDetail = null,
         IReadOnlyList<CapturedModule>? modules = null, IReadOnlyList<int>? talentNodes = null,
-        long abilityScore = 0) => new(
+        long abilityScore = 0, IReadOnlyList<int>? imagines = null) => new(
         ProfessionId:  professionId,
         ProjectName:   projectName,
         TalentStageId: talentStageId,
@@ -732,7 +734,8 @@ public sealed class LogUploadTests
         Fashion:       new List<Fashion>(),
         Modules:       modules ?? new List<CapturedModule>(),
         TalentNodes:   talentNodes,
-        AbilityScore:  abilityScore);
+        AbilityScore:  abilityScore,
+        Imagines:      imagines);
 
     private static CombatLog MakeLoadoutLog(Actor actor, string key = "1248014") =>
         new(1,
@@ -902,6 +905,42 @@ public sealed class LogUploadTests
         Assert.Equal(184230, mapped.Single(l => l.ProfessionId == 2).AbilityScore);
     }
 
+    // Equipped Battle Imagines join the setup identity (owner gap, run B47O8jx6wp retest,
+    // 2026-08-22) — the assembler must carry the slot-ordered ids through onto the wire LoadoutEntry
+    // unchanged (null when the capture never saw a synced pair).
+    [Fact]
+    public void BuildLoadoutEntries_carries_imagines_ids_nullWhenAbsent()
+    {
+        var captured = new List<CapturedLoadout>
+        {
+            MakeCapturedLoadout(2, imagines: new[] { 10084, 10085 }),
+            MakeCapturedLoadout(5),   // never synced -> null
+        };
+
+        var mapped = CombatLogAssembler.BuildLoadoutEntries(captured)!;
+
+        Assert.Equal(new[] { 10084, 10085 }, mapped.Single(l => l.ProfessionId == 2).Imagines);
+        Assert.Null(mapped.Single(l => l.ProfessionId == 5).Imagines);
+    }
+
+    [Fact]
+    public void WriteActor_loadout_emits_imagines_slotOrdered_when_present_omits_when_absent()
+    {
+        var withImagines = MakeLoadoutEntry(imagines: new[] { 10084, 10085 });
+        var actor = new Actor(
+            Name: "Aria", Kind: "player", TeamId: 1, IsLocal: true, Uid: 1248014,
+            ProfessionId: 2, Level: 60, AbilityScore: 1, MaxHp: 1,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>(),
+            Loadouts: new List<LoadoutEntry> { withImagines });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor));
+        Assert.Contains("\"imagines\":[10084,10085]", json);
+
+        var noImagines = actor with { Loadouts = new List<LoadoutEntry> { MakeLoadoutEntry() } };
+        Assert.DoesNotContain("\"imagines\"", CombatLogWriter.Write(MakeLoadoutLog(noImagines)));
+    }
+
     [Fact]
     public void WriteActor_loadout_emits_abilityScore_when_positive_and_omits_when_zero()
     {
@@ -977,6 +1016,31 @@ public sealed class LogUploadTests
         Assert.Null(modules);
         Assert.Equal(0, talentStageId);
         Assert.Null(talentNodes);   // no matching class → no top-level nodes
+    }
+
+    // Fought-with-setup preservation (owner run B47O8jx6wp, Plugin.LoadoutCapture.cs
+    // LoadoutCapture.Capture) can now carry TWO entries for the SAME professionId — the fought-with
+    // setup, then the changed one. Regression pin for the exact risk this task flagged: the top-level
+    // mirror must pick the LATEST (list-order) entry, not the first.
+    [Fact]
+    public void ResolveLoadoutFields_local_multipleEntriesSameClass_topLevelMirrorsTheLatestEntry()
+    {
+        var olderModules = new List<CapturedModule> { new(0, 111, 5, new List<int[]>()) };
+        var newerModules = new List<CapturedModule> { new(0, 222, 5, new List<int[]>()) };
+        var runLoadouts = new List<CapturedLoadout>
+        {
+            MakeCapturedLoadout(2, projectName: "fought-with-5-module", talentStageId: 100, modules: olderModules),
+            MakeCapturedLoadout(2, projectName: "changed-4-module", talentStageId: 104, modules: newerModules),
+        };
+
+        var (loadouts, modules, talentStageId, talentNodes) = CombatLogAssembler.ResolveLoadoutFields(
+            isLocal: true, professionId: 2, runLoadouts);
+
+        Assert.NotNull(loadouts);
+        Assert.Equal(2, loadouts!.Count);                 // both entries still ride along
+        Assert.NotNull(modules);
+        Assert.Equal(222, modules!.Single().ConfigId);    // mirrors the LATEST (changed-4-module) entry
+        Assert.Equal(104, talentStageId);
     }
 
     // -------------------------------------------------------------------------
