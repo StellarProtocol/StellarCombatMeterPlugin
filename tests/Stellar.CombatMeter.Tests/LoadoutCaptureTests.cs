@@ -193,6 +193,50 @@ public class LoadoutCaptureTests
     }
 
     [Fact]
+    public void MidRunClassSwitch_FoughtEntrySkillsAndAbilityScore_NeverRewrittenBySameIdentityRefresh()
+    {
+        // Owner staging run sea/ZdTH3UwZQ6 (the chimera setup): during a class-switch's
+        // SelfGearChanged burst, TickGearRecapture ran while attr 220 still read the OLD profession —
+        // the slot-keyed gear/talents were still frost, so SameSetup was true — while the LIVE self
+        // reads had already flipped to the new class (GetSkillLevels served the tank list,
+        // GetFightPoint its 34840 score), and the wholesale in-place refresh poisoned the FOUGHT
+        // frost entry with tank skills/AS. Once fought, an entry's Skills/AbilityScore/Attributes
+        // stay frozen at capture; only unfought drafts keep refreshing wholesale.
+        var frostSkills = new List<int[]> { new[] { 1801, 5, 1 }, new[] { 1802, 5, 0 } };
+        var tankSkills  = new List<int[]> { new[] { 2901, 4, 0 } };
+        var frostAttrs  = new List<long[]> { new long[] { 220, 12 } };
+        var tankAttrs   = new List<long[]> { new long[] { 220, 9 } };
+
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "frost") with { Skills = frostSkills, AbilityScore = 53966, Attributes = frostAttrs }, combatMarker: 0);
+        // The fight advanced the marker; the switch-burst recapture carries the SAME identity
+        // (gear/modules/talents unchanged) but the NEW class's live skills/AS/attrs.
+        capture.Capture(Fake(2, "frost") with { Skills = tankSkills, AbilityScore = 34840, Attributes = tankAttrs }, combatMarker: 7);
+
+        var entry = capture.Snapshot().Single();
+        Assert.Equal(frostSkills, entry.Skills);       // fought skills kept — never the switch-burst tank list
+        Assert.Equal(53966, entry.AbilityScore);       // fought per-class score kept
+        Assert.Equal(frostAttrs, entry.Attributes);    // fought attribute sheet kept
+    }
+
+    [Fact]
+    public void MidRunClassSwitch_FoughtEntry_EmptyToPopulatedImagineBackfill_StillWorks()
+    {
+        // The ONE refresh a fought entry may still take (empty-is-no-signal pin): the 1 Hz resonance
+        // poll landing after the fight backfills Imagines []→populated — while the frozen fields
+        // stay frozen at their fought values.
+        var frostSkills = new List<int[]> { new[] { 1801, 5, 1 } };
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "frost", imagines: System.Array.Empty<int>()) with { Skills = frostSkills, AbilityScore = 53966 }, combatMarker: 0);
+        capture.Capture(Fake(2, "frost", imagines: new[] { 10084, 10085 }) with { Skills = new List<int[]>(), AbilityScore = 0 }, combatMarker: 7);
+
+        var entry = capture.Snapshot().Single();
+        Assert.Equal(new[] { 10084, 10085 }, entry.Imagines);   // backfill still lands on a fought entry
+        Assert.Equal(frostSkills, entry.Skills);                // frozen fields stay frozen
+        Assert.Equal(53966, entry.AbilityScore);
+    }
+
+    [Fact]
     public void AppendedEntry_LaterUnfoughtEdit_ReplacesOnlyTheNewestEntry()
     {
         // Three-step chain: fight setup A (appends nothing yet, it's the first entry) -> fight it

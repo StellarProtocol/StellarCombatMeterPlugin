@@ -85,11 +85,15 @@ internal sealed class LoadoutCapture
     /// against the value recorded when the class's LAST entry was captured is how a fought-with setup
     /// is told apart from an unfought gear-browsing draft:
     ///   - no entry yet for this class          → add the first entry.
-    ///   - same content as the last entry       → REPLACE it in place (refreshed attrs/abilityScore —
-    ///                                             the existing refresh behavior; the marker reference
-    ///                                             point is KEPT, never bumped, so a later genuinely
-    ///                                             different setup still sees every fight that happened
-    ///                                             while this content was equipped).
+    ///   - same content as the last entry       → REPLACE it in place; the marker reference point is
+    ///                                             KEPT, never bumped, so a later genuinely different
+    ///                                             setup still sees every fight that happened while
+    ///                                             this content was equipped. An UNFOUGHT entry
+    ///                                             refreshes wholesale (the pre-existing behavior); a
+    ///                                             FOUGHT-WITH entry keeps its captured
+    ///                                             Skills/AbilityScore/Attributes frozen — see
+    ///                                             <see cref="RefreshFought"/> (owner staging run
+    ///                                             sea/ZdTH3UwZQ6, the chimera setup).
     ///   - different content, marker UNCHANGED  → REPLACE the last entry (no combat occurred since it
     ///                                             was captured — an unfought draft, e.g. someone
     ///                                             flicking through gear before pulling).
@@ -113,7 +117,10 @@ internal sealed class LoadoutCapture
         var last = entries[^1];
         if (SameSetup(last.Capture, capture))
         {
-            entries[^1] = new Entry(capture, last.MarkerAtCapture);
+            var refreshed = combatMarker != last.MarkerAtCapture
+                ? RefreshFought(last.Capture, capture)   // fought-with — freeze the class-switch-racy fields
+                : capture;                                // unfought draft — wholesale refresh, as before
+            entries[^1] = new Entry(refreshed, last.MarkerAtCapture);
             return;
         }
 
@@ -124,6 +131,34 @@ internal sealed class LoadoutCapture
         }
 
         entries.Add(new Entry(capture, combatMarker));   // fought-with — preserve it, start a new entry
+    }
+
+    /// <summary>Same-identity refresh of a FOUGHT-WITH entry: keep the fought capture's
+    /// Skills/AbilityScore/Attributes frozen, take everything else from the refresh. During a
+    /// class-switch's SelfGearChanged burst the recapture runs while attr 220 still reads the OLD
+    /// profession, so the slot-keyed reads (gear/talents/modules) still describe the old class —
+    /// SameSetup true — while the LIVE self reads have already flipped to the NEW class
+    /// (GetSkillLevels served the tank 49-skill list, GetFightPoint its 34840 score), and the
+    /// wholesale in-place refresh poisoned the fought frost entry with them (owner staging run
+    /// sea/ZdTH3UwZQ6 — the stored half of the chimera setup). Only those three live-read fields
+    /// are frozen: ProjectName/Fashion/GearDetail/AttrPeaks keep refreshing exactly as before
+    /// (pinned: SameContent_CombatAdvancedSince_StillRefreshesInPlace_NeverAppends), and Imagines
+    /// follows empty-is-no-signal in BOTH directions — the refresh's pair wins (the []→populated
+    /// heal, pinned by the ImagineSentinel tests) unless the refresh side is the empty one, which
+    /// must never wipe a fought pair.</summary>
+    private static CapturedLoadout RefreshFought(CapturedLoadout fought, CapturedLoadout refresh)
+    {
+        var merged = refresh with
+        {
+            Skills = fought.Skills,
+            AbilityScore = fought.AbilityScore,
+            Attributes = fought.Attributes,
+        };
+        if ((fought.Imagines?.Count ?? 0) > 0 && (refresh.Imagines?.Count ?? 0) == 0)
+        {
+            merged = merged with { Imagines = fought.Imagines };
+        }
+        return merged;
     }
 
     /// <summary>Clears every captured class. Called at RUN START only — NOT on every archive

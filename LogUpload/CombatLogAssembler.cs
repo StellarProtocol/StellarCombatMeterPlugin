@@ -377,6 +377,10 @@ internal sealed class CombatLogAssembler
 
         var (loadouts, modules, talentStageId, talentNodes) = ResolveLoadoutFields(isLocal, professionId, runLoadouts);
         var slumber = BuildDeepSlumber(isLocal, deepSlumber);
+        // One coherent top-level source on class-switch segments (owner staging run sea/ZdTH3UwZQ6)
+        // — see ResolveSelfEquipment.
+        var equip = ResolveSelfEquipment(isLocal, professionId, runLoadouts,
+            (gear, BuildGearDetail(snap), skills, snap.FightPoint));
 
         return new Actor(
             Name:         name ?? "Unknown",
@@ -386,13 +390,13 @@ internal sealed class CombatLogAssembler
             Uid:          uid,
             ProfessionId: professionId,
             Level:        level,
-            AbilityScore: snap.FightPoint,
+            AbilityScore: equip.AbilityScore,
             MaxHp:        snap.MaxHp,
             Attributes:   attrs,
-            Gear:         gear,
-            Skills:       skills,
+            Gear:         equip.Gear,
+            Skills:       equip.Skills,
             Fashion:      fashion,
-            GearDetail:   BuildGearDetail(snap),
+            GearDetail:   equip.GearDetail,
             Modules:      modules,
             TalentStageId: talentStageId,
             Loadouts:     loadouts,
@@ -431,6 +435,36 @@ internal sealed class CombatLogAssembler
             if (l.ProfessionId == professionId) return (loadouts, BuildModuleEntries(l.Modules), l.TalentStageId, l.TalentNodes);
         }
         return (loadouts, null, 0, null);
+    }
+
+    /// <summary>
+    /// Self-only equipment mirror for the TOP-LEVEL actor row (owner staging run
+    /// <c>sea/ZdTH3UwZQ6</c> — the chimera setup): on a class-switch segment the sticky
+    /// EntitySnapshot's gear/skills/abilityScore are frozen at SEGMENT START (the OLD class,
+    /// Plugin.EntitySnapshotSticky.cs) while <c>professionId</c> parses from the archive-time
+    /// attribute replacement (the NEW class, Plugin.AttrRange.cs) and Modules/Talents mirror the
+    /// NEW class's latest captured entry — the worker then synthesizes a setup candidate from that
+    /// MIXED row (mergeActors.ts) and a phantom "frost gear + tank talents" chip appears. When the
+    /// final <paramref name="professionId"/> has a captured entry, mirror
+    /// Gear/GearDetail/Skills/AbilityScore from that SAME latest entry the Modules/Talents mirror
+    /// uses — ONE coherent source — so the synthesized candidate sameVariant-dedupes into the real
+    /// setup. Non-local actors and a final class that was never captured pass the snapshot's own
+    /// values through unchanged. GearDetail maps empty→null to keep the wire's null-when-empty
+    /// convention (<see cref="BuildGearDetail"/>).
+    /// </summary>
+    internal static (IReadOnlyList<int[]> Gear, IReadOnlyList<GearDetail>? GearDetail, IReadOnlyList<int[]> Skills, long AbilityScore)
+        ResolveSelfEquipment(
+            bool isLocal, int professionId, IReadOnlyList<CapturedLoadout> runLoadouts,
+            (IReadOnlyList<int[]> Gear, IReadOnlyList<GearDetail>? GearDetail, IReadOnlyList<int[]> Skills, long AbilityScore) fromSnapshot)
+    {
+        if (!isLocal) return fromSnapshot;
+        for (var i = runLoadouts.Count - 1; i >= 0; i--)
+        {
+            var l = runLoadouts[i];
+            if (l.ProfessionId != professionId) continue;
+            return (l.Gear, l.GearDetail is { Count: > 0 } ? l.GearDetail : null, l.Skills, l.AbilityScore);
+        }
+        return fromSnapshot;
     }
 
     /// <summary>Self-only gate + 1:1 map of the archive-time Deep-Slumber snapshot onto the wire

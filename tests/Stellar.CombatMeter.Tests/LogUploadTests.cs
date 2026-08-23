@@ -1044,6 +1044,57 @@ public sealed class LogUploadTests
     }
 
     // -------------------------------------------------------------------------
+    // Chimera-setup fix (owner staging run sea/ZdTH3UwZQ6): after a mid-run class switch, the
+    // top-level actor row MIXED sources — gear/skills/abilityScore from the sticky segment-start
+    // EntitySnapshot (OLD class, frozen 32 min pre-switch) while professionId parsed from the
+    // archive-time attribute replacement (NEW class) and modules/talents mirrored the NEW class's
+    // latest entry — and the worker synthesized a phantom "frost gear + tank talents" setup from
+    // that row (mergeActors.ts). The top-level equipment must mirror the FINAL class's latest
+    // captured entry — the same source Modules/Talents already mirror.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ClassSwitchRun_TopLevelActorGearSkillsAS_MirrorFinalClassLatestEntry()
+    {
+        var frost = MakeCapturedLoadout(8, projectName: "frost", abilityScore: 53966);
+        var tankSkills = new List<int[]> { new[] { 2901, 4, 0 } };
+        var tankDetail = new List<GearDetail> { new(200, 5, 3, 0, 0, 0, 0, new int[0][], 80, 0) };
+        var tank = MakeCapturedLoadout(9, projectName: "tank", abilityScore: 34840, gearDetail: tankDetail)
+            with { Skills = tankSkills };
+        var runLoadouts = new List<CapturedLoadout> { frost, tank };
+
+        // Sticky-snapshot values: the OLD class's (frost) — what the segment-start freeze carried.
+        var snapshot = (
+            (IReadOnlyList<int[]>)new List<int[]> { new[] { 200, 8 } },
+            (IReadOnlyList<GearDetail>?)null,
+            (IReadOnlyList<int[]>)new List<int[]> { new[] { 1801, 5, 1 } },
+            53966L);
+
+        var equip = CombatLogAssembler.ResolveSelfEquipment(isLocal: true, professionId: 9, runLoadouts, snapshot);
+
+        Assert.Equal(tank.Gear, equip.Gear);          // tank entry's gear — never the sticky frost gear
+        Assert.Equal(tankSkills, equip.Skills);       // tank entry's skills
+        Assert.Equal(34840L, equip.AbilityScore);     // tank entry's per-class score
+        Assert.Equal(tankDetail, equip.GearDetail);   // tank entry's rolled detail
+    }
+
+    [Fact]
+    public void ResolveSelfEquipment_NonLocalOrUncapturedClass_PassesSnapshotThrough()
+    {
+        var runLoadouts = new List<CapturedLoadout> { MakeCapturedLoadout(9, abilityScore: 34840) };
+        var snapshot = (
+            (IReadOnlyList<int[]>)new List<int[]> { new[] { 200, 8 } },
+            (IReadOnlyList<GearDetail>?)null,
+            (IReadOnlyList<int[]>)new List<int[]> { new[] { 1801, 5, 1 } },
+            53966L);
+
+        // Non-local: captured data is the uploader's own — never applied to teammates.
+        Assert.Equal(snapshot, CombatLogAssembler.ResolveSelfEquipment(false, 9, runLoadouts, snapshot));
+        // Local but the final class was never captured: the snapshot passes through unchanged.
+        Assert.Equal(snapshot, CombatLogAssembler.ResolveSelfEquipment(true, 99, runLoadouts, snapshot));
+    }
+
+    // -------------------------------------------------------------------------
     // Task 11: BuildPrecheckHeader carries the real region from the log header.
     // -------------------------------------------------------------------------
 
