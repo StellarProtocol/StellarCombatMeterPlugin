@@ -64,7 +64,7 @@ internal sealed record CapturedLoadout(
 /// Pure per-class loadout accumulator — an ORDERED LIST of captures per professionId (oldest first),
 /// no longer a strict latest-wins upsert. Holds NO service dependency (plain data in, plain data out),
 /// so it is unit-testable without an IL2CPP/IPluginServices fake (see <c>LoadoutCaptureTests</c>).
-/// <see cref="Plugin"/>'s <c>PollLocalProfession</c>/<c>CaptureActiveClassLoadout</c> (Plugin.LoadoutCapture.cs)
+/// <see cref="Plugin"/>'s <c>TickBuildRecapture</c>/<c>CaptureActiveClassLoadout</c> (Plugin.LoadoutCapture.cs)
 /// do the live-service reads and hand the finished <see cref="CapturedLoadout"/> to <see cref="Capture"/> —
 /// that seam is deliberately thin and untested; only in-game verification exercises IInventory/ILoadout.
 ///

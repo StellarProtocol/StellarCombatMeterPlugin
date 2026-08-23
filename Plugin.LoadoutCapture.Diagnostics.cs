@@ -25,27 +25,25 @@ public sealed partial class Plugin
         return sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd();
     }
 
-    // Fired from PollLocalProfession on the tick when attr 220 flips — records the profession change +
-    // the gear GetSelfGear returns AT the swap instant (expected: still the OLD class's gear).
-    private void LogProfChangeDiag(int oldProf, int newProf)
-    {
-        if (!StellarDiagnostics.IsEnabled) return;
-        _services.Log.Info(
-            $"[ClassGearDiag] prof {oldProf}->{newProf} @ {_services.CombatSnapshot.ServerNowMs}ms " +
-            $"gear-at-swap=[{GearSig(_services.Inventory.GetSelfGear())}]");
-    }
+    // Previous profession seen by the line below. DIAGNOSTICS-ONLY (it is never read unless
+    // STELLAR_DIAGNOSTICS is on, and nothing in the capture path consults it) — it exists so the log
+    // still shows class TRANSITIONS now that PollLocalProfession, which used to own that memo and emit
+    // its own `prof A->B` line, is deleted.
+    private int _diagLastProf;
 
-    // Fired from TickBuildRecapture on the tick after ILoadout.LiveStateChanged landed — records the
-    // profession now + the gear GetSelfGear returns (expected IF the fix worked: the NEW class's gear;
-    // if unchanged from the swap line above, the wire never re-synced per-class gear on the swap).
-    // Since 2026-08-23 this line is ALSO the plugin-side acceptance marker for the event rework: one
-    // per real change the framework reported, none on unrelated container deltas.
+    // Fired from TickBuildRecapture on the tick after ILoadout.LiveStateChanged landed (or after the
+    // run-start arm) — records the class the capture is keyed to and the gear GetSelfGear returns for
+    // it. Since 2026-08-23 this is THE plugin-side acceptance marker for the event rework: exactly one
+    // line per real change the framework reported (plus one per run start), none on quiet ticks, and
+    // a `A->B` transition marker whenever the class itself moved.
     private void LogGearSyncDiag(int prof)
     {
         if (!StellarDiagnostics.IsEnabled) return;
+        var moved = prof != _diagLastProf ? $" prof {_diagLastProf}->{prof}" : "";
+        _diagLastProf = prof;
         _services.Log.Info(
             $"[ClassGearDiag] gear SYNC consumed @ {_services.CombatSnapshot.ServerNowMs}ms " +
-            $"prof={prof} gear=[{GearSig(_services.Inventory.GetSelfGear())}]");
+            $"prof={prof}{moved} gear=[{GearSig(_services.Inventory.GetSelfGear())}]");
     }
 
     // EVENT-DRIVEN (fires when CaptureActiveClassLoadout captures — i.e. on a gear/module-change or

@@ -32,7 +32,7 @@ namespace Stellar.CombatMeter.Tests;
 /// (<see cref="Plugin.IsNewLoadoutRun"/>) with plain fake <see cref="CapturedLoadout"/> inputs — no
 /// IPluginServices/IL2CPP mock involved, matching the plugin's existing pure-data test style (see
 /// ReplayCaptureGateTests / SelfNamePersistenceTests). The live-service reads that BUILD a
-/// CapturedLoadout (PollLocalProfession / CaptureActiveClassLoadout in Plugin.LoadoutCapture.cs) are
+/// CapturedLoadout (TickBuildRecapture / CaptureActiveClassLoadout in Plugin.LoadoutCapture.cs) are
 /// deliberately thin and untested here — only in-game verification can exercise IInventory/ILoadout.
 /// </summary>
 public class LoadoutCaptureTests
@@ -378,6 +378,76 @@ public class LoadoutCaptureTests
         // knows the class — a dropped report would silently lose the player's setup.
         Assert.False(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 0));
         Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+    }
+
+    // --- class switch: the LAST poll is gone (2026-08-23, second pass) ------------------------------
+    // PollLocalProfession used to re-read IPlayerState.Profession on every ~10 Hz tick and capture on
+    // a difference. A class switch rewrites professionList.curProfessionId in the container, so the
+    // SAME merge event already covers it; the poll is deleted. Two properties replace it, both pinned
+    // here, because between them they are the whole of what the poll did:
+    //   (1) the capture is keyed to ONE profession source — the framework's live class — so the new
+    //       setup can never be filed under the old class while attr 220 lags the container delta;
+    //   (2) a run START (which changes nothing about the build, so raises no merge event) still
+    //       captures, via the arm in TickLoadoutRunBoundary that runs immediately before
+    //       TickBuildRecapture on the same tick.
+
+    [Fact]
+    public void CaptureProfession_PrefersTheFrameworkLiveClass_OverAttr220()
+    {
+        // The switch instant: the container already says 5 (that IS what raised the event), attr 220
+        // still broadcasts 2. Keying on attr 220 here would file the NEW class's gear under the OLD
+        // class — and with no poll left, nothing would ever revisit it.
+        Assert.Equal(5, Plugin.ResolveCaptureProfession(liveProfessionId: 5, playerStateProfession: 2));
+    }
+
+    [Fact]
+    public void CaptureProfession_FallsBackToAttr220_OnlyBeforeTheLiveReadResolves()
+    {
+        Assert.Equal(2, Plugin.ResolveCaptureProfession(liveProfessionId: 0, playerStateProfession: 2));
+        Assert.Equal(0, Plugin.ResolveCaptureProfession(liveProfessionId: 0, playerStateProfession: 0));
+    }
+
+    [Fact]
+    public void MidRunClassSwitch_CapturesTheNewClassFromTheChangeReportAlone()
+    {
+        // Fight as class 2, switch to class 5 mid-run. The switch's container merge is the ONLY
+        // trigger — no poll observes attr 220 any more — and it must reach the accumulator keyed to
+        // the new class, leaving the fought-with class-2 entry untouched.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "played-2"), combatMarker: 3, nowMs: 1000);
+
+        var prof = Plugin.ResolveCaptureProfession(liveProfessionId: 5, playerStateProfession: 2);
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: prof));
+        capture.Capture(Fake(prof, "switched-5"), combatMarker: 3, nowMs: 4000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(2, entries[0].ProfessionId);
+        Assert.Equal(5, entries[1].ProfessionId);
+        Assert.Equal("played-2", entries[0].ProjectName);   // the fought-with class is never rewritten
+    }
+
+    [Fact]
+    public void RunStart_ArmsACaptureEvenThoughNoBuildChangeEventCanFire()
+    {
+        // Entering a dungeon empties the accumulator (ResetForRun) but changes nothing about the
+        // player's build, so no container merge follows. TickLoadoutRunBoundary arms the SAME flag the
+        // event sets, and TickBuildRecapture — which runs after it on the same tick — consumes it.
+        Assert.True(Plugin.IsNewLoadoutRun(previousRunId: 0, newRunId: 777));
+
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "pre-run town swap"), combatMarker: 0, nowMs: 100);
+        capture.ResetForRun();
+        Assert.Empty(capture.Snapshot());
+
+        // The arm's capture, keyed by the same single source as every event capture.
+        var prof = Plugin.ResolveCaptureProfession(liveProfessionId: 2, playerStateProfession: 2);
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: prof));
+        capture.Capture(Fake(prof, "in-run"), combatMarker: 0, nowMs: 2000);
+
+        var entry = Assert.Single(capture.Snapshot());
+        Assert.Equal(2, entry.ProfessionId);
+        Assert.Equal("in-run", entry.ProjectName);   // the town-swap draft did not leak into the run
     }
 
     [Fact]

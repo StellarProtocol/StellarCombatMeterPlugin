@@ -15,10 +15,14 @@ namespace Stellar.CombatMeter;
 /// Per-class loadout capture orchestration (owner design 2026-08-02): a class the player PLAYED was
 /// ACTIVE at some point, and <c>IInventory</c> gives the ACTIVE class rich data (rolls via
 /// <c>GetSelfGear</c>, modules via <c>GetEquipped</c>/<c>GetModules</c>) that the broadcast per-entity
-/// APIs never carry once the player has swapped away from that class — even for self. So this polls
-/// the local player's live profession (<c>IPlayerState.Profession</c>, attr 220) and, whenever it
-/// changes to a new class, freezes THAT class's current loadout into <see cref="_loadoutCapture"/>,
-/// keyed by professionId (latest-wins). Self-only; never touches teammates. The accumulator resets
+/// APIs never carry once the player has swapped away from that class — even for self. So whenever the
+/// framework reports that the live build state changed (<c>ILoadout.LiveStateChanged</c> — which a
+/// class switch always raises, since the switch rewrites <c>curProfessionId</c> and the equipped set in
+/// the container the event watches), this freezes the ACTIVE class's current loadout into
+/// <see cref="_loadoutCapture"/>, keyed by professionId (latest-wins). Nothing here polls: as of
+/// 2026-08-23 the last compare-poll (<c>PollLocalProfession</c>, a per-tick re-read of
+/// <c>IPlayerState.Profession</c>) is deleted, and the only non-event capture is the run-start ARM in
+/// <see cref="TickLoadoutRunBoundary"/>. Self-only; never touches teammates. The accumulator resets
 /// only at RUN START (see <see cref="IsNewLoadoutRun"/>) — NOT by <see cref="Plugin.Clear"/>, which
 /// fires on every archive within a run and must not lose classes captured earlier in it. This task
 /// (per-class-loadout Task 2) only builds + wires the accumulator; nothing here touches the upload —
@@ -28,10 +32,6 @@ public sealed partial class Plugin
 {
     private readonly LoadoutCapture _loadoutCapture = new();
 
-    // Last profession value POLLED this run (0 = none seen yet / just reset). Distinct from the
-    // accumulator's map key set — this only gates re-capture on an unchanged live value.
-    private int _lastPolledProfession;
-
     // Dungeon run-id last observed by the loadout run-boundary check — separate from Plugin.Replay.cs's
     // _replayRunId (different reset semantics; see IsNewLoadoutRun's doc for why).
     private long _loadoutRunId;
@@ -40,11 +40,15 @@ public sealed partial class Plugin
     internal IReadOnlyList<CapturedLoadout> LoadoutSnapshot() => _loadoutCapture.Snapshot();
 
     // Throttled tick — called from OnUpdate at the existing ~10 Hz snapshot cadence (Plugin.cs's
-    // _snapshotAccum block), not every frame: a profession swap is a rare, deliberate player action.
+    // _snapshotAccum block), not every frame. Nothing here READS the game on a quiet tick: every
+    // capture is driven by an armed flag (an event, or the run-start arm below).
+    //
+    // ORDER IS LOAD-BEARING and unchanged: the run boundary runs FIRST, so the accumulator is reset
+    // (and the run-start capture armed) before the recapture that fills it on the very same tick —
+    // exactly the ordering the deleted PollLocalProfession relied on.
     private void TickLoadoutCapture()
     {
         TickLoadoutRunBoundary();
-        PollLocalProfession();
         TickBuildRecapture();
         TickAttrRangeSample();
         TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
@@ -66,9 +70,19 @@ public sealed partial class Plugin
     //   • TickImagineRecapture / TickTalentRecapture were per-tick COMPARE-POLLS added to paper over
     //     that race. Both are gone: the framework does the comparison once, at the source, and only
     //     tells us when something it serves genuinely differs.
+    //   • PollLocalProfession was the LAST compare-poll here (2026-08-23, second pass): it re-read
+    //     IPlayerState.Profession every ~10 Hz tick and captured whenever the value differed. A class
+    //     switch necessarily rewrites professionList.curProfessionId in the container, so the very
+    //     same merge event already covers it — and covers it BETTER, because the event fires after
+    //     the framework re-read the class AND that class's equipped set together, while attr 220 is
+    //     an independent broadcast that can land on either side of the container delta.
     // The handler runs on the game Update thread but still only flips this flag, so the capture (and
     // its allocations) happen on OUR tick, in the plugin's own cadence.
-    private volatile bool _buildDirty;
+    //
+    // Starts TRUE so the class the player is already on is captured as soon as it resolves at boot —
+    // the one thing PollLocalProfession did that no event covers. Re-armed at every run start
+    // (TickLoadoutRunBoundary) for the same reason: the accumulator was just emptied.
+    private volatile bool _buildDirty = true;
 
     private void OnLoadoutLiveStateChanged() => _buildDirty = true;
 
@@ -80,12 +94,28 @@ public sealed partial class Plugin
     private void TickBuildRecapture()
     {
         if (!_buildDirty) return;   // allocation-free no-op on every quiet tick
-        var prof = _services.PlayerState.Profession;
+        var prof = ResolveCaptureProfession(_services.Loadout.LiveState?.ProfessionId ?? 0, _services.PlayerState.Profession);
         if (!ShouldRecaptureOnLiveStateChange(_buildDirty, prof)) return;   // class unknown — HOLD the flag
         _buildDirty = false;
         LogGearSyncDiag(prof);   // Part B gear investigation — no-op unless STELLAR_DIAGNOSTICS
         CaptureActiveClassLoadout(prof);
     }
+
+    /// <summary>THE single profession source for capture keying (unit-tested). The framework's LIVE
+    /// class — <c>ILoadout.LiveState.ProfessionId</c>, i.e. the container's <c>curProfessionId</c> —
+    /// wins; <c>IPlayerState.Profession</c> (attr 220) is only the fallback for before the live read
+    /// has ever resolved.
+    ///
+    /// <para><b>Why not attr 220.</b> The capture TRIGGER is the container merge, and the live read
+    /// that raises it parses the class and that class's equipped set in one pass — so at event time
+    /// <c>LiveState.ProfessionId</c> is the class the fresh gear belongs to, by construction. Attr 220
+    /// is an independent AOI broadcast that can arrive before or after the container delta; keying on
+    /// it while triggering on the container is a cross-source skew that would file the NEW setup under
+    /// the OLD class. That skew used to self-heal on the next tick because the deleted
+    /// <c>PollLocalProfession</c> re-fired when attr 220 caught up — with no poll left, the two
+    /// sources must be one.</para></summary>
+    internal static int ResolveCaptureProfession(int liveProfessionId, int playerStateProfession)
+        => liveProfessionId != 0 ? liveProfessionId : playerStateProfession;
 
     /// <summary>Pure trigger decision (unit-tested): re-capture exactly when the framework REPORTED a
     /// live-state change and a real class is known.
@@ -116,21 +146,14 @@ public sealed partial class Plugin
             _loadoutCapture.ResetForRun();
             _attrRange.ResetForRun();
             _classSpans.ResetForRun();
-            _lastPolledProfession = 0;
+            // The accumulator is now empty, and entering a dungeon changes nothing about the player's
+            // build — so no container merge will fire on its own. ARM the capture instead of polling
+            // for it: TickBuildRecapture runs immediately after this on the SAME tick (see
+            // TickLoadoutCapture's ordering note), which is exactly when the deleted PollLocalProfession
+            // used to re-capture after clearing its _lastPolledProfession memo here.
+            _buildDirty = true;
         }
         _loadoutRunId = runId;
-    }
-
-    /// <summary>Reads the local player's live profession; on a new non-zero value (including the first
-    /// one seen since a run-start reset) captures that class's active loadout (self-only).</summary>
-    private void PollLocalProfession()
-    {
-        var current = _services.PlayerState.Profession;
-        if (current == 0 || current == _lastPolledProfession) return;
-        var prev = _lastPolledProfession;
-        _lastPolledProfession = current;
-        LogProfChangeDiag(prev, current);   // Part B gear investigation — no-op unless STELLAR_DIAGNOSTICS
-        CaptureActiveClassLoadout(current);
     }
 
     // Purely additive and self-only: a no-op when the loadout API isn't up yet or we're not in world.
