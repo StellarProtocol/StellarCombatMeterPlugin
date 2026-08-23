@@ -21,7 +21,9 @@ namespace Stellar.CombatMeter;
 //     an archive, move a number the user reads, or change a verdict. Boss admission's downstream
 //     consumers are all transitively gated on _bossSegmentActive (traced in full on
 //     ObserveAutoArchiveBoss, Plugin.BossDetection.cs), which only the CUT can set — so admitting while
-//     paused decides nothing.
+//     paused decides nothing. The fought-with combat-activity marker (_combatEventMarker,
+//     Plugin.Capture.cs — gated here via ShouldAdvanceFoughtWithMarker below) rides the same `capture`
+//     term for the same reason: fought-with is a TRACKING fact (review 2026-08-22), not a number.
 //   DECISIONS + ACCUMULATION (Plugin.Capture.cs, past the pause gate) — the inline boss CUT
 //     (MaybeCutForBossPhase), EnsureCombatStarted's combat/run-id/clear latches, _agg, per-source
 //     stats, timelines and the per-boss/elite buckets. A cut firing while paused would BANK the frozen
@@ -63,6 +65,19 @@ public sealed partial class Plugin
     /// before re-gating.</b></para>
     /// Unit-tested headless; set-level effect pinned by <c>StageBossSetTests</c>.</summary>
     internal static bool ShouldConsiderBossAdmission(bool inRun) => inRun;
+
+    /// <summary>Pure guard: should this <c>DamageDealt</c> event advance the fought-with combat-activity
+    /// marker (<c>_combatEventMarker</c>, Plugin.Capture.cs)? Tied to <paramref name="capture"/>
+    /// (unconditionally true from <see cref="ResolveCombatEventWork"/>) — <b>NEVER</b> to <c>accrue</c>.
+    /// "Fought-with" is a TRACKING fact, not a displayed number (doctrine invariant 5, "pause stops the
+    /// NUMBERS, never the TRACKING" — docs/recon/combatmeter-archive-flow.md; review 2026-08-22): the
+    /// marker used to be bumped past the `accrue` veto, so a fight fought entirely while the meter was
+    /// PAUSED never advanced it, and LoadoutCapture.Capture's append-vs-replace decision then
+    /// misclassified that fought-with setup as an unfought draft and REPLACED it — the exact silent-loss
+    /// class this arc fixes. Pinned headless alongside <see cref="ResolveCombatEventWork"/>
+    /// (<c>PauseCaptureTests</c>): asserts the marker's own guard reads true even when
+    /// <c>ResolveCombatEventWork(paused: true).accrue</c> reads false.</summary>
+    internal static bool ShouldAdvanceFoughtWithMarker(bool capture) => capture;
 
     /// <summary>The always-on capture half of <c>OnCombatEvent</c>, run for EVERY <c>DamageDealt</c>
     /// — paused or not, master/sub toggles on or off. Ordering notes:

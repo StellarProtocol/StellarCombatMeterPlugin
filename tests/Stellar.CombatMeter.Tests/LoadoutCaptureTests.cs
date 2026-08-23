@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Stellar.Abstractions.Domain.Loadout;
 using Stellar.CombatMeter.LogUpload;
 using Xunit;
 
@@ -9,47 +10,70 @@ namespace Stellar.CombatMeter.Tests;
 /// Owner design 2026-08-02 (per-class loadout capture): a class the player PLAYED was ACTIVE at some
 /// point, and IInventory gives the ACTIVE class rich data that broadcast APIs never carry once you've
 /// swapped away — so the plugin snapshots whichever class is active on a profession change and stores
-/// it keyed by professionId, latest-wins. Reset only at RUN start (not per encounter/archive), so a
-/// player who played 2 classes this run keeps BOTH captured loadouts across every archive in the run.
+/// it keyed by professionId. Reset only at RUN start (not per encounter/archive), so a player who
+/// played 2 classes this run keeps BOTH captured loadouts across every archive in the run.
+///
+/// SPEC EVOLVED 2026-08-22 (owner run <c>B47O8jx6wp</c>): the accumulator was a plain latest-wins
+/// upsert — a class already seen this run was ALWAYS replaced by its newest capture, with no regard
+/// for whether the earlier setup had actually been fought with. That let a post-fight equipment edit
+/// (5-module Frostbeam fought, then one module removed) silently overwrite the fought-with gear before
+/// any archive banked it, so the upload carried only the 4-module setup for a fight that used 5. Owner,
+/// verbatim: <em>"when any equipment change such as module,talents,equipments... and use have a combat
+/// with that setup it require plugin to take snapshot of it even class has no change."</em>
+///
+/// The tests below that pre-date this evolution (<see cref="SameContent_Revisit_TheLatestCaptureWins"/>,
+/// <see cref="SnapshotHoldsOneEntryPerDistinctClassPlayed"/>) still pass under the new contract because
+/// their fixtures only vary <c>ProjectName</c> (never gear/modules/talents), which is a SAME-CONTENT
+/// refresh either way — but they no longer demonstrate a blanket "latest always wins" rule, so their
+/// names/docs are updated to say exactly what they pin. The new fought-with-vs-unfought-draft behavior
+/// is pinned by the tests in the second region below.
 ///
 /// These tests exercise the pure accumulator (<see cref="LoadoutCapture"/>) and the run-boundary gate
 /// (<see cref="Plugin.IsNewLoadoutRun"/>) with plain fake <see cref="CapturedLoadout"/> inputs — no
 /// IPluginServices/IL2CPP mock involved, matching the plugin's existing pure-data test style (see
 /// ReplayCaptureGateTests / SelfNamePersistenceTests). The live-service reads that BUILD a
-/// CapturedLoadout (PollLocalProfession / CaptureActiveClassLoadout in Plugin.LoadoutCapture.cs) are
+/// CapturedLoadout (TickBuildRecapture / CaptureActiveClassLoadout in Plugin.LoadoutCapture.cs) are
 /// deliberately thin and untested here — only in-game verification can exercise IInventory/ILoadout.
 /// </summary>
 public class LoadoutCaptureTests
 {
-    private static CapturedLoadout Fake(int professionId, string tag) => new(
+    // gearItemId defaults to professionId (matching the ORIGINAL fixture shape) so pre-existing tests
+    // that never pass it keep comparing byte-identical content across "revisits" — only tests that
+    // need a genuinely DIFFERENT setup pass a distinct value. imagines defaults to null (unsynced) —
+    // matching every pre-existing fixture's implicit "no Imagine data" shape.
+    private static CapturedLoadout Fake(int professionId, string tag, int? gearItemId = null, IReadOnlyList<int>? imagines = null) => new(
         ProfessionId:  professionId,
         ProjectName:   tag,
         TalentStageId: professionId * 100,
-        Gear:          new List<int[]> { new[] { 200, professionId } },
+        Gear:          new List<int[]> { new[] { 200, gearItemId ?? professionId } },
         GearDetail:    new List<GearDetail>(),
         Skills:        new List<int[]>(),
         Fashion:       new List<Fashion>(),
-        Modules:       new List<CapturedModule>());
+        Modules:       new List<CapturedModule>(),
+        Imagines:      imagines);
 
     [Fact]
     public void SnapshotHoldsOneEntryPerDistinctClassPlayed()
     {
         var capture = new LoadoutCapture();
-        capture.Capture(Fake(2, "first-2"));
-        capture.Capture(Fake(5, "only-5"));
-        capture.Capture(Fake(2, "second-2"));   // revisits class 2
+        capture.Capture(Fake(2, "first-2"), combatMarker: 0);
+        capture.Capture(Fake(5, "only-5"), combatMarker: 0);
+        capture.Capture(Fake(2, "second-2"), combatMarker: 0);   // revisits class 2, SAME content
 
         var professions = capture.Snapshot().Select(l => l.ProfessionId).OrderBy(p => p);
         Assert.Equal(new[] { 2, 5 }, professions);
     }
 
     [Fact]
-    public void RevisitingAClass_TheLatestCaptureWins()
+    public void SameContent_Revisit_TheLatestCaptureWins()
     {
+        // Renamed from "RevisitingAClass_TheLatestCaptureWins" — that name implied a blanket rule that
+        // no longer holds (see class doc). This fixture's "revisit" never changes gear/modules/talents,
+        // so it exercises the SAME-CONTENT refresh branch specifically, not append-vs-replace.
         var capture = new LoadoutCapture();
-        capture.Capture(Fake(2, "first-2"));
-        capture.Capture(Fake(5, "only-5"));
-        capture.Capture(Fake(2, "second-2"));
+        capture.Capture(Fake(2, "first-2"), combatMarker: 0);
+        capture.Capture(Fake(5, "only-5"), combatMarker: 0);
+        capture.Capture(Fake(2, "second-2"), combatMarker: 0);
 
         var class2 = capture.Snapshot().Single(l => l.ProfessionId == 2);
         Assert.Equal("second-2", class2.ProjectName);
@@ -58,11 +82,12 @@ public class LoadoutCaptureTests
     }
 
     [Fact]
-    public void ResetForRun_ClearsEveryCapturedClass()
+    public void ResetForRun_ClearsEveryCapturedClass_EvenWithMultipleEntriesPerClass()
     {
         var capture = new LoadoutCapture();
-        capture.Capture(Fake(2, "first-2"));
-        capture.Capture(Fake(5, "only-5"));
+        capture.Capture(Fake(2, "5-module", gearItemId: 500), combatMarker: 0);
+        capture.Capture(Fake(2, "4-module", gearItemId: 400), combatMarker: 4);   // fought-with -> appended
+        capture.Capture(Fake(5, "only-5"), combatMarker: 4);
 
         capture.ResetForRun();
 
@@ -77,13 +102,13 @@ public class LoadoutCaptureTests
     public void SnapshotIsFrozen_LaterCaptureAndResetDoNotMutateIt()
     {
         var capture = new LoadoutCapture();
-        capture.Capture(Fake(2, "first-2"));
-        capture.Capture(Fake(5, "only-5"));
+        capture.Capture(Fake(2, "first-2"), combatMarker: 0);
+        capture.Capture(Fake(5, "only-5"), combatMarker: 0);
 
         var frozen = capture.Snapshot();
 
         // Mutate the live accumulator AFTER the snapshot was taken.
-        capture.Capture(Fake(9, "third-9"));
+        capture.Capture(Fake(9, "third-9"), combatMarker: 0);
         capture.ResetForRun();
 
         var professions = frozen.Select(l => l.ProfessionId).OrderBy(p => p);
@@ -102,4 +127,765 @@ public class LoadoutCaptureTests
     [InlineData(0, 0, false)]      // still not in a run
     public void IsNewLoadoutRun_MatchesRunBoundarySemantics(long previous, long next, bool expected)
         => Assert.Equal(expected, Plugin.IsNewLoadoutRun(previous, next));
+
+    // -------------------------------------------------------------------------
+    // Fought-with-setup preservation (owner run B47O8jx6wp) — the new append-vs-replace decision.
+    // See LoadoutCapture.Capture's doc for the full table this pins.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void FoughtWithSetup_ThenChanged_PreservesBothEntriesInOrder()
+    {
+        // The B47O8jx6wp shape: equip the 5-module setup (marker=0), fight with it (marker advances to
+        // 3 by the time of the next capture), THEN remove a module. The old accumulator lost the
+        // 5-module entry here; the fix must append instead of replacing it.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "5-module", gearItemId: 500), combatMarker: 0);
+        capture.Capture(Fake(2, "4-module", gearItemId: 400), combatMarker: 3);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(500, entries[0].Gear[0][1]);
+        Assert.Equal("5-module", entries[0].ProjectName);
+        Assert.Equal(400, entries[1].Gear[0][1]);
+        Assert.Equal("4-module", entries[1].ProjectName);
+    }
+
+    [Fact]
+    public void UnfoughtDraft_DifferentContent_NoCombatSince_Replaces()
+    {
+        // Same marker on both calls (0 -> 0): no combat happened between capturing the first draft and
+        // capturing the second, different one — this is gear-browsing before a pull, not a fought-with
+        // setup, so it must be replaced, not appended.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "draft-A", gearItemId: 500), combatMarker: 0);
+        capture.Capture(Fake(2, "draft-B", gearItemId: 400), combatMarker: 0);
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal(400, entries[0].Gear[0][1]);
+        Assert.Equal("draft-B", entries[0].ProjectName);
+    }
+
+    [Fact]
+    public void SameContent_NoCombatSince_RefreshesInPlace()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "first-2", gearItemId: 500), combatMarker: 5);
+        capture.Capture(Fake(2, "second-2", gearItemId: 500), combatMarker: 5);   // identical content
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal("second-2", entries[0].ProjectName);
+    }
+
+    [Fact]
+    public void SameContent_CombatAdvancedSince_StillRefreshesInPlace_NeverAppends()
+    {
+        // Content identity is checked BEFORE the marker: re-equipping the IDENTICAL setup after
+        // fighting with it must never mint a second entry for the same physical gear.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "first-2", gearItemId: 500), combatMarker: 0);
+        capture.Capture(Fake(2, "second-2", gearItemId: 500), combatMarker: 9);   // same content, marker moved
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal("second-2", entries[0].ProjectName);
+    }
+
+    [Fact]
+    public void MidRunClassSwitch_FoughtEntrySkillsAndAbilityScore_NeverRewrittenBySameIdentityRefresh()
+    {
+        // Owner staging run sea/ZdTH3UwZQ6 (the chimera setup): during a class-switch's
+        // SelfGearChanged burst, TickGearRecapture ran while attr 220 still read the OLD profession —
+        // the slot-keyed gear/talents were still frost, so SameSetup was true — while the LIVE self
+        // reads had already flipped to the new class (GetSkillLevels served the tank list,
+        // GetFightPoint its 34840 score), and the wholesale in-place refresh poisoned the FOUGHT
+        // frost entry with tank skills/AS. Once fought, an entry's Skills/AbilityScore/Attributes
+        // stay frozen at capture; only unfought drafts keep refreshing wholesale.
+        var frostSkills = new List<int[]> { new[] { 1801, 5, 1 }, new[] { 1802, 5, 0 } };
+        var tankSkills  = new List<int[]> { new[] { 2901, 4, 0 } };
+        var frostAttrs  = new List<long[]> { new long[] { 220, 12 } };
+        var tankAttrs   = new List<long[]> { new long[] { 220, 9 } };
+
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "frost") with { Skills = frostSkills, AbilityScore = 53966, Attributes = frostAttrs }, combatMarker: 0);
+        // The fight advanced the marker; the switch-burst recapture carries the SAME identity
+        // (gear/modules/talents unchanged) but the NEW class's live skills/AS/attrs.
+        capture.Capture(Fake(2, "frost") with { Skills = tankSkills, AbilityScore = 34840, Attributes = tankAttrs }, combatMarker: 7);
+
+        var entry = capture.Snapshot().Single();
+        Assert.Equal(frostSkills, entry.Skills);       // fought skills kept — never the switch-burst tank list
+        Assert.Equal(53966, entry.AbilityScore);       // fought per-class score kept
+        Assert.Equal(frostAttrs, entry.Attributes);    // fought attribute sheet kept
+    }
+
+    [Fact]
+    public void MidRunClassSwitch_FoughtEntry_EmptyToPopulatedImagineBackfill_StillWorks()
+    {
+        // The ONE refresh a fought entry may still take (empty-is-no-signal pin): the 1 Hz resonance
+        // poll landing after the fight backfills Imagines []→populated — while the frozen fields
+        // stay frozen at their fought values.
+        var frostSkills = new List<int[]> { new[] { 1801, 5, 1 } };
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "frost", imagines: System.Array.Empty<int>()) with { Skills = frostSkills, AbilityScore = 53966 }, combatMarker: 0);
+        capture.Capture(Fake(2, "frost", imagines: new[] { 10084, 10085 }) with { Skills = new List<int[]>(), AbilityScore = 0 }, combatMarker: 7);
+
+        var entry = capture.Snapshot().Single();
+        Assert.Equal(new[] { 10084, 10085 }, entry.Imagines);   // backfill still lands on a fought entry
+        Assert.Equal(frostSkills, entry.Skills);                // frozen fields stay frozen
+        Assert.Equal(53966, entry.AbilityScore);
+    }
+
+    [Fact]
+    public void AppendedEntry_LaterUnfoughtEdit_ReplacesOnlyTheNewestEntry()
+    {
+        // Three-step chain: fight setup A (appends nothing yet, it's the first entry) -> fight it
+        // (marker advances) -> change to B, fought-with A preserved, B appended -> immediately tweak B
+        // again with no combat since (marker unchanged) -> B's entry (the newest one) is replaced; A
+        // stays untouched.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", gearItemId: 500), combatMarker: 0);
+        capture.Capture(Fake(2, "B", gearItemId: 400), combatMarker: 3);   // A fought-with -> appended
+        capture.Capture(Fake(2, "B-tweak", gearItemId: 401), combatMarker: 3);   // no combat since B -> replace B
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(500, entries[0].Gear[0][1]);
+        Assert.Equal("A", entries[0].ProjectName);
+        Assert.Equal(401, entries[1].Gear[0][1]);
+        Assert.Equal("B-tweak", entries[1].ProjectName);
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-setup ACTIVATION TIMELINE (owner-approved feature, 2026-08-23): a ServerNowMs stamp (the
+    // classSpans timebase) is appended when a setup BECOMES the equipped identity — at mint, on a
+    // draft replacement (the survivor), and on a swap-back re-match — never on a same-identity
+    // refresh of the already-active entry. The SWAP moment, not first-fought (owner ruling: players
+    // swap pre-run and between clear and boss phases; the span must start at the swap).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Activation_MintStampsExactlyOnce()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A"), combatMarker: 0, nowMs: 1000);
+
+        Assert.Equal(new long[] { 1000 }, capture.Snapshot().Single().Activations);
+    }
+
+    [Fact]
+    public void Activation_SameIdentityRefreshWhileActive_StampsNothing()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A"), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "A-refresh"), combatMarker: 0, nowMs: 2000);    // unfought refresh
+        capture.Capture(Fake(2, "A-refresh2"), combatMarker: 4, nowMs: 3000);   // fought refresh
+
+        Assert.Equal(new long[] { 1000 }, capture.Snapshot().Single().Activations);
+    }
+
+    [Fact]
+    public void Activation_SwapBack_ReactivatesTheOriginalEntry_BStampedBetween()
+    {
+        // A (mint t=1000) -> fight -> B (mint t=5000) -> fight -> back to A (t=9000): A's SINGLE
+        // entry carries both activations (no duplicate A entry minted), B keeps its one, and the
+        // re-activated A becomes the class's LAST entry — the active slot the top-level mirrors
+        // (ResolveLoadoutFields / ResolveSelfEquipment) read as "currently equipped".
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", gearItemId: 500), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "B", gearItemId: 400), combatMarker: 3, nowMs: 5000);
+        capture.Capture(Fake(2, "A2", gearItemId: 500), combatMarker: 7, nowMs: 9000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(400, entries[0].Gear[0][1]);
+        Assert.Equal(new long[] { 5000 }, entries[0].Activations);         // B — stamped between
+        Assert.Equal(500, entries[1].Gear[0][1]);
+        Assert.Equal(new long[] { 1000, 9000 }, entries[1].Activations);   // A re-activated, now last
+    }
+
+    [Fact]
+    public void Activation_DraftReplacement_StampsTheSurvivorOnly_DeadDraftStampsDie()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "draft-A", gearItemId: 500), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "draft-B", gearItemId: 400), combatMarker: 0, nowMs: 2000);   // replaces A
+
+        var entry = capture.Snapshot().Single();
+        Assert.Equal(400, entry.Gear[0][1]);
+        Assert.Equal(new long[] { 2000 }, entry.Activations);   // only the survivor's stamp — A's died with it
+    }
+
+    [Fact]
+    public void Activation_FoughtFreeze_DoesNotBlockActivationAppends()
+    {
+        // FIX B (owner run sea/ZdTH3UwZQ6) freezes a fought entry's Skills/AbilityScore/Attributes on
+        // a same-identity refresh — the swap-back RE-ACTIVATION must still append its stamp while the
+        // frozen fields stay frozen at the fought capture.
+        var frostSkills = new List<int[]> { new[] { 1801, 5, 1 } };
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", gearItemId: 500) with { Skills = frostSkills, AbilityScore = 53966 }, combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "B", gearItemId: 400), combatMarker: 3, nowMs: 5000);
+        capture.Capture(Fake(2, "A2", gearItemId: 500) with { Skills = new List<int[]>(), AbilityScore = 0 }, combatMarker: 7, nowMs: 9000);
+
+        var a = capture.Snapshot().Single(l => l.Gear[0][1] == 500);
+        Assert.Equal(new long[] { 1000, 9000 }, a.Activations);   // activation appended
+        Assert.Equal(frostSkills, a.Skills);                       // frozen fields stay frozen
+        Assert.Equal(53966, a.AbilityScore);
+    }
+
+    // -------------------------------------------------------------------------
+    // EVENT-DRIVEN re-capture (owner ruling 2026-08-23: capture is event-driven at the RIGHT probe
+    // point — no polling / timer-based data gathering). The plugin now has ONE trigger,
+    // ILoadout.LiveStateChanged: the framework's POST-PARSE "the live build state I serve actually
+    // changed" event. It replaced three mechanisms that each failed the owner differently:
+    //   • the PRE-parse IInventory.SelfGearChanged flag — its ~100 ms recapture read the framework's
+    //     PRE-edit data, so a single talent-node activation was archived at the stale 69-node tree
+    //     (owner staging run sea/CdPgKYHQ6e) — and it was gated on a per-field allowlist that missed
+    //     the gear UI's "Replace" button entirely (that delta's top-level fields are 2/55/96/104,
+    //     none of 12/28/57/61/101);
+    //   • TickImagineRecapture — a per-tick compare-poll of IResonanceState.Installed;
+    //   • TickTalentRecapture (Plugin.TalentsDiffer) — a per-tick compare-poll of ILoadout.LiveState.
+    // The trigger seam is Plugin.ShouldRecaptureOnLiveStateChange. Everything BEHIND it — mint, draft
+    // replacement, swap-back re-match, fought-freeze, activation stamps — is UNCHANGED and still
+    // pinned by the regions above; these tests pin that the new trigger reaches it in each owner
+    // scenario.
+    // -------------------------------------------------------------------------
+
+    private static CapturedLoadout FakeWithTalents(int professionId, string tag, int stage, int[] nodes)
+        => Fake(professionId, tag) with { TalentStageId = stage, TalentNodes = nodes };
+
+    [Fact]
+    public void RecaptureTrigger_FiresOnAnyReportedChange_NeverAsksWhichFieldChanged()
+    {
+        // The seam takes a BOOL, not a field list. That is the fix for the "Replace" miss: the
+        // framework reports "something I serve changed" and the plugin re-captures, full stop.
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+    }
+
+    [Fact]
+    public void RecaptureTrigger_NeverFiresWithoutAReport_NoPollingNoTimer()
+    {
+        Assert.False(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: false, professionId: 2));
+    }
+
+    [Fact]
+    public void RecaptureTrigger_ChangeReportedBeforeTheClassIsKnown_IsHeldNotDropped()
+    {
+        // profession 0 = not in world / attr 220 not seen yet. The trigger declines, and the caller
+        // (TickBuildRecapture) leaves the flag SET, so the change is captured on the first tick that
+        // knows the class — a dropped report would silently lose the player's setup.
+        Assert.False(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 0));
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+    }
+
+    // --- class switch: the LAST poll is gone (2026-08-23, second pass) ------------------------------
+    // PollLocalProfession used to re-read IPlayerState.Profession on every ~10 Hz tick and capture on
+    // a difference. A class switch rewrites professionList.curProfessionId in the container, so the
+    // SAME merge event already covers it; the poll is deleted. Two properties replace it, both pinned
+    // here, because between them they are the whole of what the poll did:
+    //   (1) the capture is keyed to ONE profession source — the framework's live class — so the new
+    //       setup can never be filed under the old class while attr 220 lags the container delta;
+    //   (2) a run START (which changes nothing about the build, so raises no merge event) still
+    //       captures, via the arm in TickLoadoutRunBoundary that runs immediately before
+    //       TickBuildRecapture on the same tick.
+
+    [Fact]
+    public void CaptureProfession_PrefersTheFrameworkLiveClass_OverAttr220()
+    {
+        // The switch instant: the container already says 5 (that IS what raised the event), attr 220
+        // still broadcasts 2. Keying on attr 220 here would file the NEW class's gear under the OLD
+        // class — and with no poll left, nothing would ever revisit it.
+        Assert.Equal(5, Plugin.ResolveCaptureProfession(liveProfessionId: 5, playerStateProfession: 2));
+    }
+
+    [Fact]
+    public void CaptureProfession_FallsBackToAttr220_OnlyBeforeTheLiveReadResolves()
+    {
+        Assert.Equal(2, Plugin.ResolveCaptureProfession(liveProfessionId: 0, playerStateProfession: 2));
+        Assert.Equal(0, Plugin.ResolveCaptureProfession(liveProfessionId: 0, playerStateProfession: 0));
+    }
+
+    [Fact]
+    public void MidRunClassSwitch_CapturesTheNewClassFromTheChangeReportAlone()
+    {
+        // Fight as class 2, switch to class 5 mid-run. The switch's container merge is the ONLY
+        // trigger — no poll observes attr 220 any more — and it must reach the accumulator keyed to
+        // the new class, leaving the fought-with class-2 entry untouched.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "played-2"), combatMarker: 3, nowMs: 1000);
+
+        var prof = Plugin.ResolveCaptureProfession(liveProfessionId: 5, playerStateProfession: 2);
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: prof));
+        capture.Capture(Fake(prof, "switched-5"), combatMarker: 3, nowMs: 4000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(2, entries[0].ProfessionId);
+        Assert.Equal(5, entries[1].ProfessionId);
+        Assert.Equal("played-2", entries[0].ProjectName);   // the fought-with class is never rewritten
+    }
+
+    [Fact]
+    public void RunStart_ArmsACaptureEvenThoughNoBuildChangeEventCanFire()
+    {
+        // Entering a dungeon empties the accumulator (ResetForRun) but changes nothing about the
+        // player's build, so no container merge follows. TickLoadoutRunBoundary arms the SAME flag the
+        // event sets, and TickBuildRecapture — which runs after it on the same tick — consumes it.
+        Assert.True(Plugin.IsNewLoadoutRun(previousRunId: 0, newRunId: 777));
+
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "pre-run town swap"), combatMarker: 0, nowMs: 100);
+        capture.ResetForRun();
+        Assert.Empty(capture.Snapshot());
+
+        // The arm's capture, keyed by the same single source as every event capture.
+        var prof = Plugin.ResolveCaptureProfession(liveProfessionId: 2, playerStateProfession: 2);
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: prof));
+        capture.Capture(Fake(prof, "in-run"), combatMarker: 0, nowMs: 2000);
+
+        var entry = Assert.Single(capture.Snapshot());
+        Assert.Equal(2, entry.ProfessionId);
+        Assert.Equal("in-run", entry.ProjectName);   // the town-swap draft did not leak into the run
+    }
+
+    [Fact]
+    public void LiveStateChange_SingleTalentActivation_TheFinalTreeIsCaptured()
+    {
+        // The exact sea/CdPgKYHQ6e sequence, scaled. Fight the full tree; remove a node (a late
+        // recapture happened to see the fresh tree -> fought entry preserved, draft appended);
+        // ACTIVATE a different node. Under the OLD wiring the activation's recapture read the
+        // framework's stale tree and the final tree was never recorded. Now the framework re-reads
+        // FIRST and only then reports, so the single capture that follows carries the final tree and
+        // REPLACES the unfought draft — one draft, not three entries.
+        var fullTree  = new[] { 1, 2, 3, 4 };
+        var removed   = new[] { 1, 2, 3 };
+        var finalTree = new[] { 1, 2, 3, 5 };   // removed 4, activated 5
+
+        var capture = new LoadoutCapture();
+        capture.Capture(FakeWithTalents(2, "fought", 105, fullTree), combatMarker: 0, nowMs: 1000);
+        capture.Capture(FakeWithTalents(2, "draft-69", 105, removed), combatMarker: 5, nowMs: 2000);
+
+        // The activation: ONE reported change -> ONE capture, already carrying the final tree.
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+        capture.Capture(FakeWithTalents(2, "final", 105, finalTree), combatMarker: 5, nowMs: 4000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);                            // fought + ONE draft, never three
+        Assert.Equal(fullTree, entries[0].TalentNodes);            // fought entry untouched
+        Assert.Equal(finalTree, entries[1].TalentNodes);           // the draft carries the FINAL tree
+        Assert.Equal(new long[] { 4000 }, entries[1].Activations); // survivor stamps; the dead draft's die
+    }
+
+    [Fact]
+    public void LiveStateChange_ImagineSwapAlone_MintsANewFoughtWithSetup()
+    {
+        // Owner gap, run B47O8jx6wp retest: swapping only the equipped Battle Imagine used to need its
+        // own compare-poll, because no per-field event covered it. The framework now raises the SAME
+        // change event for the imagine hotbar, so the plain capture flow mints the new setup.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0, nowMs: 1000);
+
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+        capture.Capture(Fake(2, "B", imagines: new[] { 10084, 10099 }), combatMarker: 3, nowMs: 5000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);   // the fought-with pair is preserved
+        Assert.Equal(new[] { 10084, 10099 }, entries[1].Imagines);   // the swap minted its own setup
+        Assert.Equal(new long[] { 5000 }, entries[1].Activations);
+    }
+
+    [Fact]
+    public void LiveStateChange_ReplaceStyleGearEdit_CapturesWithNoLegacyPerFieldEvent()
+    {
+        // The gear UI's "Replace" button: its container delta carries top-level fields 2/55/96/104, so
+        // EVERY legacy per-field trigger (equip 12 / resonance 28 / mod 57 / professionList 61 /
+        // seasonCultivate 101) is false — the framework-side proof is
+        // ContainerMergeSignalTests.IsMergeSignal_TrueForTheMeasuredReplaceDelta_*. All the plugin
+        // needs is that the reported change alone drives a capture that mints the replaced gear.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "before", gearItemId: 240), combatMarker: 0, nowMs: 1000);
+
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+        capture.Capture(Fake(2, "after-replace", gearItemId: 60), combatMarker: 4, nowMs: 6000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(240, entries[0].Gear[0][1]);   // the fought-with 240 setup survives
+        Assert.Equal(60, entries[1].Gear[0][1]);    // the replaced 60 setup is its own entry
+    }
+
+    [Fact]
+    public void LiveStateChange_RevertToTheEarlierSetup_ReMatchesAndReActivates()
+    {
+        // Owner-visible bug this rework targets: reverting to setup 1 was never seen, because the
+        // revert's delta produced no per-field event. Driven by the change report, the revert lands on
+        // TryRematchEarlier — ONE entry for setup 1 carrying BOTH activations, and it becomes the
+        // class's LAST (currently-equipped) entry. No duplicate setup-1 entry is minted.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "setup-1", gearItemId: 500), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "setup-2", gearItemId: 400), combatMarker: 3, nowMs: 5000);
+
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+        capture.Capture(Fake(2, "setup-1-again", gearItemId: 500), combatMarker: 7, nowMs: 9000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(400, entries[0].Gear[0][1]);
+        Assert.Equal(500, entries[1].Gear[0][1]);                          // reverted setup is LAST = active
+        Assert.Equal(new long[] { 1000, 9000 }, entries[1].Activations);   // re-activated, not re-minted
+    }
+
+    // -------------------------------------------------------------------------
+    // SameSetup identity — pure content check. Probed by inverting each assertion once (flip a value,
+    // confirm it flips the result) so these fixtures cannot pass regardless of the implementation.
+    // -------------------------------------------------------------------------
+
+    private static CapturedLoadout WithModule(CapturedLoadout baseline, int slot, int configId, int quality, params int[] partsFlat)
+    {
+        var parts = new List<int[]>();
+        for (var i = 0; i < partsFlat.Length; i += 2) parts.Add(new[] { partsFlat[i], partsFlat[i + 1] });
+        return baseline with { Modules = new List<CapturedModule> { new(slot, configId, quality, parts) } };
+    }
+
+    [Fact]
+    public void SameSetup_GearOrderIndependent_PermutedPairsAreEqual()
+    {
+        var a = Fake(2, "x") with { Gear = new List<int[]> { new[] { 200, 2 }, new[] { 201, 9 } } };
+        var b = Fake(2, "x") with { Gear = new List<int[]> { new[] { 201, 9 }, new[] { 200, 2 } } };
+        Assert.True(LoadoutCapture.SameSetup(a, b));
+
+        var c = a with { Gear = new List<int[]> { new[] { 201, 9 }, new[] { 200, 3 } } };   // itemId differs
+        Assert.False(LoadoutCapture.SameSetup(a, c));
+    }
+
+    [Fact]
+    public void SameSetup_TalentNodeOrderIndependent_PermutedNodesAreEqual()
+    {
+        var a = Fake(2, "x") with { TalentNodes = new List<int> { 1, 2, 3 } };
+        var b = Fake(2, "x") with { TalentNodes = new List<int> { 3, 1, 2 } };
+        Assert.True(LoadoutCapture.SameSetup(a, b));
+
+        var c = a with { TalentNodes = new List<int> { 1, 2, 4 } };
+        Assert.False(LoadoutCapture.SameSetup(a, c));
+    }
+
+    [Fact]
+    public void SameSetup_ModuleQualityChange_IsADifferentSetup()
+    {
+        var a = WithModule(Fake(2, "x"), slot: 0, configId: 5500102, quality: 5, partsFlat: new[] { 1110, 5 });
+        var b = WithModule(Fake(2, "x"), slot: 0, configId: 5500102, quality: 6, partsFlat: new[] { 1110, 5 });
+        Assert.False(LoadoutCapture.SameSetup(a, b));
+
+        var same = WithModule(Fake(2, "x"), slot: 0, configId: 5500102, quality: 5, partsFlat: new[] { 1110, 5 });
+        Assert.True(LoadoutCapture.SameSetup(a, same));
+    }
+
+    [Fact]
+    public void SameSetup_GearDetailDifference_IsIgnored()
+    {
+        var a = Fake(2, "x") with { GearDetail = new List<GearDetail>() };
+        var b = Fake(2, "x") with
+        {
+            GearDetail = new List<GearDetail> { new(0, 5, 30, 100, 100, 1, 1, new List<int[]>(), 1, 0) },
+        };
+        Assert.True(LoadoutCapture.SameSetup(a, b));
+    }
+
+    [Fact]
+    public void SameSetup_TalentStageIdDifference_IsADifferentSetup()
+    {
+        var a = Fake(2, "x");
+        var b = a with { TalentStageId = a.TalentStageId + 1 };
+        Assert.False(LoadoutCapture.SameSetup(a, b));
+    }
+
+    // -------------------------------------------------------------------------
+    // Equipped Battle Imagines join the setup identity (owner gap, run B47O8jx6wp retest,
+    // 2026-08-22): swapping the equipped pair (e.g. Predator Spider -> Muku Chief) is a content
+    // change exactly like a gear/module/talent edit, so it goes through the SAME fought-with-vs-
+    // unfought-draft decision table in LoadoutCapture.Capture — these fixtures mirror the
+    // gear-based ones above but vary Imagines only.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void SameSetup_ImagineOrderMatters_PermutedPairIsADifferentSetup()
+    {
+        // Slot X and slot Z are distinct positions — Imagines is the one component in SameSetup that
+        // is ORDER-SENSITIVE (gear/talent-node sets are permutation-tolerant).
+        var a = Fake(2, "x", imagines: new[] { 10084, 10085 });
+        var b = Fake(2, "x", imagines: new[] { 10085, 10084 });   // same ids, swapped slots
+        Assert.False(LoadoutCapture.SameSetup(a, b));
+
+        var same = Fake(2, "x", imagines: new[] { 10084, 10085 });
+        Assert.True(LoadoutCapture.SameSetup(a, same));
+    }
+
+    [Fact]
+    public void SameSetup_ImagineDifference_IsADifferentSetup_EvenWithIdenticalGear()
+    {
+        var a = Fake(2, "x", imagines: new[] { 10084, 10085 });   // Predator Spider, Muku Chief
+        var b = Fake(2, "x", imagines: new[] { 10084, 10086 });   // slot Z swapped to a third Imagine
+        Assert.False(LoadoutCapture.SameSetup(a, b));
+    }
+
+    [Fact]
+    public void ImagineSwap_FoughtWith_ThenSwapped_PreservesBothEntriesInOrder()
+    {
+        // Fight with Predator Spider+Muku Chief (marker=0), then swap to Muku Chief+a third Imagine
+        // AFTER combat happened (marker advances to 3) — mirrors FoughtWithSetup_ThenChanged above,
+        // but the only thing that differs between the two captures is Imagines.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 3);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+        Assert.Equal(new[] { 10085, 10086 }, entries[1].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSwap_NoCombatSince_ReplacesRatherThanAppending()
+    {
+        // Same marker on both calls: swapping Imagines while just browsing (no fight in between) is
+        // an unfought draft, not a fought-with setup — mirrors UnfoughtDraft_DifferentContent above.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 0);
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal(new[] { 10085, 10086 }, entries[0].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSwap_SamePairRecaptured_RefreshesInPlace_NeverAppends()
+    {
+        // Re-equipping the IDENTICAL Imagine pair (e.g. a refresh from ApplyLiveEquipment / a
+        // no-op tick poll) must never mint a second entry — content identity is unchanged.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10084, 10085 }), combatMarker: 9);   // marker moved, same pair
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal("B", entries[0].ProjectName);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+    }
+
+    // -------------------------------------------------------------------------
+    // Login-order race (review finding, 2026-08-22): IResonanceState.Installed starts [] right after
+    // login and only populates via a 1 Hz latched poll, while the combat marker can advance on the
+    // very first hit. Without the empty-is-no-signal rule, run-start capture (Imagines=[]) + a fight
+    // advancing the marker + the 1 Hz probe landing (Installed flips []->[real pair]) looked exactly
+    // like "different content, marker advanced" -> APPEND, minting a phantom second setup that differs
+    // from the first ONLY by empty->real Imagines, with no actual swap. Pinned here so it can never
+    // regress; see LoadoutCapture.ImaginesDiffer / SameSetup docs for the rule.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ImagineSentinel_UnsyncedAtRunStart_ThenPopulatedAfterCombat_HealsInPlace_NeverAppends()
+    {
+        // Exact login sequence from the finding: capture with imagines=[] while marker is still at its
+        // starting value, a fight advances the marker, then the 1 Hz resonance probe lands and the
+        // recapture carries the real pair — everything else (gear/modules/talents) identical throughout.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: System.Array.Empty<int>()), combatMarker: 0);
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 3);   // marker advanced by the fight
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);   // NOT two — the []->populated transition must never mint a phantom setup
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSentinel_NullAtRunStart_ThenPopulatedAfterCombat_HealsInPlace_NeverAppends()
+    {
+        // Same race, but the first capture's Imagines is null rather than an empty array (SameIntSequence
+        // already treats null as empty; ImaginesDiffer must too).
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: null), combatMarker: 0);
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 3);
+
+        var entries = capture.Snapshot();
+        Assert.Single(entries);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+    }
+
+    [Fact]
+    public void ImagineSentinel_BothSidesNonEmptyAndDiffering_AfterCombat_StillAppends()
+    {
+        // Guard against overcorrecting: a REAL swap (both sides non-empty, genuinely different) after
+        // combat must still append a new entry — this is ImagineSwap_FoughtWith_ThenSwapped's exact
+        // shape, re-pinned here alongside the empty-side fix so the two behaviors are compared side by
+        // side and neither can quietly weaken the other.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 3);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);
+        Assert.Equal(new[] { 10085, 10086 }, entries[1].Imagines);
+    }
+
+    [Fact]
+    public void ImaginesDiffer_EmptyEitherSide_IsNeverADifference()
+    {
+        Assert.False(LoadoutCapture.ImaginesDiffer(System.Array.Empty<int>(), new[] { 1, 2 }));
+        Assert.False(LoadoutCapture.ImaginesDiffer(new[] { 1, 2 }, System.Array.Empty<int>()));
+        Assert.False(LoadoutCapture.ImaginesDiffer(null, new[] { 1, 2 }));
+        Assert.False(LoadoutCapture.ImaginesDiffer(null, null));
+        Assert.False(LoadoutCapture.ImaginesDiffer(System.Array.Empty<int>(), System.Array.Empty<int>()));
+    }
+
+    [Fact]
+    public void ImaginesDiffer_BothNonEmpty_MatchesSameIntSequence()
+    {
+        Assert.False(LoadoutCapture.ImaginesDiffer(new[] { 1, 2 }, new[] { 1, 2 }));
+        Assert.True(LoadoutCapture.ImaginesDiffer(new[] { 1, 2 }, new[] { 2, 1 }));
+        Assert.True(LoadoutCapture.ImaginesDiffer(new[] { 1 }, new[] { 1, 2 }));
+    }
+
+    // -------------------------------------------------------------------------
+    // LastImagines — the newest entry's Imagine pair (was the retired TickImagineRecapture's seam).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void LastImagines_NoEntryYet_IsEmpty()
+        => Assert.Empty(new LoadoutCapture().LastImagines(2));
+
+    [Fact]
+    public void LastImagines_ReturnsTheNewestEntrysPair_NotAnEarlierOne()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0);
+        capture.Capture(Fake(2, "B", imagines: new[] { 10085, 10086 }), combatMarker: 3);   // fought-with -> appended
+
+        Assert.Equal(new[] { 10085, 10086 }, capture.LastImagines(2));
+    }
+
+    [Fact]
+    public void SameIntSequence_OrderSensitive_NullTreatedAsEmpty()
+    {
+        Assert.True(LoadoutCapture.SameIntSequence(null, System.Array.Empty<int>()));
+        Assert.True(LoadoutCapture.SameIntSequence(new[] { 1, 2 }, new[] { 1, 2 }));
+        Assert.False(LoadoutCapture.SameIntSequence(new[] { 1, 2 }, new[] { 2, 1 }));
+        Assert.False(LoadoutCapture.SameIntSequence(new[] { 1 }, new[] { 1, 2 }));
+    }
+
+    // -------------------------------------------------------------------------
+    // THE OWNER SCENARIO — staging run sea/P073ErzDAx (2026-08-23). The owner replaced a ring
+    // (uuid 18598 -> 10370, configId 2071330 -> 2070912) and then a module, fought between the two, and
+    // the stored run carried exactly ONE setup. Root cause was in the FRAMEWORK: LoadoutService gated
+    // its served slot snapshot on a signature that folds in only gear/module COUNTS, so a same-count
+    // "Replace" left GetSlots() serving the PRE-Replace gear — the probe had already resolved the new
+    // ring (log 9819: 207:2070912) while the plugin's very next capture still read the old one
+    // (log 9829: 207:2071330). These pin the accumulator's half of the contract from both sides.
+    // -------------------------------------------------------------------------
+
+    // A one-ring setup for class 2 — the exact slot the owner replaced.
+    private static CapturedLoadout Ring(int ringConfigId) => new(
+        ProfessionId:  2,
+        ProjectName:   "Frost",
+        TalentStageId: 105,
+        Gear:          new List<int[]> { new[] { 207, ringConfigId } },
+        GearDetail:    new List<GearDetail>(),
+        Skills:        new List<int[]>(),
+        Fashion:       new List<Fashion>(),
+        Modules:       new List<CapturedModule>());
+
+    /// <summary>PINNED: with the framework contract honoured (LiveStateChanged is delivered only once
+    /// the resolved slots carry the new ring), ONE capture mints the new setup — the fought-with
+    /// previous setup is preserved beside it, never overwritten.</summary>
+    [Fact]
+    public void OwnerRingReplace_FreshGearOnTheEvent_MintsTheNewSetupBesideTheFoughtOne()
+    {
+        var capture = new LoadoutCapture();
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2071330), combatMarker: 1, nowMs: 100));
+
+        // …the owner fights (marker advances), then Replaces the ring; the event arrives with FRESH gear.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2070912), combatMarker: 2, nowMs: 300));
+
+        var setups = capture.Snapshot();
+        Assert.Equal(2, setups.Count);
+        Assert.Equal(2071330, setups[0].Gear[0][1]);
+        Assert.Equal(2070912, setups[1].Gear[0][1]);
+    }
+
+    /// <summary>PINNED (defence in depth): even if a capture ever runs against gear that is still one
+    /// tick STALE, the eventual fresh capture must still MINT the new setup rather than silently
+    /// refreshing the old one away — the stale read is a no-op (NOOP-SAME), and crucially it must NOT
+    /// bump the fought-with marker reference, or the later fresh capture would replace the fought setup
+    /// as though it were an unfought draft. That marker-freeze is what makes the recovery possible.</summary>
+    [Fact]
+    public void OwnerRingReplace_AStaleReadThenTheFreshOne_StillEndsWithBothSetups()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Ring(2071330), combatMarker: 1, nowMs: 100);
+
+        // Event delivered while the resolved gear is still the pre-Replace ring — the exact defect shape.
+        Assert.Equal(CaptureDecision.RefreshedSame, capture.Capture(Ring(2071330), combatMarker: 2, nowMs: 200));
+        Assert.Single(capture.Snapshot());
+
+        // The resolve lands; the next capture sees the real ring.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2070912), combatMarker: 2, nowMs: 300));
+
+        var setups = capture.Snapshot();
+        Assert.Equal(2, setups.Count);
+        Assert.Equal(2071330, setups[0].Gear[0][1]);
+        Assert.Equal(2070912, setups[1].Gear[0][1]);
+    }
+
+    // -------------------------------------------------------------------------
+    // Capture decisions — the owner-facing proof surface (one log line per capture attempt).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Capture_ReportsEveryBranch_SoTheLogCanProveWhatHappened()
+    {
+        var capture = new LoadoutCapture();
+
+        // First entry for the class.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2071330), combatMarker: 1));
+        // Same identity as the active entry — nothing changed.
+        Assert.Equal(CaptureDecision.RefreshedSame, capture.Capture(Ring(2071330), combatMarker: 1));
+        // Different identity, no combat since — the unfought draft is overwritten (the in-town case).
+        Assert.Equal(CaptureDecision.ReplacedDraft, capture.Capture(Ring(2070912), combatMarker: 1));
+        // Fought with it, then changed again — the fought setup is preserved and a new one minted.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2071330), combatMarker: 2));
+        // Fought again, then swapped BACK to an earlier setup — re-activated, not duplicated.
+        Assert.Equal(CaptureDecision.Rematched, capture.Capture(Ring(2070912), combatMarker: 3));
+
+        Assert.Equal(2, capture.EntryCount(2));
+        Assert.Equal(0, capture.EntryCount(5));
+    }
+
+    /// <summary>PINNED: the log's <c>id=</c> digest agrees with the identity the accumulator actually
+    /// compares — equal whenever <see cref="LoadoutCapture.SameSetup"/> is (including under enumeration
+    /// re-ordering), different for a real item swap. A digest that drifted from SameSetup would make the
+    /// owner's in-town proof lie.</summary>
+    [Fact]
+    public void IdentityDigest_TracksSameSetup_AndIsOrderCanonical()
+    {
+        var a = Fake(2, "A", gearItemId: 2071330) with
+        {
+            TalentNodes = new[] { 9, 1, 5 },
+            Modules = new List<CapturedModule> { new(2, 5500103, 4, new List<int[]>()), new(1, 5500203, 5, new List<int[]>()) },
+        };
+        var reordered = a with
+        {
+            TalentNodes = new[] { 5, 9, 1 },
+            Modules = new List<CapturedModule> { new(1, 5500203, 5, new List<int[]>()), new(2, 5500103, 4, new List<int[]>()) },
+        };
+        var swapped = a with { Gear = new List<int[]> { new[] { 200, 2070912 } } };
+
+        Assert.True(LoadoutCapture.SameSetup(a, reordered));
+        Assert.Equal(LoadoutCapture.IdentityDigest(a), LoadoutCapture.IdentityDigest(reordered));
+        Assert.False(LoadoutCapture.SameSetup(a, swapped));
+        Assert.NotEqual(LoadoutCapture.IdentityDigest(a), LoadoutCapture.IdentityDigest(swapped));
+    }
 }

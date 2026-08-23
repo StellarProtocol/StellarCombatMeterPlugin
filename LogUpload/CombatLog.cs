@@ -166,7 +166,10 @@ internal sealed record Actor(
     // NOT self-only like Modules/Loadouts/TalentNodes above), because the tracker samples from the
     // broadcast attr-220 stream which is available for any AOI entity. Null/omitted when the actor
     // played a single class all run (no timeline needed).
-    IReadOnlyList<long[]>? ClassSpans = null);
+    IReadOnlyList<long[]>? ClassSpans = null,
+    // Deep-Slumber Psychoscope snapshot at archive (Phase 3, 2026-08-19) — SELF ONLY, read live at
+    // archive time. Null for every non-local actor and when the container had not resolved.
+    DeepSlumberEntry? DeepSlumber = null);
 
 /// <summary>Self-only per-item instance detail, mirroring the game's Item Detail popup.
 /// Rolls are RESOLVED at capture (attr id + display value + 0-100 percentile) so consumers
@@ -205,4 +208,40 @@ internal sealed record LoadoutEntry(
     IReadOnlyList<int>? TalentNodes = null,   // actual allocated talent-tree node ids (self-only)
     IReadOnlyList<long[]>? Attributes = null, // [attrId, value] attribute sheet for THIS class (self-only)
     IReadOnlyList<long[]>? AttrPeaks = null,  // [attrId, peakValue] sparse per-class combat peaks (self-only)
-    long AbilityScore = 0);                    // this class's combat power (FightPoint), read while active; 0 when unread
+    long AbilityScore = 0,                     // this class's combat power (FightPoint), read while active; 0 when unread
+    // Equipped Battle Imagine ids, slot-ordered [X, Z] (self-only). Additive/null on old uploads or
+    // when unsynced. Owner gap, run B47O8jx6wp retest (2026-08-22): a swap alone mints a new
+    // fought-with setup — see the plugin-internal CapturedLoadout.Imagines / LoadoutCapture.SameSetup.
+    IReadOnlyList<int>? Imagines = null,
+    // Per-setup ACTIVATION TIMELINE (owner-approved feature, 2026-08-23): ServerNowMs stamps for
+    // each moment this setup BECAME the equipped identity (the SWAP moment, never first-fought) —
+    // SAME timebase as the top-level classSpans, which the site intersects these against. Additive:
+    // absent on old plugins = no-timeline. See CapturedLoadout.Activations / LoadoutCapture.Capture.
+    IReadOnlyList<long>? Activations = null,
+    // PER-SETUP Deep-Slumber (Psychoscope) snapshot — owner ruling, staging run sea/dXkw1PSyOG
+    // (2026-08-23): a psychoscope factor the player then fights with is its own setup, so each setup
+    // must carry the psychoscope it was fought with, not just the run's final state.
+    //
+    // SHAPE: byte-for-byte the SAME DeepSlumberEntry the actor-level `deepSlumber` block uses (same
+    // BuildDeepSlumber mapper, same writer), rather than a trimmed identity-only subset. Deliberate:
+    // the site already renders that exact shape for the actor block, so per-setup rendering is pure
+    // reuse with nothing new to learn, and a subset would have dropped the two fields the identity
+    // excludes as derived/progression (area score, season level) — which are exactly what a reader
+    // wants to SEE beside a build even though they must not SPLIT one. The actor-level block is
+    // unchanged and still carries the archive-time state.
+    DeepSlumberEntry? DeepSlumber = null);
+
+/// <summary>One Deep-Slumber area on the wire — activation, score, and node allocations as
+/// [nodeId, value] pairs (big = socketed fantasy card id, mid = socketed item id, nodes = level).
+/// Mirrors <c>DeepSlumberArea</c> (Abstractions) 1:1.</summary>
+internal sealed record DeepSlumberAreaEntry(
+    int AreaId, bool Active, long Score,
+    IReadOnlyList<int[]> Big, IReadOnlyList<int[]> Mid, IReadOnlyList<int[]> Nodes);
+
+/// <summary>One Deep-Slumber cultivate line on the wire. Mirrors <c>DeepSlumberLine</c>.</summary>
+internal sealed record DeepSlumberLineEntry(int LineId, int SubType, IReadOnlyList<DeepSlumberAreaEntry> Areas);
+
+/// <summary>The uploader's live Deep-Slumber Psychoscope state — self-only (see
+/// <see cref="Actor.DeepSlumber"/>). SeasonLevels = [seasonId, level] pairs.</summary>
+internal sealed record DeepSlumberEntry(
+    IReadOnlyList<int[]> SeasonLevels, IReadOnlyList<DeepSlumberLineEntry> Lines);

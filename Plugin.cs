@@ -208,7 +208,10 @@ public sealed partial class Plugin : IStellarPlugin
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
         WireSocialCapture();
-        _services.Inventory.SelfGearChanged        += OnSelfGearChanged;
+        // Post-parse live build-state change (framework 2.2.0): the ONE trigger for per-setup
+        // capture — gear/module/talent/imagine edits and class swaps alike. Replaces the pre-parse
+        // IInventory.SelfGearChanged subscription, which raced the framework's own refresh.
+        _services.Loadout.LiveStateChanged         += OnLoadoutLiveStateChanged;
         _lastSceneName = _services.ClientState.CurrentSceneName;
         _sceneIsCandidate = ResolveSceneCandidate(_lastSceneName);
 
@@ -304,7 +307,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;
         UnwireSocialCapture();
-        _services.Inventory.SelfGearChanged        -= OnSelfGearChanged;
+        _services.Loadout.LiveStateChanged         -= OnLoadoutLiveStateChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;
         OnInspectRequested -= HandleInspectRequested;
 

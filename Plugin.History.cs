@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Domain.DeepSlumber;
 using Stellar.CombatMeter.Replay;
 
 namespace Stellar.CombatMeter;
@@ -79,6 +80,12 @@ public sealed partial class Plugin
         // ELITE CAPTURE channel — CAPTURE ONLY, mirrors StageBosses' shape (see Plugin.EliteDetection.cs).
         public IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> Elites =
             Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        // DEEP-SLUMBER snapshot (Phase 3, owner 2026-08-19): the live psychoscope state read at
+        // archive time — the snapshot moment, same live-first rule as gear/modules. Session-only:
+        // NOT persisted to history JSON (same rollback-safe rule as StageBosses/Elites — process
+        // rules §6); a manual re-upload of an old entry simply omits it. Null when the container
+        // has not resolved (e.g. archive during teardown) — the upload then omits the block.
+        public DeepSlumberState? DeepSlumber;
         // NOTE: per-entry upload state (phase + run URL) is NOT stored on the entry — it persists as a
         // SIDECAR "uploadStates" key in the history config section (Plugin.HistoryStore.cs), keyed by the
         // stable (LevelUuid, ArchivedAtMs) composite, so the entry JSON stays byte-identical to what older
@@ -372,6 +379,7 @@ public sealed partial class Plugin
             StageBosses      = ResolveCurrentStageBosses(),
             FallbackBossConfigId = _bossMonsterInfo?.Id ?? 0,
             Elites           = ResolveCurrentElites(),
+            DeepSlumber      = _services.DeepSlumber.GetState(),
         };
         // Post-build appliers, one per feature partial (last: Spec B buckets, Plugin.BucketStats.cs).
         ApplyAttrRanges(entry); ApplyClassSpans(entry); ApplySpecs(entry); ApplyBucketStats(entry);

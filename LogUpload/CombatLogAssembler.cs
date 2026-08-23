@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Domain.DeepSlumber;
 using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter.LogUpload;
@@ -292,7 +293,7 @@ internal sealed class CombatLogAssembler
         foreach (var (entityId, snap) in entry.Entities)
         {
             var key = entityId.Value.ToString(CultureInfo.InvariantCulture);
-            actors[key] = SnapToActor(entityId, snap, localEntityIdValue, entry.Loadouts);
+            actors[key] = SnapToActor(entityId, snap, localEntityIdValue, entry.Loadouts, entry.DeepSlumber);
         }
         return actors;
     }
@@ -320,7 +321,7 @@ internal sealed class CombatLogAssembler
     }
 
     private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue,
-        IReadOnlyList<CapturedLoadout> runLoadouts)
+        IReadOnlyList<CapturedLoadout> runLoadouts, DeepSlumberState? deepSlumber)
     {
         var isLocal  = entityId.Value == localEntityIdValue;
         var teamId   = snap.TeamId;
@@ -375,6 +376,11 @@ internal sealed class CombatLogAssembler
         long? uid = entityId.IsPlayer ? (entityId.Value >> 16) : (long?)null;
 
         var (loadouts, modules, talentStageId, talentNodes) = ResolveLoadoutFields(isLocal, professionId, runLoadouts);
+        var slumber = BuildDeepSlumber(isLocal, deepSlumber);
+        // One coherent top-level source on class-switch segments (owner staging run sea/ZdTH3UwZQ6)
+        // — see ResolveSelfEquipment.
+        var equip = ResolveSelfEquipment(isLocal, professionId, runLoadouts,
+            (gear, BuildGearDetail(snap), skills, snap.FightPoint));
 
         return new Actor(
             Name:         name ?? "Unknown",
@@ -384,19 +390,20 @@ internal sealed class CombatLogAssembler
             Uid:          uid,
             ProfessionId: professionId,
             Level:        level,
-            AbilityScore: snap.FightPoint,
+            AbilityScore: equip.AbilityScore,
             MaxHp:        snap.MaxHp,
             Attributes:   attrs,
-            Gear:         gear,
-            Skills:       skills,
+            Gear:         equip.Gear,
+            Skills:       equip.Skills,
             Fashion:      fashion,
-            GearDetail:   BuildGearDetail(snap),
+            GearDetail:   equip.GearDetail,
             Modules:      modules,
             TalentStageId: talentStageId,
             Loadouts:     loadouts,
             TalentNodes:  talentNodes,
             AttrPeaks:    BuildActorAttrPeaks(snap),
-            ClassSpans:   BuildActorClassSpans(snap));
+            ClassSpans:   BuildActorClassSpans(snap),
+            DeepSlumber:  slumber);
     }
 
     /// <summary>
@@ -406,9 +413,15 @@ internal sealed class CombatLogAssembler
     /// classes, so without this gate every teammate's Actor would wrongly carry the uploader's own
     /// loadout data (the flattened list has no per-teammate distinction). When local,
     /// <c>Loadouts</c> carries every class played so far this run; the top-level
-    /// <c>Modules</c>/<c>TalentStageId</c> mirror whichever captured class matches the actor's
-    /// (final) <paramref name="professionId"/> — null/0 if that class was never captured (e.g. the
-    /// player never triggered a profession-change poll this run, or captured before Task 2 shipped).
+    /// <c>Modules</c>/<c>TalentStageId</c> mirror the LATEST entry matching the actor's (final)
+    /// <paramref name="professionId"/> — null/0 if that class was never captured (e.g. the player
+    /// never triggered a profession-change poll this run, or captured before Task 2 shipped).
+    ///
+    /// "Latest" matters since the fought-with-setup fix (owner run B47O8jx6wp, Plugin.LoadoutCapture.cs
+    /// LoadoutCapture.Capture): one professionId can now carry MULTIPLE entries in capture order (a
+    /// fought-with setup preserved, then a later, different one), and the top-level mirror must
+    /// describe the setup currently equipped — the LAST entry — never whichever one happened to be
+    /// captured first.
     /// </summary>
     internal static (IReadOnlyList<LoadoutEntry>? Loadouts, IReadOnlyList<ModuleEntry>? Modules, int TalentStageId, IReadOnlyList<int>? TalentNodes)
         ResolveLoadoutFields(bool isLocal, int professionId, IReadOnlyList<CapturedLoadout> runLoadouts)
@@ -416,9 +429,59 @@ internal sealed class CombatLogAssembler
         if (!isLocal || runLoadouts.Count == 0) return (null, null, 0, null);
 
         var loadouts = BuildLoadoutEntries(runLoadouts);
-        foreach (var l in runLoadouts)
+        for (var i = runLoadouts.Count - 1; i >= 0; i--)
+        {
+            var l = runLoadouts[i];
             if (l.ProfessionId == professionId) return (loadouts, BuildModuleEntries(l.Modules), l.TalentStageId, l.TalentNodes);
+        }
         return (loadouts, null, 0, null);
+    }
+
+    /// <summary>
+    /// Self-only equipment mirror for the TOP-LEVEL actor row (owner staging run
+    /// <c>sea/ZdTH3UwZQ6</c> — the chimera setup): on a class-switch segment the sticky
+    /// EntitySnapshot's gear/skills/abilityScore are frozen at SEGMENT START (the OLD class,
+    /// Plugin.EntitySnapshotSticky.cs) while <c>professionId</c> parses from the archive-time
+    /// attribute replacement (the NEW class, Plugin.AttrRange.cs) and Modules/Talents mirror the
+    /// NEW class's latest captured entry — the worker then synthesizes a setup candidate from that
+    /// MIXED row (mergeActors.ts) and a phantom "frost gear + tank talents" chip appears. When the
+    /// final <paramref name="professionId"/> has a captured entry, mirror
+    /// Gear/GearDetail/Skills/AbilityScore from that SAME latest entry the Modules/Talents mirror
+    /// uses — ONE coherent source — so the synthesized candidate sameVariant-dedupes into the real
+    /// setup. Non-local actors and a final class that was never captured pass the snapshot's own
+    /// values through unchanged. GearDetail maps empty→null to keep the wire's null-when-empty
+    /// convention (<see cref="BuildGearDetail"/>).
+    /// </summary>
+    internal static (IReadOnlyList<int[]> Gear, IReadOnlyList<GearDetail>? GearDetail, IReadOnlyList<int[]> Skills, long AbilityScore)
+        ResolveSelfEquipment(
+            bool isLocal, int professionId, IReadOnlyList<CapturedLoadout> runLoadouts,
+            (IReadOnlyList<int[]> Gear, IReadOnlyList<GearDetail>? GearDetail, IReadOnlyList<int[]> Skills, long AbilityScore) fromSnapshot)
+    {
+        if (!isLocal) return fromSnapshot;
+        for (var i = runLoadouts.Count - 1; i >= 0; i--)
+        {
+            var l = runLoadouts[i];
+            if (l.ProfessionId != professionId) continue;
+            return (l.Gear, l.GearDetail is { Count: > 0 } ? l.GearDetail : null, l.Skills, l.AbilityScore);
+        }
+        return fromSnapshot;
+    }
+
+    /// <summary>Self-only gate + 1:1 map of the archive-time Deep-Slumber snapshot onto the wire
+    /// shape. Non-local actors always get null (the snapshot is the UPLOADER's own state); a null
+    /// snapshot (container unresolved at archive) is omitted rather than sent empty.</summary>
+    internal static DeepSlumberEntry? BuildDeepSlumber(bool isLocal, DeepSlumberState? state)
+    {
+        if (!isLocal || state is null) return null;
+        var lines = new List<DeepSlumberLineEntry>(state.Lines.Count);
+        foreach (var l in state.Lines)
+        {
+            var areas = new List<DeepSlumberAreaEntry>(l.Areas.Count);
+            foreach (var a in l.Areas)
+                areas.Add(new DeepSlumberAreaEntry(a.AreaId, a.IsActive, a.Score, a.BigNodes, a.MiddleNodes, a.NormalNodes));
+            lines.Add(new DeepSlumberLineEntry(l.LineId, l.SubType, areas));
+        }
+        return new DeepSlumberEntry(state.SeasonLevels, lines);
     }
 
     // Count == 0 ? null helper — mirrors BuildGearDetail's own null-when-empty convention.
@@ -439,7 +502,13 @@ internal sealed class CombatLogAssembler
                 TalentNodes:   l.TalentNodes,
                 Attributes:    l.Attributes,
                 AttrPeaks:     l.AttrPeaks,
-                AbilityScore:  l.AbilityScore));
+                AbilityScore:  l.AbilityScore,
+                Imagines:      l.Imagines,
+                Activations:   l.Activations,
+                // Per-setup psychoscope (owner ruling, run sea/dXkw1PSyOG). The whole loadouts array is
+                // already self-only gated by ResolveLoadoutFields, so isLocal is true by construction
+                // here; reusing the SAME mapper as the actor-level block keeps the two shapes identical.
+                DeepSlumber:   BuildDeepSlumber(isLocal: true, l.DeepSlumber)));
         return list;
     }
 

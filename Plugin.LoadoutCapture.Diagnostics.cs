@@ -1,13 +1,14 @@
 using System.Collections.Generic;
 using System.Text;
 using Stellar.Abstractions.Diagnostics;
+using Stellar.Abstractions.Domain.DeepSlumber;
 using Stellar.Abstractions.Domain.Inventory;
 
 namespace Stellar.CombatMeter;
 
 /// <summary>
 /// Part B step 1 — class-swap → gear-sync tracing (owner gear-per-class investigation, 2026-08-03).
-/// The event-driven gear re-capture (<see cref="Plugin.TickGearRecapture"/>) didn't produce per-class
+/// The event-driven gear re-capture (<see cref="Plugin.TickBuildRecapture"/>) didn't produce per-class
 /// gear; these diagnostics reveal the ACTUAL wire sequence so the fix is designed from data, not a
 /// third guess: on a class swap, does a gear sync fire, WHAT gear does <c>GetSelfGear</c> then carry,
 /// and does it differ from the previous class's gear? All entry points short-circuit on
@@ -25,26 +26,128 @@ public sealed partial class Plugin
         return sb.Length == 0 ? "(empty)" : sb.ToString().TrimEnd();
     }
 
-    // Fired from PollLocalProfession on the tick when attr 220 flips — records the profession change +
-    // the gear GetSelfGear returns AT the swap instant (expected: still the OLD class's gear).
-    private void LogProfChangeDiag(int oldProf, int newProf)
-    {
-        if (!StellarDiagnostics.IsEnabled) return;
-        _services.Log.Info(
-            $"[ClassGearDiag] prof {oldProf}->{newProf} @ {_services.CombatSnapshot.ServerNowMs}ms " +
-            $"gear-at-swap=[{GearSig(_services.Inventory.GetSelfGear())}]");
-    }
+    // Previous profession seen by the line below. DIAGNOSTICS-ONLY (it is never read unless
+    // STELLAR_DIAGNOSTICS is on, and nothing in the capture path consults it) — it exists so the log
+    // still shows class TRANSITIONS now that PollLocalProfession, which used to own that memo and emit
+    // its own `prof A->B` line, is deleted.
+    private int _diagLastProf;
 
-    // Fired from TickGearRecapture on the tick after a SelfGearChanged sync landed — records the
-    // profession now + the gear GetSelfGear returns (expected IF the fix worked: the NEW class's gear;
-    // if unchanged from the swap line above, the wire never re-synced per-class gear on the swap).
+    // Fired from TickBuildRecapture on the tick after ILoadout.LiveStateChanged landed (or after the
+    // run-start arm) — records the class the capture is keyed to and the gear GetSelfGear returns for
+    // it. Since 2026-08-23 this is THE plugin-side acceptance marker for the event rework: exactly one
+    // line per real change the framework reported (plus one per run start), none on quiet ticks, and
+    // a `A->B` transition marker whenever the class itself moved.
     private void LogGearSyncDiag(int prof)
     {
         if (!StellarDiagnostics.IsEnabled) return;
+        var moved = prof != _diagLastProf ? $" prof {_diagLastProf}->{prof}" : "";
+        _diagLastProf = prof;
         _services.Log.Info(
             $"[ClassGearDiag] gear SYNC consumed @ {_services.CombatSnapshot.ServerNowMs}ms " +
-            $"prof={prof} gear=[{GearSig(_services.Inventory.GetSelfGear())}]");
+            $"prof={prof}{moved} gear=[{GearSig(_services.Inventory.GetSelfGear())}]");
     }
+
+    /// <summary>
+    /// THE CAPTURE-DECISION LINE (owner demand 2026-08-23): one line per capture ATTEMPT, saying what
+    /// armed it, which class it was keyed to, and exactly what the accumulator DID. This is what turns
+    /// "did my equipment change get captured?" into a self-contained in-town check — replace an item,
+    /// read the log — with no run, archive or upload round-trip needed.
+    ///
+    /// <para><b>Format</b> (one line, <c>[LoadoutCapture]</c> prefix):</para>
+    /// <code>
+    /// [LoadoutCapture] trigger=live-state prof=2 decision=MINTED entries=2 id=a1b2c3d4 gear=11 mods=5 imagines=[3923,3976] talent=105/70 ds=10a/7f3c91b0 marker=4
+    /// [LoadoutCapture] trigger=live-state prof=2 decision=SKIPPED nosignal=loadout (held — will retry)
+    /// </code>
+    /// <list type="bullet">
+    ///   <item><c>trigger</c> — <c>boot</c> | <c>run-start</c> | <c>live-state</c> (the framework's
+    ///   <c>ILoadout.LiveStateChanged</c>).</item>
+    ///   <item><c>decision</c> — <c>MINTED</c> (new setup entry appended), <c>REPLACED-DRAFT</c> (a
+    ///   different setup overwrote an unfought draft — the normal outcome for an in-town edit with no
+    ///   combat since), <c>REMATCHED</c> (identical to an earlier entry — re-activated, not duplicated),
+    ///   <c>NOOP-SAME</c> (identical to the active entry — nothing changed), <c>SKIPPED</c> (nothing was
+    ///   captured; <c>nosignal=</c> names the field that wasn't ready and the flag is HELD).</item>
+    ///   <item><c>id</c> — 8-hex digest of the setup-identity fields (<see cref="LoadoutCapture.IdentityDigest"/>).
+    ///   A moved <c>id</c> beside a non-<c>NOOP-SAME</c> decision IS the proof the edit was seen.</item>
+    /// </list>
+    /// </summary>
+    private void LogCaptureDecision(CaptureTrigger trigger, CapturedLoadout cap, CaptureDecision decision)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        _diagHeldField = null;   // a real decision ends the hold — the next one logs again
+        var sb = new StringBuilder("[LoadoutCapture] trigger=").Append(TriggerName(trigger))
+            .Append(" prof=").Append(cap.ProfessionId)
+            .Append(" decision=").Append(DecisionName(decision))
+            .Append(" entries=").Append(_loadoutCapture.EntryCount(cap.ProfessionId))
+            .Append(" id=").Append(LoadoutCapture.IdentityDigest(cap).ToString("x8"))
+            .Append(" gear=").Append(cap.Gear.Count)
+            .Append(" mods=").Append(cap.Modules.Count)
+            .Append(" imagines=[");
+        var imagines = cap.Imagines;
+        for (var i = 0; i < (imagines?.Count ?? 0); i++) sb.Append(i == 0 ? "" : ",").Append(imagines![i]);
+        sb.Append("] talent=").Append(cap.TalentStageId).Append('/').Append(cap.TalentNodes?.Count ?? 0)
+          .Append(" ds=").Append(DeepSlumberTerm(cap.DeepSlumber))
+          .Append(" marker=").Append(_combatEventMarker);
+        _services.Log.Info(sb.ToString());
+        LogLiveCaptureDiag(cap);   // the full slot:configId dump behind the digest
+    }
+
+    /// <summary>The SKIPPED half of the decision line: a capture attempt that read nothing because a
+    /// game surface wasn't ready. The flag is HELD (re-armed), so this is a "not yet", never a loss —
+    /// a following line with the same trigger reports the real decision.</summary>
+    private void LogCaptureHeld(CaptureTrigger trigger, int professionId, string noSignalField)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        // Once per hold, not once per tick: the flag stays armed at the plugin's ~10 Hz cadence, and a
+        // repeated line per tick would bury the decision lines this exists to make findable.
+        if (_diagHeldField == noSignalField) return;
+        _diagHeldField = noSignalField;
+        _services.Log.Info(
+            $"[LoadoutCapture] trigger={TriggerName(trigger)} prof={professionId} " +
+            $"decision=SKIPPED nosignal={noSignalField} (held — will retry)");
+    }
+
+    /// <summary>The Deep-Slumber term of the decision line: <c>&lt;areaCount&gt;a/&lt;8-hex sub-digest&gt;</c>,
+    /// or <c>none</c> when the framework's psychoscope read has not landed (or produced no lines) — the
+    /// no-signal case that neither mints nor blocks a setup. The sub-digest isolates the psychoscope's
+    /// own contribution to <c>id=</c>, so unequipping a factor in town shows BOTH terms moving together
+    /// and the owner can tell a psychoscope edit from a gear one at a glance. It is the same canonical
+    /// projection <see cref="LoadoutCapture.SameSetup"/> compares, so a moved <c>ds=</c> and an unmoved
+    /// <c>id=</c> would be a contradiction, never a normal outcome.</summary>
+    private static string DeepSlumberTerm(DeepSlumberState? state)
+    {
+        if (!DeepSlumberIdentity.HasSignal(state)) return "none";
+        var areas = 0;
+        foreach (var line in state!.Lines) areas += line.Areas.Count;
+        var h = 2166136261u;
+        DeepSlumberIdentity.FoldInto(ref h, state, static (ref uint hash, uint value) =>
+        {
+            unchecked
+            {
+                hash = (hash ^ (value & 0xFF)) * 16777619u;
+                hash = (hash ^ ((value >> 8) & 0xFF)) * 16777619u;
+                hash = (hash ^ ((value >> 16) & 0xFF)) * 16777619u;
+                hash = (hash ^ (value >> 24)) * 16777619u;
+            }
+        });
+        return areas.ToString(System.Globalization.CultureInfo.InvariantCulture) + "a/" + h.ToString("x8");
+    }
+
+    private string? _diagHeldField;   // DIAGNOSTICS-ONLY de-dupe memo for the held line above
+
+    private static string TriggerName(CaptureTrigger t) => t switch
+    {
+        CaptureTrigger.RunStart  => "run-start",
+        CaptureTrigger.LiveState => "live-state",
+        _                        => "boot",
+    };
+
+    private static string DecisionName(CaptureDecision d) => d switch
+    {
+        CaptureDecision.Minted        => "MINTED",
+        CaptureDecision.ReplacedDraft => "REPLACED-DRAFT",
+        CaptureDecision.Rematched     => "REMATCHED",
+        _                             => "NOOP-SAME",
+    };
 
     // EVENT-DRIVEN (fires when CaptureActiveClassLoadout captures — i.e. on a gear/module-change or
     // profession-change EVENT, never a poll): logs the LIVE captured per-class gear + modules. A

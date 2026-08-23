@@ -240,6 +240,7 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             if (a.TalentStageId > 0) w.Name("talentStageId").Number(a.TalentStageId);
             if (a.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
             if (a.Loadouts is { Count: > 0 } l) { w.Name("loadouts"); WriteLoadouts(w, l); }
+            if (a.DeepSlumber is { } ds) { w.Name("deepSlumber"); WriteDeepSlumber(w, ds); }
         }
         w.EndObject();
     }
@@ -275,8 +276,17 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             if (l.Modules is { Count: > 0 } m) { w.Name("modules"); WriteModules(w, m); }
             if (l.TalentStageId > 0) w.Name("talentStageId").Number(l.TalentStageId);
             if (l.TalentNodes is { Count: > 0 } tn) { w.Name("talentNodes"); WriteIntList(w, tn); }
+            // Equipped Battle Imagine ids, slot-ordered [X, Z] — owner gap, run B47O8jx6wp retest
+            // (2026-08-22). Same presence-guard idiom as talentNodes above.
+            if (l.Imagines is { Count: > 0 } im) { w.Name("imagines"); WriteIntList(w, im); }
             if (l.Attributes is { Count: > 0 } at) { w.Name("attributes"); WriteLongPairs(w, at); }
             if (l.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
+            // Per-setup activation timeline (owner feature 2026-08-23) — ServerNowMs stamps, the
+            // classSpans timebase. Additive: absent = no-timeline (old plugins / empty fixtures).
+            if (l.Activations is { Count: > 0 } act) { w.Name("activations"); WriteLongList(w, act); }
+            // Per-setup psychoscope — SAME shape/emitter as the actor-level block (owner ruling, run
+            // sea/dXkw1PSyOG). Omitted entirely when the setup was captured before the DS read landed.
+            if (l.DeepSlumber is { } ds) { w.Name("deepSlumber"); WriteDeepSlumber(w, ds); }
             w.EndObject();
         }
         w.EndArray();
@@ -284,6 +294,14 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
 
     // Flat array of numbers (e.g. talent-tree node ids).
     private static void WriteIntList(JsonWriter w, IReadOnlyList<int> xs)
+    {
+        w.BeginArray();
+        foreach (var x in xs) w.Number(x);
+        w.EndArray();
+    }
+
+    // Flat array of 64-bit numbers (e.g. activation-timeline ms stamps).
+    private static void WriteLongList(JsonWriter w, IReadOnlyList<long> xs)
     {
         w.BeginArray();
         foreach (var x in xs) w.Number(x);
@@ -346,6 +364,37 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             w.EndArray();
         }
         w.EndArray();
+    }
+
+    private static void WriteDeepSlumber(JsonWriter w, DeepSlumberEntry ds)
+    {
+        w.BeginObject();
+        w.Name("seasonLevels"); WriteIntArrays(w, ds.SeasonLevels);
+        w.Name("lines");
+        w.BeginArray();
+        foreach (var l in ds.Lines)
+        {
+            w.BeginObject();
+            w.Name("lineId").Number(l.LineId);
+            w.Name("subType").Number(l.SubType);
+            w.Name("areas");
+            w.BeginArray();
+            foreach (var a in l.Areas)
+            {
+                w.BeginObject();
+                w.Name("areaId").Number(a.AreaId);
+                w.Name("active").Bool(a.Active);
+                w.Name("score").Number(a.Score);
+                w.Name("big"); WriteIntArrays(w, a.Big);
+                w.Name("mid"); WriteIntArrays(w, a.Mid);
+                w.Name("nodes"); WriteIntArrays(w, a.Nodes);
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+        }
+        w.EndArray();
+        w.EndObject();
     }
 
     private static void WriteEvents(JsonWriter w, IReadOnlyList<CombatLogEvent> events)
