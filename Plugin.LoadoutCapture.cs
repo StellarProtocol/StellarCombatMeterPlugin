@@ -84,7 +84,15 @@ public sealed partial class Plugin
     // (TickLoadoutRunBoundary) for the same reason: the accumulator was just emptied.
     private volatile bool _buildDirty = true;
 
-    private void OnLoadoutLiveStateChanged() => _buildDirty = true;
+    // What armed _buildDirty — carried into the capture-decision log line (diagnostics only; nothing in
+    // the capture path branches on it). Written on the game Update thread, same as _buildDirty.
+    private volatile CaptureTrigger _buildTrigger = CaptureTrigger.Boot;
+
+    private void OnLoadoutLiveStateChanged()
+    {
+        _buildTrigger = CaptureTrigger.LiveState;
+        _buildDirty = true;
+    }
 
     // Re-capture the active class whenever the framework reports a real change to the live setup —
     // gear, modules, talents, imagines, or a class swap's gear re-sync (which used to freeze the OLD
@@ -94,11 +102,19 @@ public sealed partial class Plugin
     private void TickBuildRecapture()
     {
         if (!_buildDirty) return;   // allocation-free no-op on every quiet tick
+        var trigger = _buildTrigger;
         var prof = ResolveCaptureProfession(_services.Loadout.LiveState?.ProfessionId ?? 0, _services.PlayerState.Profession);
-        if (!ShouldRecaptureOnLiveStateChange(_buildDirty, prof)) return;   // class unknown — HOLD the flag
+        if (!ShouldRecaptureOnLiveStateChange(_buildDirty, prof))
+        {
+            LogCaptureHeld(trigger, prof, "profession");   // class unknown — HOLD the flag
+            return;
+        }
         _buildDirty = false;
         LogGearSyncDiag(prof);   // Part B gear investigation — no-op unless STELLAR_DIAGNOSTICS
-        CaptureActiveClassLoadout(prof);
+        // A change reported before the game surfaces are up is HELD, never dropped — the same rule the
+        // unknown-class branch above follows. Without the re-arm, an event that landed during a scene
+        // transition (no local player entity yet) silently lost the player's edit for the whole run.
+        if (!CaptureActiveClassLoadout(prof, trigger)) _buildDirty = true;
     }
 
     /// <summary>THE single profession source for capture keying (unit-tested). The framework's LIVE
@@ -151,18 +167,34 @@ public sealed partial class Plugin
             // for it: TickBuildRecapture runs immediately after this on the SAME tick (see
             // TickLoadoutCapture's ordering note), which is exactly when the deleted PollLocalProfession
             // used to re-capture after clearing its _lastPolledProfession memo here.
+            _buildTrigger = CaptureTrigger.RunStart;
             _buildDirty = true;
         }
         _loadoutRunId = runId;
     }
 
-    // Purely additive and self-only: a no-op when the loadout API isn't up yet or we're not in world.
-    private void CaptureActiveClassLoadout(int professionId)
+    /// <summary>Purely additive and self-only. Returns FALSE when the game surfaces this capture needs
+    /// are not up yet (loadout API unresolved, or no local player entity) — the caller re-arms so the
+    /// reported change is delivered late rather than dropped.</summary>
+    private bool CaptureActiveClassLoadout(int professionId, CaptureTrigger trigger)
     {
-        if (!_services.Loadout.IsAvailable) return;
+        if (!_services.Loadout.IsAvailable) { LogCaptureHeld(trigger, professionId, "loadout"); return false; }
         var self = _services.CombatSnapshot.LocalEntityId;
-        if (!self.IsPlayer) return;
+        if (!self.IsPlayer) { LogCaptureHeld(trigger, professionId, "self-entity"); return false; }
 
+        var capture = BuildActiveClassCapture(professionId, self);
+        // combatMarker: sampled NOW (Plugin.Capture.cs's _combatEventMarker) so LoadoutCapture.Capture
+        // can tell "this class was fought with since its last capture" from "this is just another
+        // unfought gear-browsing draft" — see that method's doc for the full decision table.
+        // nowMs: the activation-timeline stamp (owner feature 2026-08-23) — ServerNowMs, the SAME clock
+        // TickClassTimeline stamps the uploaded classSpans with, so the site intersects them.
+        var decision = _loadoutCapture.Capture(capture, _combatEventMarker, _services.CombatSnapshot.ServerNowMs);
+        LogCaptureDecision(trigger, capture, decision);   // no-op unless STELLAR_DIAGNOSTICS
+        return true;
+    }
+
+    private CapturedLoadout BuildActiveClassCapture(int professionId, EntityId self)
+    {
         var (projectName, talentStageId, talentNodes) = ResolveActiveProject(professionId);
         // Gear/modules come from the PICKED loadout entry (PickSlot: the live-synthesized "Current"
         // entry, else the plan the player is ON) — the framework overlays the CURRENT plan with the
@@ -180,10 +212,7 @@ public sealed partial class Plugin
         // the stale read with the settled per-class value (same lifecycle as the gear re-capture).
         var slot = FindLoadoutSlot(professionId);
         var slotGear = slot?.Gear;
-        // combatMarker: sampled NOW (Plugin.Capture.cs's _combatEventMarker) so LoadoutCapture.Capture
-        // can tell "this class was fought with since its last capture" from "this is just another
-        // unfought gear-browsing draft" — see that method's doc for the full decision table.
-        _loadoutCapture.Capture(new CapturedLoadout(
+        return new CapturedLoadout(
             ProfessionId:  professionId,
             ProjectName:   projectName,
             TalentStageId: talentStageId,
@@ -195,11 +224,7 @@ public sealed partial class Plugin
             TalentNodes:   talentNodes,
             Attributes:    BuildLoadoutAttributes(self),
             AbilityScore:  _services.CombatLookup.GetFightPoint(self),
-            Imagines:      BuildLoadoutImagines()),
-            _combatEventMarker,
-            // Activation-timeline stamp (owner feature 2026-08-23): ServerNowMs — the SAME clock
-            // TickClassTimeline stamps the uploaded classSpans with, so the site intersects them.
-            _services.CombatSnapshot.ServerNowMs);
+            Imagines:      BuildLoadoutImagines());
     }
 
     // Slot-ordered copy of the live equipped Battle Imagine pair (IResonanceState.Installed) at

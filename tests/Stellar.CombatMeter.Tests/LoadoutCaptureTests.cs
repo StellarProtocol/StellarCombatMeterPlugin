@@ -776,4 +776,116 @@ public class LoadoutCaptureTests
         Assert.False(LoadoutCapture.SameIntSequence(new[] { 1, 2 }, new[] { 2, 1 }));
         Assert.False(LoadoutCapture.SameIntSequence(new[] { 1 }, new[] { 1, 2 }));
     }
+
+    // -------------------------------------------------------------------------
+    // THE OWNER SCENARIO — staging run sea/P073ErzDAx (2026-08-23). The owner replaced a ring
+    // (uuid 18598 -> 10370, configId 2071330 -> 2070912) and then a module, fought between the two, and
+    // the stored run carried exactly ONE setup. Root cause was in the FRAMEWORK: LoadoutService gated
+    // its served slot snapshot on a signature that folds in only gear/module COUNTS, so a same-count
+    // "Replace" left GetSlots() serving the PRE-Replace gear — the probe had already resolved the new
+    // ring (log 9819: 207:2070912) while the plugin's very next capture still read the old one
+    // (log 9829: 207:2071330). These pin the accumulator's half of the contract from both sides.
+    // -------------------------------------------------------------------------
+
+    // A one-ring setup for class 2 — the exact slot the owner replaced.
+    private static CapturedLoadout Ring(int ringConfigId) => new(
+        ProfessionId:  2,
+        ProjectName:   "Frost",
+        TalentStageId: 105,
+        Gear:          new List<int[]> { new[] { 207, ringConfigId } },
+        GearDetail:    new List<GearDetail>(),
+        Skills:        new List<int[]>(),
+        Fashion:       new List<Fashion>(),
+        Modules:       new List<CapturedModule>());
+
+    /// <summary>PINNED: with the framework contract honoured (LiveStateChanged is delivered only once
+    /// the resolved slots carry the new ring), ONE capture mints the new setup — the fought-with
+    /// previous setup is preserved beside it, never overwritten.</summary>
+    [Fact]
+    public void OwnerRingReplace_FreshGearOnTheEvent_MintsTheNewSetupBesideTheFoughtOne()
+    {
+        var capture = new LoadoutCapture();
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2071330), combatMarker: 1, nowMs: 100));
+
+        // …the owner fights (marker advances), then Replaces the ring; the event arrives with FRESH gear.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2070912), combatMarker: 2, nowMs: 300));
+
+        var setups = capture.Snapshot();
+        Assert.Equal(2, setups.Count);
+        Assert.Equal(2071330, setups[0].Gear[0][1]);
+        Assert.Equal(2070912, setups[1].Gear[0][1]);
+    }
+
+    /// <summary>PINNED (defence in depth): even if a capture ever runs against gear that is still one
+    /// tick STALE, the eventual fresh capture must still MINT the new setup rather than silently
+    /// refreshing the old one away — the stale read is a no-op (NOOP-SAME), and crucially it must NOT
+    /// bump the fought-with marker reference, or the later fresh capture would replace the fought setup
+    /// as though it were an unfought draft. That marker-freeze is what makes the recovery possible.</summary>
+    [Fact]
+    public void OwnerRingReplace_AStaleReadThenTheFreshOne_StillEndsWithBothSetups()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Ring(2071330), combatMarker: 1, nowMs: 100);
+
+        // Event delivered while the resolved gear is still the pre-Replace ring — the exact defect shape.
+        Assert.Equal(CaptureDecision.RefreshedSame, capture.Capture(Ring(2071330), combatMarker: 2, nowMs: 200));
+        Assert.Single(capture.Snapshot());
+
+        // The resolve lands; the next capture sees the real ring.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2070912), combatMarker: 2, nowMs: 300));
+
+        var setups = capture.Snapshot();
+        Assert.Equal(2, setups.Count);
+        Assert.Equal(2071330, setups[0].Gear[0][1]);
+        Assert.Equal(2070912, setups[1].Gear[0][1]);
+    }
+
+    // -------------------------------------------------------------------------
+    // Capture decisions — the owner-facing proof surface (one log line per capture attempt).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Capture_ReportsEveryBranch_SoTheLogCanProveWhatHappened()
+    {
+        var capture = new LoadoutCapture();
+
+        // First entry for the class.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2071330), combatMarker: 1));
+        // Same identity as the active entry — nothing changed.
+        Assert.Equal(CaptureDecision.RefreshedSame, capture.Capture(Ring(2071330), combatMarker: 1));
+        // Different identity, no combat since — the unfought draft is overwritten (the in-town case).
+        Assert.Equal(CaptureDecision.ReplacedDraft, capture.Capture(Ring(2070912), combatMarker: 1));
+        // Fought with it, then changed again — the fought setup is preserved and a new one minted.
+        Assert.Equal(CaptureDecision.Minted, capture.Capture(Ring(2071330), combatMarker: 2));
+        // Fought again, then swapped BACK to an earlier setup — re-activated, not duplicated.
+        Assert.Equal(CaptureDecision.Rematched, capture.Capture(Ring(2070912), combatMarker: 3));
+
+        Assert.Equal(2, capture.EntryCount(2));
+        Assert.Equal(0, capture.EntryCount(5));
+    }
+
+    /// <summary>PINNED: the log's <c>id=</c> digest agrees with the identity the accumulator actually
+    /// compares — equal whenever <see cref="LoadoutCapture.SameSetup"/> is (including under enumeration
+    /// re-ordering), different for a real item swap. A digest that drifted from SameSetup would make the
+    /// owner's in-town proof lie.</summary>
+    [Fact]
+    public void IdentityDigest_TracksSameSetup_AndIsOrderCanonical()
+    {
+        var a = Fake(2, "A", gearItemId: 2071330) with
+        {
+            TalentNodes = new[] { 9, 1, 5 },
+            Modules = new List<CapturedModule> { new(2, 5500103, 4, new List<int[]>()), new(1, 5500203, 5, new List<int[]>()) },
+        };
+        var reordered = a with
+        {
+            TalentNodes = new[] { 5, 9, 1 },
+            Modules = new List<CapturedModule> { new(1, 5500203, 5, new List<int[]>()), new(2, 5500103, 4, new List<int[]>()) },
+        };
+        var swapped = a with { Gear = new List<int[]> { new[] { 200, 2070912 } } };
+
+        Assert.True(LoadoutCapture.SameSetup(a, reordered));
+        Assert.Equal(LoadoutCapture.IdentityDigest(a), LoadoutCapture.IdentityDigest(reordered));
+        Assert.False(LoadoutCapture.SameSetup(a, swapped));
+        Assert.NotEqual(LoadoutCapture.IdentityDigest(a), LoadoutCapture.IdentityDigest(swapped));
+    }
 }

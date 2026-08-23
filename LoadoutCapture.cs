@@ -20,6 +20,37 @@ internal sealed record CapturedModule(int Slot, int ConfigId, int Quality, IRead
 /// 2026-08-19): a saved plan is reached only when no live data ever resolved for the class.</summary>
 internal enum LoadoutGearSource { Live, Captured, SavedSlot }
 
+/// <summary>What ARMED a capture attempt — carried into the capture-decision log line so the owner can
+/// tell an event-driven capture from the run-start arm without reading code.</summary>
+internal enum CaptureTrigger
+{
+    /// <summary>The initial arm at plugin start: capture whatever class the player is already on.</summary>
+    Boot,
+    /// <summary>The re-arm in <c>TickLoadoutRunBoundary</c> — the accumulator was just emptied.</summary>
+    RunStart,
+    /// <summary><c>ILoadout.LiveStateChanged</c>: the framework re-read the live build and it differs.</summary>
+    LiveState,
+}
+
+/// <summary>What <see cref="LoadoutCapture.Capture"/> DID with a capture — the owner-facing proof that
+/// an equipment change was recorded, without needing a run + archive + upload to check (owner demand
+/// 2026-08-23). Logged one line per capture attempt; see <c>Plugin.LogCaptureDecision</c>.</summary>
+internal enum CaptureDecision
+{
+    /// <summary>A new setup entry was appended — the class's first, or a genuinely different setup
+    /// after the previous one had been fought with.</summary>
+    Minted,
+    /// <summary>A different setup replaced an UNFOUGHT draft in place (no combat since it was
+    /// captured) — still proof the change was seen; the identity digest moves.</summary>
+    ReplacedDraft,
+    /// <summary>The setup matched an EARLIER entry of this class — that entry was re-activated and
+    /// moved to the active slot (a swap-back), not duplicated.</summary>
+    Rematched,
+    /// <summary>Identical to the class's currently-active entry — refreshed in place, no activation
+    /// stamped. Nothing about the player's setup changed.</summary>
+    RefreshedSame,
+}
+
 /// <summary>
 /// A full snapshot of ONE played class's loadout — gear (ids + self-only rolled detail), modules,
 /// skills, fashion, its project name, and active talent stage. Captured self-only, latest-wins per
@@ -117,8 +148,13 @@ internal sealed class LoadoutCapture
     /// onto a setup's <see cref="CapturedLoadout.Activations"/> whenever it BECOMES the equipped
     /// identity: at mint, on a draft replacement (the survivor), and on a swap-back re-match. A
     /// same-identity refresh of the already-active (last) entry stamps nothing.
+    ///
+    /// <para>Returns which branch was taken, so the caller can log ONE owner-readable decision line per
+    /// capture (owner demand 2026-08-23: prove capture by replacing an item in town and reading the log,
+    /// with no run/archive/upload round-trip). The accumulator stays free of any service dependency —
+    /// it reports, the Plugin partial logs.</para>
     /// </summary>
-    public void Capture(CapturedLoadout capture, long combatMarker, long nowMs = 0)
+    public CaptureDecision Capture(CapturedLoadout capture, long combatMarker, long nowMs = 0)
     {
         if (!_byProfession.TryGetValue(capture.ProfessionId, out var entries))
         {
@@ -129,7 +165,7 @@ internal sealed class LoadoutCapture
         if (entries.Count == 0)
         {
             entries.Add(new Entry(Activate(capture, nowMs), combatMarker));   // mint — first activation
-            return;
+            return CaptureDecision.Minted;
         }
 
         var last = entries[^1];
@@ -141,19 +177,64 @@ internal sealed class LoadoutCapture
             // The last entry IS this class's active setup — a same-identity refresh appends NO
             // activation; the entry's existing timeline is carried forward untouched.
             entries[^1] = new Entry(refreshed with { Activations = last.Capture.Activations }, last.MarkerAtCapture);
-            return;
+            return CaptureDecision.RefreshedSame;
         }
 
-        if (TryRematchEarlier(entries, capture, combatMarker, nowMs)) return;   // swap-back → re-activate
+        // swap-back → re-activate
+        if (TryRematchEarlier(entries, capture, combatMarker, nowMs)) return CaptureDecision.Rematched;
 
         if (combatMarker == last.MarkerAtCapture)
         {
             // Unfought draft — overwrite in place; the dead draft's activation stamps die with it.
             entries[^1] = new Entry(Activate(capture, nowMs), combatMarker);
-            return;
+            return CaptureDecision.ReplacedDraft;
         }
 
         entries.Add(new Entry(Activate(capture, nowMs), combatMarker));   // fought-with — preserve it, new entry activates
+        return CaptureDecision.Minted;
+    }
+
+    /// <summary>How many setup entries this class holds so far this run (0 when never captured) — the
+    /// <c>entries=</c> field of the capture-decision log line.</summary>
+    internal int EntryCount(int professionId)
+        => _byProfession.TryGetValue(professionId, out var entries) ? entries.Count : 0;
+
+    /// <summary>A short, stable digest of the SETUP-IDENTITY fields <see cref="SameSetup"/> compares —
+    /// gear pairs, modules (slot/configId/quality/parts), talent stage and allocated nodes — folded in a
+    /// canonical order so Lua/dictionary enumeration jitter alone never moves it. Diagnostics only: it
+    /// is what makes "replace an item in town, read the log" a self-contained proof — a changed digest
+    /// beside a non-<see cref="CaptureDecision.RefreshedSame"/> decision IS the capture.
+    ///
+    /// <para>Imagines are deliberately EXCLUDED (they are logged literally instead): their compare is
+    /// empty-is-no-signal in both directions (<see cref="ImaginesDiffer"/>), which no single-value
+    /// digest can express without lying about one of the two directions.</para></summary>
+    internal static uint IdentityDigest(CapturedLoadout c)
+    {
+        var h = 2166136261u;   // FNV-1a/32
+        Fold(ref h, (uint)c.TalentStageId);
+        foreach (var pair in SortedPairs(c.Gear)) { Fold(ref h, (uint)pair[0]); Fold(ref h, (uint)pair[1]); }
+        var nodes = c.TalentNodes is null ? new List<int>() : new List<int>(c.TalentNodes);
+        nodes.Sort();
+        foreach (var n in nodes) Fold(ref h, (uint)n);
+        var mods = new List<CapturedModule>(c.Modules);
+        mods.Sort((x, y) => x.Slot.CompareTo(y.Slot));
+        foreach (var m in mods)
+        {
+            Fold(ref h, (uint)m.Slot); Fold(ref h, (uint)m.ConfigId); Fold(ref h, (uint)m.Quality);
+            foreach (var p in SortedPairs(m.Parts)) { Fold(ref h, (uint)p[0]); Fold(ref h, (uint)p[1]); }
+        }
+        return h;
+    }
+
+    private static void Fold(ref uint hash, uint value)
+    {
+        unchecked
+        {
+            hash = (hash ^ (value & 0xFF)) * 16777619u;
+            hash = (hash ^ ((value >> 8) & 0xFF)) * 16777619u;
+            hash = (hash ^ ((value >> 16) & 0xFF)) * 16777619u;
+            hash = (hash ^ (value >> 24)) * 16777619u;
+        }
     }
 
     // Appends nowMs to the capture's activation timeline — the moment this setup BECAME the equipped
