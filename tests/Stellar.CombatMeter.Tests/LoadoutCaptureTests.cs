@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Stellar.Abstractions.Domain.Loadout;
 using Stellar.CombatMeter.LogUpload;
 using Xunit;
 
@@ -332,6 +333,83 @@ public class LoadoutCaptureTests
         Assert.Equal(new long[] { 1000, 9000 }, a.Activations);   // activation appended
         Assert.Equal(frostSkills, a.Skills);                       // frozen fields stay frozen
         Assert.Equal(53966, a.AbilityScore);
+    }
+
+    // -------------------------------------------------------------------------
+    // Talent-edit race (owner staging run sea/CdPgKYHQ6e, 2026-08-23): a node REMOVAL minted the
+    // 69-node draft (respec flows emit multiple deltas — a late recapture saw fresh data), but the
+    // follow-up node ACTIVATION emits one delta whose recapture reads the framework's PRE-edit tree
+    // (async Lua refresh, ~0.66 s), so the final 70-node tree was never captured. TickTalentRecapture
+    // poll-compares the live talent identity each tick (TalentsDiffer) and re-fires the NORMAL
+    // capture flow on a real difference; empty/foreign live reads are no-signal.
+    // -------------------------------------------------------------------------
+
+    private static CapturedLoadout FakeWithTalents(int professionId, string tag, int stage, int[] nodes)
+        => Fake(professionId, tag) with { TalentStageId = stage, TalentNodes = nodes };
+
+    [Fact]
+    public void TalentPoll_NodeDiffDetected_TriggersRecapture_NoGearEventNeeded()
+    {
+        // The poll decision alone detects the drift — no SelfGearChanged involved — and routing the
+        // recapture through Capture replaces the unfought draft with the fresh tree.
+        var capture = new LoadoutCapture();
+        capture.Capture(FakeWithTalents(2, "stale", 105, new[] { 1, 2, 3 }), combatMarker: 0, nowMs: 1000);
+
+        var (lastStage, lastNodes) = capture.LastTalents(2);
+        var live = new LiveLoadoutState(2, 105, new[] { 1, 2, 4 });   // framework parsed the edit
+        Assert.True(Plugin.TalentsDiffer(live, 2, lastStage, lastNodes));
+
+        capture.Capture(FakeWithTalents(2, "fresh", 105, new[] { 1, 2, 4 }), combatMarker: 0, nowMs: 2000);
+        var entry = capture.Snapshot().Single();
+        Assert.Equal(new[] { 1, 2, 4 }, entry.TalentNodes);
+        Assert.Equal(new long[] { 2000 }, entry.Activations);   // draft replaced — survivor stamps
+
+        // Once captured, the same live value is quiescent — the poll never re-fires on equality.
+        Assert.False(Plugin.TalentsDiffer(live, 2, capture.LastTalents(2).TalentStageId, capture.LastTalents(2).TalentNodes));
+    }
+
+    [Fact]
+    public void TalentPoll_OwnerScenario_RemoveThenActivate_FinalDraftCarriesTheFinalTree()
+    {
+        // The exact sea/CdPgKYHQ6e sequence, scaled: fight the full tree, remove a node (late
+        // recapture sees the 69-tree -> fought entry preserved, draft appended), ACTIVATE a
+        // different node whose immediate recapture still reads the STALE 69-tree (no-op refresh),
+        // then the framework parse lands and the POLL fires the recapture with the final tree —
+        // which must REPLACE the unfought draft (owner invariant), leaving ONE draft = final tree.
+        var fullTree  = new[] { 1, 2, 3, 4 };
+        var removed   = new[] { 1, 2, 3 };
+        var finalTree = new[] { 1, 2, 3, 5 };   // removed 4, activated 5
+
+        var capture = new LoadoutCapture();
+        capture.Capture(FakeWithTalents(2, "fought", 105, fullTree), combatMarker: 0, nowMs: 1000);
+        // combat happened (marker 0 -> 5); EDIT 1: node removed, late recapture saw the fresh tree.
+        capture.Capture(FakeWithTalents(2, "draft-69", 105, removed), combatMarker: 5, nowMs: 2000);
+        // EDIT 2: node activated — the gear-event recapture reads the framework's STALE tree: no-op.
+        capture.Capture(FakeWithTalents(2, "stale-echo", 105, removed), combatMarker: 5, nowMs: 3000);
+        // Framework parse lands; the poll sees the difference and re-fires the capture.
+        var (lastStage, lastNodes) = capture.LastTalents(2);
+        Assert.True(Plugin.TalentsDiffer(new LiveLoadoutState(2, 105, finalTree), 2, lastStage, lastNodes));
+        capture.Capture(FakeWithTalents(2, "final", 105, finalTree), combatMarker: 5, nowMs: 4000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);                            // fought + ONE draft, never three
+        Assert.Equal(fullTree, entries[0].TalentNodes);            // fought entry untouched
+        Assert.Equal(finalTree, entries[1].TalentNodes);           // the draft carries the FINAL tree
+        Assert.Equal(new long[] { 4000 }, entries[1].Activations); // survivor stamps; dead draft's die
+    }
+
+    [Fact]
+    public void TalentPoll_EmptyOrForeignLiveRead_NeverTriggers()
+    {
+        var lastNodes = new[] { 1, 2, 3 };
+        // Null live state / a different class's live state / an empty node list: all NO-SIGNAL —
+        // even when the last captured entry plainly differs.
+        Assert.False(Plugin.TalentsDiffer(null, 2, 105, lastNodes));
+        Assert.False(Plugin.TalentsDiffer(new LiveLoadoutState(9, 113, new[] { 7, 8 }), 2, 105, lastNodes));
+        Assert.False(Plugin.TalentsDiffer(new LiveLoadoutState(2, 105, System.Array.Empty<int>()), 2, 105, lastNodes));
+        Assert.False(Plugin.TalentsDiffer(new LiveLoadoutState(2, 105, null), 2, 105, lastNodes));
+        // A stage change alone IS a difference (same nodes).
+        Assert.True(Plugin.TalentsDiffer(new LiveLoadoutState(2, 106, lastNodes), 2, 105, lastNodes));
     }
 
     // -------------------------------------------------------------------------

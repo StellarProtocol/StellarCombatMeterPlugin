@@ -247,6 +247,15 @@ internal sealed class LoadoutCapture
         return result;
     }
 
+    /// <summary>The talent identity (stage + nodes) recorded on <paramref name="professionId"/>'s LAST
+    /// entry ((0, null) when no entry exists yet). The cheap comparison seam
+    /// <see cref="Plugin.TickTalentRecapture"/> polls the framework's live talent state against — the
+    /// talent-edit race, owner staging run sea/CdPgKYHQ6e (2026-08-23).</summary>
+    internal (int TalentStageId, IReadOnlyList<int>? TalentNodes) LastTalents(int professionId)
+        => _byProfession.TryGetValue(professionId, out var entries) && entries.Count > 0
+            ? (entries[^1].Capture.TalentStageId, entries[^1].Capture.TalentNodes)
+            : (0, null);
+
     /// <summary>The Imagine pair recorded on <paramref name="professionId"/>'s LAST entry (empty when
     /// no entry exists yet). The cheap comparison seam <see cref="Plugin.TickImagineRecapture"/> polls
     /// live IResonanceState.Installed against to detect a swap that no other event notices — owner gap,

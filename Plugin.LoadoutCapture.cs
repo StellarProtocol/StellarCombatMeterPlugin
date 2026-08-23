@@ -47,6 +47,7 @@ public sealed partial class Plugin
         PollLocalProfession();
         TickGearRecapture();
         TickImagineRecapture();
+        TickTalentRecapture();
         TickAttrRangeSample();
         TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
     }
@@ -86,6 +87,40 @@ public sealed partial class Plugin
         var installed = _services.Resonance.Installed;
         if (LoadoutCapture.SameIntSequence(installed, _loadoutCapture.LastImagines(prof))) return;
         CaptureActiveClassLoadout(prof);
+    }
+
+    // Talent-edit race (owner staging run sea/CdPgKYHQ6e, 2026-08-23): removing a node minted the
+    // 69-node draft (the respec flow emits multiple deltas, so a LATE recapture saw fresh data), but
+    // ACTIVATING a node afterwards emits a single field-61 delta — TickGearRecapture re-captures
+    // ~100 ms later while the framework's talent surface (Lua refresh chunk → ParseLoadoutData,
+    // ~0.66 s cooldown + async) still serves the PRE-edit tree, SameSetup reads true, and when the
+    // framework finally updates NOTHING re-fires the capture: the final 70-node tree was never
+    // recorded (run entry [4] archived at 69 nodes). Same poll-compare pattern as
+    // TickImagineRecapture — don't trigger-chase: each ~10 Hz tick, compare the framework's LIVE
+    // talent identity for the current class against the class's last captured entry; on a real
+    // difference re-run the normal capture flow (draft replacement / mint / swap-back + activation
+    // stamping all inherited). Allocation-free fast path: LiveState's node list is reference-stable
+    // between framework parses and SameIntSequence is an indexed walk.
+    private void TickTalentRecapture()
+    {
+        var prof = _services.PlayerState.Profession;
+        if (prof == 0) return;
+        var (lastStage, lastNodes) = _loadoutCapture.LastTalents(prof);
+        if (!TalentsDiffer(_services.Loadout.LiveState, prof, lastStage, lastNodes)) return;
+        CaptureActiveClassLoadout(prof);
+    }
+
+    /// <summary>Pure poll decision (unit-tested): true when the framework's live talent identity for
+    /// the current class differs from the class's last captured entry (stage OR nodes). A null live
+    /// state, a live state describing a DIFFERENT class, or an EMPTY node list is NO-SIGNAL — never a
+    /// trigger (mirror of the imagine empty-is-no-signal sentinel: the framework serves empty only
+    /// before its first parse, and a capture fired on it would record a phantom empty tree).</summary>
+    internal static bool TalentsDiffer(
+        LiveLoadoutState? live, int professionId, int lastStage, IReadOnlyList<int>? lastNodes)
+    {
+        if (live is null || live.ProfessionId != professionId) return false;
+        if (live.TalentNodes is not { Count: > 0 } liveNodes) return false;
+        return live.TalentStageId != lastStage || !LoadoutCapture.SameIntSequence(liveNodes, lastNodes);
     }
 
     /// <summary>True when <paramref name="newRunId"/> marks the START of a run the accumulator hasn't
