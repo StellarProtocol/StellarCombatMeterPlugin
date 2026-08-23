@@ -248,18 +248,19 @@ internal sealed class LoadoutCapture
     }
 
     /// <summary>The talent identity (stage + nodes) recorded on <paramref name="professionId"/>'s LAST
-    /// entry ((0, null) when no entry exists yet). The cheap comparison seam
-    /// <see cref="Plugin.TickTalentRecapture"/> polls the framework's live talent state against — the
-    /// talent-edit race, owner staging run sea/CdPgKYHQ6e (2026-08-23).</summary>
+    /// entry ((0, null) when no entry exists yet). Was the comparison seam the retired
+    /// <c>TickTalentRecapture</c> compare-poll read (the talent-edit race, owner staging run
+    /// sea/CdPgKYHQ6e); the framework now reports a real change itself (ILoadout.LiveStateChanged,
+    /// owner ruling 2026-08-23) and the poll is gone. Kept as a tested accessor.</summary>
     internal (int TalentStageId, IReadOnlyList<int>? TalentNodes) LastTalents(int professionId)
         => _byProfession.TryGetValue(professionId, out var entries) && entries.Count > 0
             ? (entries[^1].Capture.TalentStageId, entries[^1].Capture.TalentNodes)
             : (0, null);
 
     /// <summary>The Imagine pair recorded on <paramref name="professionId"/>'s LAST entry (empty when
-    /// no entry exists yet). The cheap comparison seam <see cref="Plugin.TickImagineRecapture"/> polls
-    /// live IResonanceState.Installed against to detect a swap that no other event notices — owner gap,
-    /// run B47O8jx6wp retest (2026-08-22).</summary>
+    /// no entry exists yet). Was the comparison seam the retired <c>TickImagineRecapture</c>
+    /// compare-poll read to catch an imagine swap no per-field event covered (owner gap, run
+    /// B47O8jx6wp retest); the container-merge event now covers it. Kept as a tested accessor.</summary>
     internal IReadOnlyList<int> LastImagines(int professionId)
         => _byProfession.TryGetValue(professionId, out var entries) && entries.Count > 0
             ? entries[^1].Capture.Imagines ?? System.Array.Empty<int>()
@@ -334,9 +335,8 @@ internal sealed class LoadoutCapture
 
     /// <summary>ORDER-SENSITIVE sequence equality, null treated as empty — unlike <see cref="SameIntSet"/>
     /// (which sorts), this is the identity compare for Imagines (slot X/Z are distinct positions, so
-    /// permuting them is a genuinely different setup) and doubles as the cheap tick-time comparison
-    /// seam <see cref="Plugin.TickImagineRecapture"/> polls IResonanceState.Installed against.
-    /// Allocation-free: a plain indexed walk, no sort/copy.</summary>
+    /// permuting them is a genuinely different setup). Allocation-free: a plain indexed walk, no
+    /// sort/copy.</summary>
     internal static bool SameIntSequence(IReadOnlyList<int>? a, IReadOnlyList<int>? b)
     {
         var la = a?.Count ?? 0;

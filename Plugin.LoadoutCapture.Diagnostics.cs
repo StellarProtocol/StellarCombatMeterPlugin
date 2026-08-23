@@ -7,7 +7,7 @@ namespace Stellar.CombatMeter;
 
 /// <summary>
 /// Part B step 1 — class-swap → gear-sync tracing (owner gear-per-class investigation, 2026-08-03).
-/// The event-driven gear re-capture (<see cref="Plugin.TickGearRecapture"/>) didn't produce per-class
+/// The event-driven gear re-capture (<see cref="Plugin.TickBuildRecapture"/>) didn't produce per-class
 /// gear; these diagnostics reveal the ACTUAL wire sequence so the fix is designed from data, not a
 /// third guess: on a class swap, does a gear sync fire, WHAT gear does <c>GetSelfGear</c> then carry,
 /// and does it differ from the previous class's gear? All entry points short-circuit on
@@ -35,9 +35,11 @@ public sealed partial class Plugin
             $"gear-at-swap=[{GearSig(_services.Inventory.GetSelfGear())}]");
     }
 
-    // Fired from TickGearRecapture on the tick after a SelfGearChanged sync landed — records the
+    // Fired from TickBuildRecapture on the tick after ILoadout.LiveStateChanged landed — records the
     // profession now + the gear GetSelfGear returns (expected IF the fix worked: the NEW class's gear;
     // if unchanged from the swap line above, the wire never re-synced per-class gear on the swap).
+    // Since 2026-08-23 this line is ALSO the plugin-side acceptance marker for the event rework: one
+    // per real change the framework reported, none on unrelated container deltas.
     private void LogGearSyncDiag(int prof)
     {
         if (!StellarDiagnostics.IsEnabled) return;

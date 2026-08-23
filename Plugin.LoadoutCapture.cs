@@ -45,83 +45,59 @@ public sealed partial class Plugin
     {
         TickLoadoutRunBoundary();
         PollLocalProfession();
-        TickGearRecapture();
-        TickImagineRecapture();
-        TickTalentRecapture();
+        TickBuildRecapture();
         TickAttrRangeSample();
         TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
     }
 
-    // Set on IInventory.SelfGearChanged, which fires on the network/sync thread (see that event's
-    // threading contract) — so the handler ONLY flips this flag and NEVER touches game state (IL2CPP
-    // reads off the tick thread are a native-crash class). The tick below consumes it. Event-driven:
-    // no polling — the game pushes a full gear sync only on login / map change / class swap / gear edit.
-    private volatile bool _gearDirty;
+    // Set on ILoadout.LiveStateChanged — the framework's POST-PARSE "the live build state I serve
+    // actually changed" event (equipped gear/module slots, class, talent stage/nodes, or the equipped
+    // Battle Imagine pair). ONE trigger for everything this file used to chase separately.
+    //
+    // Owner ruling 2026-08-23 — capture is EVENT-DRIVEN at the right probe point, never polled. What
+    // this replaced, and why each piece was wrong:
+    //   • IInventory.SelfGearChanged (the old _gearDirty path) fires on the NETWORK thread the moment
+    //     a container delta arrives — BEFORE the framework re-reads the game's Lua containers. The
+    //     recapture ~100 ms later still read PRE-edit data, so a single talent node activation was
+    //     never recorded (owner run sea/CdPgKYHQ6e) and an imagine swap served the pre-swap pair.
+    //     Worse, that event was gated on a per-field allowlist that did not include the fields the
+    //     gear UI's "Replace" button actually emits (measured 2/55/96/104), so a Replace produced no
+    //     event at all. It is now field-agnostic AND post-parse.
+    //   • TickImagineRecapture / TickTalentRecapture were per-tick COMPARE-POLLS added to paper over
+    //     that race. Both are gone: the framework does the comparison once, at the source, and only
+    //     tells us when something it serves genuinely differs.
+    // The handler runs on the game Update thread but still only flips this flag, so the capture (and
+    // its allocations) happen on OUR tick, in the plugin's own cadence.
+    private volatile bool _buildDirty;
 
-    private void OnSelfGearChanged() => _gearDirty = true;
+    private void OnLoadoutLiveStateChanged() => _buildDirty = true;
 
-    // A class swap re-syncs the new class's gear a MOMENT AFTER the profession attr flips, so
-    // PollLocalProfession's switch-instant capture froze the OLD class's stale gear (owner-reported:
-    // gear identical across classes; root cause docs/recon/combatmeter-data-facts.md). When the fresh
-    // sync lands we re-capture the active class — latest-wins overwrites the stale gear (and re-reads
-    // modules/fashion/etc. too). Runs at most once per gear sync, on the game tick.
-    private void TickGearRecapture()
+    // Re-capture the active class whenever the framework reports a real change to the live setup —
+    // gear, modules, talents, imagines, or a class swap's gear re-sync (which used to freeze the OLD
+    // class's stale gear at the attr-220 instant; root cause docs/recon/combatmeter-data-facts.md).
+    // At most once per change event, on the game tick; the normal capture flow does the rest (draft
+    // replacement / mint / swap-back re-match + activation stamping are all inherited unchanged).
+    private void TickBuildRecapture()
     {
-        if (!_gearDirty) return;
-        _gearDirty = false;
+        if (!_buildDirty) return;   // allocation-free no-op on every quiet tick
         var prof = _services.PlayerState.Profession;
+        if (!ShouldRecaptureOnLiveStateChange(_buildDirty, prof)) return;   // class unknown — HOLD the flag
+        _buildDirty = false;
         LogGearSyncDiag(prof);   // Part B gear investigation — no-op unless STELLAR_DIAGNOSTICS
-        if (prof != 0) CaptureActiveClassLoadout(prof);
-    }
-
-    // Owner gap, run B47O8jx6wp retest (2026-08-22): swapping the equipped Battle Imagine (e.g.
-    // Predator Spider -> Muku Chief) never fires SelfGearChanged — that event covers IInventory
-    // gear/modules only, so without a poll here an Imagine-only swap silently never mints a new
-    // fought-with setup. Cheap: two IReadOnlyList<int> reads + an order-sensitive index compare
-    // (LoadoutCapture.SameIntSequence), allocation-free on the no-change path — CaptureActiveClassLoadout
-    // (and its allocations) only runs on an actual difference, same recapture flow as TickGearRecapture.
-    private void TickImagineRecapture()
-    {
-        var prof = _services.PlayerState.Profession;
-        if (prof == 0) return;
-        var installed = _services.Resonance.Installed;
-        if (LoadoutCapture.SameIntSequence(installed, _loadoutCapture.LastImagines(prof))) return;
         CaptureActiveClassLoadout(prof);
     }
 
-    // Talent-edit race (owner staging run sea/CdPgKYHQ6e, 2026-08-23): removing a node minted the
-    // 69-node draft (the respec flow emits multiple deltas, so a LATE recapture saw fresh data), but
-    // ACTIVATING a node afterwards emits a single field-61 delta — TickGearRecapture re-captures
-    // ~100 ms later while the framework's talent surface (Lua refresh chunk → ParseLoadoutData,
-    // ~0.66 s cooldown + async) still serves the PRE-edit tree, SameSetup reads true, and when the
-    // framework finally updates NOTHING re-fires the capture: the final 70-node tree was never
-    // recorded (run entry [4] archived at 69 nodes). Same poll-compare pattern as
-    // TickImagineRecapture — don't trigger-chase: each ~10 Hz tick, compare the framework's LIVE
-    // talent identity for the current class against the class's last captured entry; on a real
-    // difference re-run the normal capture flow (draft replacement / mint / swap-back + activation
-    // stamping all inherited). Allocation-free fast path: LiveState's node list is reference-stable
-    // between framework parses and SameIntSequence is an indexed walk.
-    private void TickTalentRecapture()
-    {
-        var prof = _services.PlayerState.Profession;
-        if (prof == 0) return;
-        var (lastStage, lastNodes) = _loadoutCapture.LastTalents(prof);
-        if (!TalentsDiffer(_services.Loadout.LiveState, prof, lastStage, lastNodes)) return;
-        CaptureActiveClassLoadout(prof);
-    }
-
-    /// <summary>Pure poll decision (unit-tested): true when the framework's live talent identity for
-    /// the current class differs from the class's last captured entry (stage OR nodes). A null live
-    /// state, a live state describing a DIFFERENT class, or an EMPTY node list is NO-SIGNAL — never a
-    /// trigger (mirror of the imagine empty-is-no-signal sentinel: the framework serves empty only
-    /// before its first parse, and a capture fired on it would record a phantom empty tree).</summary>
-    internal static bool TalentsDiffer(
-        LiveLoadoutState? live, int professionId, int lastStage, IReadOnlyList<int>? lastNodes)
-    {
-        if (live is null || live.ProfessionId != professionId) return false;
-        if (live.TalentNodes is not { Count: > 0 } liveNodes) return false;
-        return live.TalentStageId != lastStage || !LoadoutCapture.SameIntSequence(liveNodes, lastNodes);
-    }
+    /// <summary>Pure trigger decision (unit-tested): re-capture exactly when the framework REPORTED a
+    /// live-state change and a real class is known.
+    ///
+    /// <para>Two properties are pinned here. (1) It never asks WHICH field changed — that is the whole
+    /// point of the field-agnostic container-merge signal, and asking is what lost the gear UI's
+    /// "Replace" edit (its delta's top-level fields were 2/55/96/104, outside the old
+    /// 12/28/57/61/101 allowlist). (2) It never fires without a report — no compare-poll, no timer
+    /// (owner ruling 2026-08-23). A change reported before the class is known is HELD, not dropped:
+    /// the caller only consumes the flag once <paramref name="professionId"/> is real.</para></summary>
+    internal static bool ShouldRecaptureOnLiveStateChange(bool liveStateChanged, int professionId)
+        => liveStateChanged && professionId != 0;
 
     /// <summary>True when <paramref name="newRunId"/> marks the START of a run the accumulator hasn't
     /// captured for yet: a non-zero id different from the one last observed. 0→A (entering a run,
@@ -177,7 +153,7 @@ public sealed partial class Plugin
         // more at archive (ApplyLiveEquipment) so the snapshot is the setup the combat actually used.
         // AbilityScore (FightPoint) is gear-dependent, so we read it HERE while this class is the active
         // one — the broadcast per-entity value reflects only whatever class the player is on now. A class
-        // swap re-syncs gear a moment later (TickGearRecapture re-fires this), and latest-wins overwrites
+        // swap re-syncs gear a moment later (TickBuildRecapture re-fires this), and latest-wins overwrites
         // the stale read with the settled per-class value (same lifecycle as the gear re-capture).
         var slot = FindLoadoutSlot(professionId);
         var slotGear = slot?.Gear;

@@ -336,80 +336,136 @@ public class LoadoutCaptureTests
     }
 
     // -------------------------------------------------------------------------
-    // Talent-edit race (owner staging run sea/CdPgKYHQ6e, 2026-08-23): a node REMOVAL minted the
-    // 69-node draft (respec flows emit multiple deltas — a late recapture saw fresh data), but the
-    // follow-up node ACTIVATION emits one delta whose recapture reads the framework's PRE-edit tree
-    // (async Lua refresh, ~0.66 s), so the final 70-node tree was never captured. TickTalentRecapture
-    // poll-compares the live talent identity each tick (TalentsDiffer) and re-fires the NORMAL
-    // capture flow on a real difference; empty/foreign live reads are no-signal.
+    // EVENT-DRIVEN re-capture (owner ruling 2026-08-23: capture is event-driven at the RIGHT probe
+    // point — no polling / timer-based data gathering). The plugin now has ONE trigger,
+    // ILoadout.LiveStateChanged: the framework's POST-PARSE "the live build state I serve actually
+    // changed" event. It replaced three mechanisms that each failed the owner differently:
+    //   • the PRE-parse IInventory.SelfGearChanged flag — its ~100 ms recapture read the framework's
+    //     PRE-edit data, so a single talent-node activation was archived at the stale 69-node tree
+    //     (owner staging run sea/CdPgKYHQ6e) — and it was gated on a per-field allowlist that missed
+    //     the gear UI's "Replace" button entirely (that delta's top-level fields are 2/55/96/104,
+    //     none of 12/28/57/61/101);
+    //   • TickImagineRecapture — a per-tick compare-poll of IResonanceState.Installed;
+    //   • TickTalentRecapture (Plugin.TalentsDiffer) — a per-tick compare-poll of ILoadout.LiveState.
+    // The trigger seam is Plugin.ShouldRecaptureOnLiveStateChange. Everything BEHIND it — mint, draft
+    // replacement, swap-back re-match, fought-freeze, activation stamps — is UNCHANGED and still
+    // pinned by the regions above; these tests pin that the new trigger reaches it in each owner
+    // scenario.
     // -------------------------------------------------------------------------
 
     private static CapturedLoadout FakeWithTalents(int professionId, string tag, int stage, int[] nodes)
         => Fake(professionId, tag) with { TalentStageId = stage, TalentNodes = nodes };
 
     [Fact]
-    public void TalentPoll_NodeDiffDetected_TriggersRecapture_NoGearEventNeeded()
+    public void RecaptureTrigger_FiresOnAnyReportedChange_NeverAsksWhichFieldChanged()
     {
-        // The poll decision alone detects the drift — no SelfGearChanged involved — and routing the
-        // recapture through Capture replaces the unfought draft with the fresh tree.
-        var capture = new LoadoutCapture();
-        capture.Capture(FakeWithTalents(2, "stale", 105, new[] { 1, 2, 3 }), combatMarker: 0, nowMs: 1000);
-
-        var (lastStage, lastNodes) = capture.LastTalents(2);
-        var live = new LiveLoadoutState(2, 105, new[] { 1, 2, 4 });   // framework parsed the edit
-        Assert.True(Plugin.TalentsDiffer(live, 2, lastStage, lastNodes));
-
-        capture.Capture(FakeWithTalents(2, "fresh", 105, new[] { 1, 2, 4 }), combatMarker: 0, nowMs: 2000);
-        var entry = capture.Snapshot().Single();
-        Assert.Equal(new[] { 1, 2, 4 }, entry.TalentNodes);
-        Assert.Equal(new long[] { 2000 }, entry.Activations);   // draft replaced — survivor stamps
-
-        // Once captured, the same live value is quiescent — the poll never re-fires on equality.
-        Assert.False(Plugin.TalentsDiffer(live, 2, capture.LastTalents(2).TalentStageId, capture.LastTalents(2).TalentNodes));
+        // The seam takes a BOOL, not a field list. That is the fix for the "Replace" miss: the
+        // framework reports "something I serve changed" and the plugin re-captures, full stop.
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
     }
 
     [Fact]
-    public void TalentPoll_OwnerScenario_RemoveThenActivate_FinalDraftCarriesTheFinalTree()
+    public void RecaptureTrigger_NeverFiresWithoutAReport_NoPollingNoTimer()
     {
-        // The exact sea/CdPgKYHQ6e sequence, scaled: fight the full tree, remove a node (late
-        // recapture sees the 69-tree -> fought entry preserved, draft appended), ACTIVATE a
-        // different node whose immediate recapture still reads the STALE 69-tree (no-op refresh),
-        // then the framework parse lands and the POLL fires the recapture with the final tree —
-        // which must REPLACE the unfought draft (owner invariant), leaving ONE draft = final tree.
+        Assert.False(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: false, professionId: 2));
+    }
+
+    [Fact]
+    public void RecaptureTrigger_ChangeReportedBeforeTheClassIsKnown_IsHeldNotDropped()
+    {
+        // profession 0 = not in world / attr 220 not seen yet. The trigger declines, and the caller
+        // (TickBuildRecapture) leaves the flag SET, so the change is captured on the first tick that
+        // knows the class — a dropped report would silently lose the player's setup.
+        Assert.False(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 0));
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+    }
+
+    [Fact]
+    public void LiveStateChange_SingleTalentActivation_TheFinalTreeIsCaptured()
+    {
+        // The exact sea/CdPgKYHQ6e sequence, scaled. Fight the full tree; remove a node (a late
+        // recapture happened to see the fresh tree -> fought entry preserved, draft appended);
+        // ACTIVATE a different node. Under the OLD wiring the activation's recapture read the
+        // framework's stale tree and the final tree was never recorded. Now the framework re-reads
+        // FIRST and only then reports, so the single capture that follows carries the final tree and
+        // REPLACES the unfought draft — one draft, not three entries.
         var fullTree  = new[] { 1, 2, 3, 4 };
         var removed   = new[] { 1, 2, 3 };
         var finalTree = new[] { 1, 2, 3, 5 };   // removed 4, activated 5
 
         var capture = new LoadoutCapture();
         capture.Capture(FakeWithTalents(2, "fought", 105, fullTree), combatMarker: 0, nowMs: 1000);
-        // combat happened (marker 0 -> 5); EDIT 1: node removed, late recapture saw the fresh tree.
         capture.Capture(FakeWithTalents(2, "draft-69", 105, removed), combatMarker: 5, nowMs: 2000);
-        // EDIT 2: node activated — the gear-event recapture reads the framework's STALE tree: no-op.
-        capture.Capture(FakeWithTalents(2, "stale-echo", 105, removed), combatMarker: 5, nowMs: 3000);
-        // Framework parse lands; the poll sees the difference and re-fires the capture.
-        var (lastStage, lastNodes) = capture.LastTalents(2);
-        Assert.True(Plugin.TalentsDiffer(new LiveLoadoutState(2, 105, finalTree), 2, lastStage, lastNodes));
+
+        // The activation: ONE reported change -> ONE capture, already carrying the final tree.
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
         capture.Capture(FakeWithTalents(2, "final", 105, finalTree), combatMarker: 5, nowMs: 4000);
 
         var entries = capture.Snapshot();
         Assert.Equal(2, entries.Count);                            // fought + ONE draft, never three
         Assert.Equal(fullTree, entries[0].TalentNodes);            // fought entry untouched
         Assert.Equal(finalTree, entries[1].TalentNodes);           // the draft carries the FINAL tree
-        Assert.Equal(new long[] { 4000 }, entries[1].Activations); // survivor stamps; dead draft's die
+        Assert.Equal(new long[] { 4000 }, entries[1].Activations); // survivor stamps; the dead draft's die
     }
 
     [Fact]
-    public void TalentPoll_EmptyOrForeignLiveRead_NeverTriggers()
+    public void LiveStateChange_ImagineSwapAlone_MintsANewFoughtWithSetup()
     {
-        var lastNodes = new[] { 1, 2, 3 };
-        // Null live state / a different class's live state / an empty node list: all NO-SIGNAL —
-        // even when the last captured entry plainly differs.
-        Assert.False(Plugin.TalentsDiffer(null, 2, 105, lastNodes));
-        Assert.False(Plugin.TalentsDiffer(new LiveLoadoutState(9, 113, new[] { 7, 8 }), 2, 105, lastNodes));
-        Assert.False(Plugin.TalentsDiffer(new LiveLoadoutState(2, 105, System.Array.Empty<int>()), 2, 105, lastNodes));
-        Assert.False(Plugin.TalentsDiffer(new LiveLoadoutState(2, 105, null), 2, 105, lastNodes));
-        // A stage change alone IS a difference (same nodes).
-        Assert.True(Plugin.TalentsDiffer(new LiveLoadoutState(2, 106, lastNodes), 2, 105, lastNodes));
+        // Owner gap, run B47O8jx6wp retest: swapping only the equipped Battle Imagine used to need its
+        // own compare-poll, because no per-field event covered it. The framework now raises the SAME
+        // change event for the imagine hotbar, so the plain capture flow mints the new setup.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", imagines: new[] { 10084, 10085 }), combatMarker: 0, nowMs: 1000);
+
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+        capture.Capture(Fake(2, "B", imagines: new[] { 10084, 10099 }), combatMarker: 3, nowMs: 5000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(new[] { 10084, 10085 }, entries[0].Imagines);   // the fought-with pair is preserved
+        Assert.Equal(new[] { 10084, 10099 }, entries[1].Imagines);   // the swap minted its own setup
+        Assert.Equal(new long[] { 5000 }, entries[1].Activations);
+    }
+
+    [Fact]
+    public void LiveStateChange_ReplaceStyleGearEdit_CapturesWithNoLegacyPerFieldEvent()
+    {
+        // The gear UI's "Replace" button: its container delta carries top-level fields 2/55/96/104, so
+        // EVERY legacy per-field trigger (equip 12 / resonance 28 / mod 57 / professionList 61 /
+        // seasonCultivate 101) is false — the framework-side proof is
+        // ContainerMergeSignalTests.IsMergeSignal_TrueForTheMeasuredReplaceDelta_*. All the plugin
+        // needs is that the reported change alone drives a capture that mints the replaced gear.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "before", gearItemId: 240), combatMarker: 0, nowMs: 1000);
+
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+        capture.Capture(Fake(2, "after-replace", gearItemId: 60), combatMarker: 4, nowMs: 6000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(240, entries[0].Gear[0][1]);   // the fought-with 240 setup survives
+        Assert.Equal(60, entries[1].Gear[0][1]);    // the replaced 60 setup is its own entry
+    }
+
+    [Fact]
+    public void LiveStateChange_RevertToTheEarlierSetup_ReMatchesAndReActivates()
+    {
+        // Owner-visible bug this rework targets: reverting to setup 1 was never seen, because the
+        // revert's delta produced no per-field event. Driven by the change report, the revert lands on
+        // TryRematchEarlier — ONE entry for setup 1 carrying BOTH activations, and it becomes the
+        // class's LAST (currently-equipped) entry. No duplicate setup-1 entry is minted.
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "setup-1", gearItemId: 500), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "setup-2", gearItemId: 400), combatMarker: 3, nowMs: 5000);
+
+        Assert.True(Plugin.ShouldRecaptureOnLiveStateChange(liveStateChanged: true, professionId: 2));
+        capture.Capture(Fake(2, "setup-1-again", gearItemId: 500), combatMarker: 7, nowMs: 9000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(400, entries[0].Gear[0][1]);
+        Assert.Equal(500, entries[1].Gear[0][1]);                          // reverted setup is LAST = active
+        Assert.Equal(new long[] { 1000, 9000 }, entries[1].Activations);   // re-activated, not re-minted
     }
 
     // -------------------------------------------------------------------------
@@ -625,7 +681,7 @@ public class LoadoutCaptureTests
     }
 
     // -------------------------------------------------------------------------
-    // LastImagines — the cheap tick-time comparison seam TickImagineRecapture polls against.
+    // LastImagines — the newest entry's Imagine pair (was the retired TickImagineRecapture's seam).
     // -------------------------------------------------------------------------
 
     [Fact]
