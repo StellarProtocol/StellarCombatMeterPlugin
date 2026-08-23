@@ -9,13 +9,14 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.CombatMeter</RootNamespace>
     <AssemblyName>Stellar.CombatMeter</AssemblyName>
-    <Version>2.4.0</Version>
+    <Version>2.5.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Requires IPluginServices.Localization (ILocalization, framework 2.1.0, i18n P1). Ships with
-         framework 2.1.0 — no release yet; build locally against <devkit>/.localfeed (dotnet pack). -->
+    <!-- Requires framework 2.2.0: ILoadout.LiveState + ILoadout.LiveStateChanged (live-first,
+         event-driven build capture) and IPluginServices.DeepSlumber. Published on nuget.org
+         2026-08-24; the registry manifest's minModSystemVersion must match. -->
     <PackageReference Include="Stellar.Abstractions" Version="2.2.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
