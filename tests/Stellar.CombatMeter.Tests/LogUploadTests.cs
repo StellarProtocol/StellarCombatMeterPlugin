@@ -961,6 +961,41 @@ public sealed class LogUploadTests
         Assert.DoesNotContain("\"activations\"", CombatLogWriter.Write(MakeLoadoutLog(noTimeline)));
     }
 
+    // PER-SETUP Deep-Slumber (owner ruling, staging run sea/dXkw1PSyOG, 2026-08-23): each wire
+    // LoadoutEntry carries the psychoscope it was FOUGHT with, in the SAME shape as the actor-level
+    // `deepSlumber` block. Additive: a setup captured before the framework's DS read landed omits it.
+    [Fact]
+    public void WriteActor_loadout_emits_perSetup_deepSlumber_when_present_omits_when_absent()
+    {
+        var slumber = new DeepSlumberEntry(
+            new List<int[]> { new[] { 2, 100 } },
+            new List<DeepSlumberLineEntry>
+            {
+                new(2, 800522, new List<DeepSlumberAreaEntry>
+                {
+                    new(1, true, 46,
+                        new List<int[]> { new[] { 24, 3950 } },
+                        new List<int[]> { new[] { 100, 20010940 } },
+                        new List<int[]> { new[] { 1008, 1 } }),
+                }),
+            });
+        var withSlumber = MakeLoadoutEntry() with { DeepSlumber = slumber };
+        var actor = new Actor(
+            Name: "Aria", Kind: "player", TeamId: 1, IsLocal: true, Uid: 1248014,
+            ProfessionId: 2, Level: 60, AbilityScore: 1, MaxHp: 1,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>(),
+            Loadouts: new List<LoadoutEntry> { withSlumber });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor));
+        Assert.Contains("\"deepSlumber\":{\"seasonLevels\":[[2,100]]", json);
+        Assert.Contains("\"lineId\":2,\"subType\":800522", json);
+        Assert.Contains("\"mid\":[[100,20010940]]", json);
+
+        var noSlumber = actor with { Loadouts = new List<LoadoutEntry> { MakeLoadoutEntry() } };
+        Assert.DoesNotContain("\"deepSlumber\"", CombatLogWriter.Write(MakeLoadoutLog(noSlumber)));
+    }
+
     [Fact]
     public void BuildLoadoutEntries_carries_activations_nullWhenAbsent()
     {

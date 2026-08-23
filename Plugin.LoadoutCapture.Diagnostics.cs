@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using Stellar.Abstractions.Diagnostics;
+using Stellar.Abstractions.Domain.DeepSlumber;
 using Stellar.Abstractions.Domain.Inventory;
 
 namespace Stellar.CombatMeter;
@@ -54,7 +55,7 @@ public sealed partial class Plugin
     ///
     /// <para><b>Format</b> (one line, <c>[LoadoutCapture]</c> prefix):</para>
     /// <code>
-    /// [LoadoutCapture] trigger=live-state prof=2 decision=MINTED entries=2 id=a1b2c3d4 gear=11 mods=5 imagines=[3923,3976] talent=105/70 marker=4
+    /// [LoadoutCapture] trigger=live-state prof=2 decision=MINTED entries=2 id=a1b2c3d4 gear=11 mods=5 imagines=[3923,3976] talent=105/70 ds=10a/7f3c91b0 marker=4
     /// [LoadoutCapture] trigger=live-state prof=2 decision=SKIPPED nosignal=loadout (held — will retry)
     /// </code>
     /// <list type="bullet">
@@ -84,6 +85,7 @@ public sealed partial class Plugin
         var imagines = cap.Imagines;
         for (var i = 0; i < (imagines?.Count ?? 0); i++) sb.Append(i == 0 ? "" : ",").Append(imagines![i]);
         sb.Append("] talent=").Append(cap.TalentStageId).Append('/').Append(cap.TalentNodes?.Count ?? 0)
+          .Append(" ds=").Append(DeepSlumberTerm(cap.DeepSlumber))
           .Append(" marker=").Append(_combatEventMarker);
         _services.Log.Info(sb.ToString());
         LogLiveCaptureDiag(cap);   // the full slot:configId dump behind the digest
@@ -102,6 +104,32 @@ public sealed partial class Plugin
         _services.Log.Info(
             $"[LoadoutCapture] trigger={TriggerName(trigger)} prof={professionId} " +
             $"decision=SKIPPED nosignal={noSignalField} (held — will retry)");
+    }
+
+    /// <summary>The Deep-Slumber term of the decision line: <c>&lt;areaCount&gt;a/&lt;8-hex sub-digest&gt;</c>,
+    /// or <c>none</c> when the framework's psychoscope read has not landed (or produced no lines) — the
+    /// no-signal case that neither mints nor blocks a setup. The sub-digest isolates the psychoscope's
+    /// own contribution to <c>id=</c>, so unequipping a factor in town shows BOTH terms moving together
+    /// and the owner can tell a psychoscope edit from a gear one at a glance. It is the same canonical
+    /// projection <see cref="LoadoutCapture.SameSetup"/> compares, so a moved <c>ds=</c> and an unmoved
+    /// <c>id=</c> would be a contradiction, never a normal outcome.</summary>
+    private static string DeepSlumberTerm(DeepSlumberState? state)
+    {
+        if (!DeepSlumberIdentity.HasSignal(state)) return "none";
+        var areas = 0;
+        foreach (var line in state!.Lines) areas += line.Areas.Count;
+        var h = 2166136261u;
+        DeepSlumberIdentity.FoldInto(ref h, state, static (ref uint hash, uint value) =>
+        {
+            unchecked
+            {
+                hash = (hash ^ (value & 0xFF)) * 16777619u;
+                hash = (hash ^ ((value >> 8) & 0xFF)) * 16777619u;
+                hash = (hash ^ ((value >> 16) & 0xFF)) * 16777619u;
+                hash = (hash ^ (value >> 24)) * 16777619u;
+            }
+        });
+        return areas.ToString(System.Globalization.CultureInfo.InvariantCulture) + "a/" + h.ToString("x8");
     }
 
     private string? _diagHeldField;   // DIAGNOSTICS-ONLY de-dupe memo for the held line above

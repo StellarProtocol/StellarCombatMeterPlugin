@@ -5,6 +5,7 @@
 // § SOLID — "stop and split before adding more."
 
 using System.Collections.Generic;
+using Stellar.Abstractions.Domain.DeepSlumber;
 using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
@@ -81,6 +82,19 @@ internal sealed record CapturedLoadout(
                                                   // as the uploaded classSpans (ICombatSnapshot.ServerNowMs,
                                                   // TickClassTimeline) so the site intersects them directly.
                                                   // Managed by LoadoutCapture.Capture — callers pass null.
+    DeepSlumberState? DeepSlumber = null,        // the local player's LIVE Deep-Slumber (Psychoscope) state at
+                                                  // capture — owner ruling: "when any equipment change such as
+                                                  // module,talents,equipments,slumberdream etc., and use have a
+                                                  // combat with that setup it require plugin to take snapshot of
+                                                  // it even class has no change." Its enabled areas + socketed /
+                                                  // allocated node maps join the setup identity via
+                                                  // DeepSlumberIdentity (score + season level deliberately
+                                                  // excluded); the WHOLE state is stored so the upload can carry
+                                                  // a per-setup `deepSlumber` block. NULL / empty = the framework
+                                                  // has no read yet — a no-signal wildcard that neither mints nor
+                                                  // blocks (same rule as Imagines). Owner staging run
+                                                  // sea/dXkw1PSyOG (2026-08-23): a factor unequipped between two
+                                                  // archives and re-equipped after produced ONE uploaded setup.
     IReadOnlyList<int>? Imagines = null);        // equipped Battle Imagine ids, slot-ordered [X, Z] (self-only),
                                                   // a copy of IResonanceState.Installed at capture. Empty (never
                                                   // null from a live capture — BuildLoadoutImagines always
@@ -207,7 +221,13 @@ internal sealed class LoadoutCapture
     ///
     /// <para>Imagines are deliberately EXCLUDED (they are logged literally instead): their compare is
     /// empty-is-no-signal in both directions (<see cref="ImaginesDiffer"/>), which no single-value
-    /// digest can express without lying about one of the two directions.</para></summary>
+    /// digest can express without lying about one of the two directions.</para>
+    ///
+    /// <para>Deep-Slumber IS folded in (2026-08-23) — it is far too large to log literally, and making
+    /// the digest move when a psychoscope factor moves is the whole point of the owner's in-town check.
+    /// Its own no-signal case stays honest because <see cref="DeepSlumberIdentity.FoldInto"/> folds
+    /// NOTHING for an unread/empty state, so a first read healing into real data moves neither this
+    /// digest nor <see cref="SameSetup"/>.</para></summary>
     internal static uint IdentityDigest(CapturedLoadout c)
     {
         var h = 2166136261u;   // FNV-1a/32
@@ -223,6 +243,7 @@ internal sealed class LoadoutCapture
             Fold(ref h, (uint)m.Slot); Fold(ref h, (uint)m.ConfigId); Fold(ref h, (uint)m.Quality);
             foreach (var p in SortedPairs(m.Parts)) { Fold(ref h, (uint)p[0]); Fold(ref h, (uint)p[1]); }
         }
+        DeepSlumberIdentity.FoldInto(ref h, c.DeepSlumber, Fold);
         return h;
     }
 
@@ -291,7 +312,8 @@ internal sealed class LoadoutCapture
     /// (pinned: SameContent_CombatAdvancedSince_StillRefreshesInPlace_NeverAppends), and Imagines
     /// follows empty-is-no-signal in BOTH directions — the refresh's pair wins (the []→populated
     /// heal, pinned by the ImagineSentinel tests) unless the refresh side is the empty one, which
-    /// must never wipe a fought pair.</summary>
+    /// must never wipe a fought pair. Deep-Slumber follows that SAME rule (2026-08-23): a refresh whose
+    /// psychoscope read is unresolved/empty must never blank the state the fight actually used.</summary>
     private static CapturedLoadout RefreshFought(CapturedLoadout fought, CapturedLoadout refresh)
     {
         var merged = refresh with
@@ -303,6 +325,10 @@ internal sealed class LoadoutCapture
         if ((fought.Imagines?.Count ?? 0) > 0 && (refresh.Imagines?.Count ?? 0) == 0)
         {
             merged = merged with { Imagines = fought.Imagines };
+        }
+        if (DeepSlumberIdentity.HasSignal(fought.DeepSlumber) && !DeepSlumberIdentity.HasSignal(refresh.DeepSlumber))
+        {
+            merged = merged with { DeepSlumber = fought.DeepSlumber };
         }
         return merged;
     }
@@ -365,12 +391,18 @@ internal sealed class LoadoutCapture
     /// (<c>loadoutVariantKey</c>, services/stellar-logs/src/do/mergeActors.ts) so the plugin and the
     /// server agree on what counts as "a different build" — including Quality in the module identity,
     /// matching that key exactly.</summary>
+    /// <para>Deep-Slumber joined the identity 2026-08-23 (owner staging run <c>sea/dXkw1PSyOG</c>: a
+    /// psychoscope factor unequipped between two archives and re-equipped after, yet the run uploaded a
+    /// single setup with a single activation stamp). It compares through
+    /// <see cref="DeepSlumberIdentity.Differs"/> — enabled areas + socketed/allocated node maps, canonical
+    /// order, empty/unread being no-signal in both directions exactly like Imagines above.</para>
     internal static bool SameSetup(CapturedLoadout a, CapturedLoadout b)
         => a.TalentStageId == b.TalentStageId
         && SameGear(a.Gear, b.Gear)
         && SameIntSet(a.TalentNodes, b.TalentNodes)
         && SameModules(a.Modules, b.Modules)
-        && !ImaginesDiffer(a.Imagines, b.Imagines);
+        && !ImaginesDiffer(a.Imagines, b.Imagines)
+        && !DeepSlumberIdentity.Differs(a.DeepSlumber, b.DeepSlumber);
 
     /// <summary>Whether Imagines contributes a genuine "different setup" signal to <see cref="SameSetup"/>
     /// — true only when BOTH sides are non-empty and the order-sensitive pair differs. An empty side

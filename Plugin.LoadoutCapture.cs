@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Domain.DeepSlumber;
 using Stellar.Abstractions.Domain.Inventory;
 using Stellar.Abstractions.Domain.Loadout;
 using Stellar.CombatMeter.LogUpload;
@@ -224,6 +225,13 @@ public sealed partial class Plugin
             TalentNodes:   talentNodes,
             Attributes:    BuildLoadoutAttributes(self),
             AbilityScore:  _services.CombatLookup.GetFightPoint(self),
+            // Deep-Slumber (Psychoscope) — owner ruling: a "slumberdream" change the player then fights
+            // with is its own snapshot. Read straight from the framework's live Lua-bridge state (the
+            // same source the archive-time actor-level block uses); null/empty until the bridge's first
+            // DS read lands, which the identity treats as no-signal rather than as "no psychoscope".
+            // Held by reference on purpose: the probe REPLACES this immutable record wholesale on every
+            // changed parse and never mutates it, so an entry can never be rewritten under us.
+            DeepSlumber:   _services.DeepSlumber.GetState(),
             Imagines:      BuildLoadoutImagines());
     }
 
@@ -336,8 +344,16 @@ public sealed partial class Plugin
             ? PreferNonEmpty(_services.Resonance.Installed, l.Imagines ?? System.Array.Empty<int>())
             : l.Imagines;
 
+        // Deep-Slumber: another INDEPENDENT live source (IDeepSlumber, not the loadout slot), refreshed
+        // for the active class's newest entry under the same never-blank rule — a live read that has not
+        // resolved (null / empty lines) keeps whatever the fight was captured with. Earlier entries, and
+        // earlier fought-with entries of this same class, keep their frozen state untouched.
+        var slumber = isLastOfActiveClass ? PreferReadDeepSlumber(_services.DeepSlumber.GetState(), l.DeepSlumber) : l.DeepSlumber;
+
         if (ResolveGearSource(isLastOfActiveClass, slotHasData, capturedHasData) == LoadoutGearSource.Captured)
-            return ReferenceEquals(imagines, l.Imagines) ? l : l with { Imagines = imagines };
+            return ReferenceEquals(imagines, l.Imagines) && ReferenceEquals(slumber, l.DeepSlumber)
+                ? l
+                : l with { Imagines = imagines, DeepSlumber = slumber };
 
         // Fill each component ONLY when the slot actually has it — a slot with data in one component
         // but not another (e.g. modules resolved, gear not yet) must never overwrite an already-captured
@@ -353,6 +369,7 @@ public sealed partial class Plugin
             GearDetail = PreferNonEmpty(freshDetail, l.GearDetail),
             Modules    = PreferNonEmpty(freshModules, l.Modules),
             Imagines   = imagines,
+            DeepSlumber = slumber,
         };
     }
 
@@ -362,6 +379,13 @@ public sealed partial class Plugin
     /// (LiveFirstLoadoutSourceTests.ActiveClass_ComponentNeverOverwrittenByEmptySource).</summary>
     internal static IReadOnlyList<T> PreferNonEmpty<T>(IReadOnlyList<T> fresh, IReadOnlyList<T> kept)
         => fresh.Count > 0 ? fresh : kept;
+
+    /// <summary>The same rule for the Deep-Slumber snapshot, whose "empty" is a state object with no
+    /// lines rather than an empty collection (a failed cultivate walk — see
+    /// <see cref="DeepSlumberIdentity.HasSignal"/>): an unresolved live read never blanks the
+    /// psychoscope the fight was captured with.</summary>
+    internal static DeepSlumberState? PreferReadDeepSlumber(DeepSlumberState? fresh, DeepSlumberState? kept)
+        => DeepSlumberIdentity.HasSignal(fresh) ? fresh : kept;
 
     // Maps a LoadoutSlot's per-class module set (slot → ModuleInfo, framework-resolved with rolled parts)
     // to the plugin's CapturedModule upload shape.

@@ -504,7 +504,11 @@ internal sealed class CombatLogAssembler
                 AttrPeaks:     l.AttrPeaks,
                 AbilityScore:  l.AbilityScore,
                 Imagines:      l.Imagines,
-                Activations:   l.Activations));
+                Activations:   l.Activations,
+                // Per-setup psychoscope (owner ruling, run sea/dXkw1PSyOG). The whole loadouts array is
+                // already self-only gated by ResolveLoadoutFields, so isLocal is true by construction
+                // here; reusing the SAME mapper as the actor-level block keeps the two shapes identical.
+                DeepSlumber:   BuildDeepSlumber(isLocal: true, l.DeepSlumber)));
         return list;
     }
 

@@ -284,6 +284,9 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             // Per-setup activation timeline (owner feature 2026-08-23) — ServerNowMs stamps, the
             // classSpans timebase. Additive: absent = no-timeline (old plugins / empty fixtures).
             if (l.Activations is { Count: > 0 } act) { w.Name("activations"); WriteLongList(w, act); }
+            // Per-setup psychoscope — SAME shape/emitter as the actor-level block (owner ruling, run
+            // sea/dXkw1PSyOG). Omitted entirely when the setup was captured before the DS read landed.
+            if (l.DeepSlumber is { } ds) { w.Name("deepSlumber"); WriteDeepSlumber(w, ds); }
             w.EndObject();
         }
         w.EndArray();

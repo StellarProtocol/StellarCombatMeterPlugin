@@ -217,7 +217,19 @@ internal sealed record LoadoutEntry(
     // each moment this setup BECAME the equipped identity (the SWAP moment, never first-fought) —
     // SAME timebase as the top-level classSpans, which the site intersects these against. Additive:
     // absent on old plugins = no-timeline. See CapturedLoadout.Activations / LoadoutCapture.Capture.
-    IReadOnlyList<long>? Activations = null);
+    IReadOnlyList<long>? Activations = null,
+    // PER-SETUP Deep-Slumber (Psychoscope) snapshot — owner ruling, staging run sea/dXkw1PSyOG
+    // (2026-08-23): a psychoscope factor the player then fights with is its own setup, so each setup
+    // must carry the psychoscope it was fought with, not just the run's final state.
+    //
+    // SHAPE: byte-for-byte the SAME DeepSlumberEntry the actor-level `deepSlumber` block uses (same
+    // BuildDeepSlumber mapper, same writer), rather than a trimmed identity-only subset. Deliberate:
+    // the site already renders that exact shape for the actor block, so per-setup rendering is pure
+    // reuse with nothing new to learn, and a subset would have dropped the two fields the identity
+    // excludes as derived/progression (area score, season level) — which are exactly what a reader
+    // wants to SEE beside a build even though they must not SPLIT one. The actor-level block is
+    // unchanged and still carries the archive-time state.
+    DeepSlumberEntry? DeepSlumber = null);
 
 /// <summary>One Deep-Slumber area on the wire — activation, score, and node allocations as
 /// [nodeId, value] pairs (big = socketed fantasy card id, mid = socketed item id, nodes = level).
