@@ -941,6 +941,41 @@ public sealed class LogUploadTests
         Assert.DoesNotContain("\"imagines\"", CombatLogWriter.Write(MakeLoadoutLog(noImagines)));
     }
 
+    // Per-setup activation timeline (owner feature 2026-08-23): ServerNowMs stamps ride each wire
+    // LoadoutEntry as additive `activations`; absent = no-timeline (old plugins / empty fixtures).
+    [Fact]
+    public void WriteActor_loadout_emits_activations_when_present_omits_when_absent()
+    {
+        var withTimeline = MakeLoadoutEntry() with { Activations = new List<long> { 1000, 9000 } };
+        var actor = new Actor(
+            Name: "Aria", Kind: "player", TeamId: 1, IsLocal: true, Uid: 1248014,
+            ProfessionId: 2, Level: 60, AbilityScore: 1, MaxHp: 1,
+            Attributes: new List<long[]>(), Gear: new List<int[]>(), Skills: new List<int[]>(),
+            Fashion: new List<Fashion>(),
+            Loadouts: new List<LoadoutEntry> { withTimeline });
+
+        var json = CombatLogWriter.Write(MakeLoadoutLog(actor));
+        Assert.Contains("\"activations\":[1000,9000]", json);
+
+        var noTimeline = actor with { Loadouts = new List<LoadoutEntry> { MakeLoadoutEntry() } };
+        Assert.DoesNotContain("\"activations\"", CombatLogWriter.Write(MakeLoadoutLog(noTimeline)));
+    }
+
+    [Fact]
+    public void BuildLoadoutEntries_carries_activations_nullWhenAbsent()
+    {
+        var captured = new List<CapturedLoadout>
+        {
+            MakeCapturedLoadout(2) with { Activations = new List<long> { 1000, 9000 } },
+            MakeCapturedLoadout(5),   // no timeline (old fixture shape) -> null
+        };
+
+        var mapped = CombatLogAssembler.BuildLoadoutEntries(captured)!;
+
+        Assert.Equal(new long[] { 1000, 9000 }, mapped.Single(l => l.ProfessionId == 2).Activations);
+        Assert.Null(mapped.Single(l => l.ProfessionId == 5).Activations);
+    }
+
     [Fact]
     public void WriteActor_loadout_emits_abilityScore_when_positive_and_omits_when_zero()
     {

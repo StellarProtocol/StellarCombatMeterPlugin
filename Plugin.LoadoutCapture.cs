@@ -162,7 +162,10 @@ public sealed partial class Plugin
             Attributes:    BuildLoadoutAttributes(self),
             AbilityScore:  _services.CombatLookup.GetFightPoint(self),
             Imagines:      BuildLoadoutImagines()),
-            _combatEventMarker);
+            _combatEventMarker,
+            // Activation-timeline stamp (owner feature 2026-08-23): ServerNowMs — the SAME clock
+            // TickClassTimeline stamps the uploaded classSpans with, so the site intersects them.
+            _services.CombatSnapshot.ServerNowMs);
     }
 
     // Slot-ordered copy of the live equipped Battle Imagine pair (IResonanceState.Installed) at

@@ -257,6 +257,84 @@ public class LoadoutCaptureTests
     }
 
     // -------------------------------------------------------------------------
+    // Per-setup ACTIVATION TIMELINE (owner-approved feature, 2026-08-23): a ServerNowMs stamp (the
+    // classSpans timebase) is appended when a setup BECOMES the equipped identity — at mint, on a
+    // draft replacement (the survivor), and on a swap-back re-match — never on a same-identity
+    // refresh of the already-active entry. The SWAP moment, not first-fought (owner ruling: players
+    // swap pre-run and between clear and boss phases; the span must start at the swap).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Activation_MintStampsExactlyOnce()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A"), combatMarker: 0, nowMs: 1000);
+
+        Assert.Equal(new long[] { 1000 }, capture.Snapshot().Single().Activations);
+    }
+
+    [Fact]
+    public void Activation_SameIdentityRefreshWhileActive_StampsNothing()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A"), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "A-refresh"), combatMarker: 0, nowMs: 2000);    // unfought refresh
+        capture.Capture(Fake(2, "A-refresh2"), combatMarker: 4, nowMs: 3000);   // fought refresh
+
+        Assert.Equal(new long[] { 1000 }, capture.Snapshot().Single().Activations);
+    }
+
+    [Fact]
+    public void Activation_SwapBack_ReactivatesTheOriginalEntry_BStampedBetween()
+    {
+        // A (mint t=1000) -> fight -> B (mint t=5000) -> fight -> back to A (t=9000): A's SINGLE
+        // entry carries both activations (no duplicate A entry minted), B keeps its one, and the
+        // re-activated A becomes the class's LAST entry — the active slot the top-level mirrors
+        // (ResolveLoadoutFields / ResolveSelfEquipment) read as "currently equipped".
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", gearItemId: 500), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "B", gearItemId: 400), combatMarker: 3, nowMs: 5000);
+        capture.Capture(Fake(2, "A2", gearItemId: 500), combatMarker: 7, nowMs: 9000);
+
+        var entries = capture.Snapshot();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(400, entries[0].Gear[0][1]);
+        Assert.Equal(new long[] { 5000 }, entries[0].Activations);         // B — stamped between
+        Assert.Equal(500, entries[1].Gear[0][1]);
+        Assert.Equal(new long[] { 1000, 9000 }, entries[1].Activations);   // A re-activated, now last
+    }
+
+    [Fact]
+    public void Activation_DraftReplacement_StampsTheSurvivorOnly_DeadDraftStampsDie()
+    {
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "draft-A", gearItemId: 500), combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "draft-B", gearItemId: 400), combatMarker: 0, nowMs: 2000);   // replaces A
+
+        var entry = capture.Snapshot().Single();
+        Assert.Equal(400, entry.Gear[0][1]);
+        Assert.Equal(new long[] { 2000 }, entry.Activations);   // only the survivor's stamp — A's died with it
+    }
+
+    [Fact]
+    public void Activation_FoughtFreeze_DoesNotBlockActivationAppends()
+    {
+        // FIX B (owner run sea/ZdTH3UwZQ6) freezes a fought entry's Skills/AbilityScore/Attributes on
+        // a same-identity refresh — the swap-back RE-ACTIVATION must still append its stamp while the
+        // frozen fields stay frozen at the fought capture.
+        var frostSkills = new List<int[]> { new[] { 1801, 5, 1 } };
+        var capture = new LoadoutCapture();
+        capture.Capture(Fake(2, "A", gearItemId: 500) with { Skills = frostSkills, AbilityScore = 53966 }, combatMarker: 0, nowMs: 1000);
+        capture.Capture(Fake(2, "B", gearItemId: 400), combatMarker: 3, nowMs: 5000);
+        capture.Capture(Fake(2, "A2", gearItemId: 500) with { Skills = new List<int[]>(), AbilityScore = 0 }, combatMarker: 7, nowMs: 9000);
+
+        var a = capture.Snapshot().Single(l => l.Gear[0][1] == 500);
+        Assert.Equal(new long[] { 1000, 9000 }, a.Activations);   // activation appended
+        Assert.Equal(frostSkills, a.Skills);                       // frozen fields stay frozen
+        Assert.Equal(53966, a.AbilityScore);
+    }
+
+    // -------------------------------------------------------------------------
     // SameSetup identity — pure content check. Probed by inverting each assertion once (flip a value,
     // confirm it flips the result) so these fixtures cannot pass regardless of the implementation.
     // -------------------------------------------------------------------------

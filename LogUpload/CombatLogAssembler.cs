@@ -503,7 +503,8 @@ internal sealed class CombatLogAssembler
                 Attributes:    l.Attributes,
                 AttrPeaks:     l.AttrPeaks,
                 AbilityScore:  l.AbilityScore,
-                Imagines:      l.Imagines));
+                Imagines:      l.Imagines,
+                Activations:   l.Activations));
         return list;
     }
 

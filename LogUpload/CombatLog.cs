@@ -212,7 +212,12 @@ internal sealed record LoadoutEntry(
     // Equipped Battle Imagine ids, slot-ordered [X, Z] (self-only). Additive/null on old uploads or
     // when unsynced. Owner gap, run B47O8jx6wp retest (2026-08-22): a swap alone mints a new
     // fought-with setup — see the plugin-internal CapturedLoadout.Imagines / LoadoutCapture.SameSetup.
-    IReadOnlyList<int>? Imagines = null);
+    IReadOnlyList<int>? Imagines = null,
+    // Per-setup ACTIVATION TIMELINE (owner-approved feature, 2026-08-23): ServerNowMs stamps for
+    // each moment this setup BECAME the equipped identity (the SWAP moment, never first-fought) —
+    // SAME timebase as the top-level classSpans, which the site intersects these against. Additive:
+    // absent on old plugins = no-timeline. See CapturedLoadout.Activations / LoadoutCapture.Capture.
+    IReadOnlyList<long>? Activations = null);
 
 /// <summary>One Deep-Slumber area on the wire — activation, score, and node allocations as
 /// [nodeId, value] pairs (big = socketed fantasy card id, mid = socketed item id, nodes = level).

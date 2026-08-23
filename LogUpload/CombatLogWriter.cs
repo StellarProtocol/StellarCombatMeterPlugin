@@ -281,6 +281,9 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             if (l.Imagines is { Count: > 0 } im) { w.Name("imagines"); WriteIntList(w, im); }
             if (l.Attributes is { Count: > 0 } at) { w.Name("attributes"); WriteLongPairs(w, at); }
             if (l.AttrPeaks is { Count: > 0 } apk) { w.Name("attrPeaks"); WriteLongPairs(w, apk); }
+            // Per-setup activation timeline (owner feature 2026-08-23) — ServerNowMs stamps, the
+            // classSpans timebase. Additive: absent = no-timeline (old plugins / empty fixtures).
+            if (l.Activations is { Count: > 0 } act) { w.Name("activations"); WriteLongList(w, act); }
             w.EndObject();
         }
         w.EndArray();
@@ -288,6 +291,14 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
 
     // Flat array of numbers (e.g. talent-tree node ids).
     private static void WriteIntList(JsonWriter w, IReadOnlyList<int> xs)
+    {
+        w.BeginArray();
+        foreach (var x in xs) w.Number(x);
+        w.EndArray();
+    }
+
+    // Flat array of 64-bit numbers (e.g. activation-timeline ms stamps).
+    private static void WriteLongList(JsonWriter w, IReadOnlyList<long> xs)
     {
         w.BeginArray();
         foreach (var x in xs) w.Number(x);

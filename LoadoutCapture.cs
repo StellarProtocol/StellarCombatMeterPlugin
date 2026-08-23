@@ -41,6 +41,15 @@ internal sealed record CapturedLoadout(
     IReadOnlyList<long[]>? AttrPeaks  = null,    // [attrId, peakValue] sparse combat peaks (self-only)
     long AbilityScore = 0,                       // this class's combat power (FightPoint) read while it was ACTIVE;
                                                   // gear-dependent, so per-class. 0 when unread. (self-only)
+    IReadOnlyList<long>? Activations = null,     // per-setup ACTIVATION TIMELINE (owner-approved feature,
+                                                  // 2026-08-23): ServerNowMs stamps appended by LoadoutCapture
+                                                  // each time this setup BECOMES the equipped identity — at
+                                                  // mint and on a swap-back re-match. The SWAP moment, never
+                                                  // first-fought (owner ruling: players swap pre-run / between
+                                                  // clear and boss; the span starts at the swap). SAME timebase
+                                                  // as the uploaded classSpans (ICombatSnapshot.ServerNowMs,
+                                                  // TickClassTimeline) so the site intersects them directly.
+                                                  // Managed by LoadoutCapture.Capture — callers pass null.
     IReadOnlyList<int>? Imagines = null);        // equipped Battle Imagine ids, slot-ordered [X, Z] (self-only),
                                                   // a copy of IResonanceState.Installed at capture. Empty (never
                                                   // null from a live capture — BuildLoadoutImagines always
@@ -94,13 +103,22 @@ internal sealed class LoadoutCapture
     ///                                             Skills/AbilityScore/Attributes frozen — see
     ///                                             <see cref="RefreshFought"/> (owner staging run
     ///                                             sea/ZdTH3UwZQ6, the chimera setup).
+    ///   - same content as an EARLIER entry     → swap-back: RE-ACTIVATE that entry — new activation
+    ///                                             stamp, moved to the end (the class's active slot);
+    ///                                             a trailing unfought draft dies. See
+    ///                                             <see cref="TryRematchEarlier"/>.
     ///   - different content, marker UNCHANGED  → REPLACE the last entry (no combat occurred since it
     ///                                             was captured — an unfought draft, e.g. someone
     ///                                             flicking through gear before pulling).
     ///   - different content, marker ADVANCED   → APPEND a new entry (the last entry WAS fought with —
     ///                                             preserve it; owner run B47O8jx6wp).
+    ///
+    /// <paramref name="nowMs"/> (ICombatSnapshot.ServerNowMs — the classSpans timebase) is stamped
+    /// onto a setup's <see cref="CapturedLoadout.Activations"/> whenever it BECOMES the equipped
+    /// identity: at mint, on a draft replacement (the survivor), and on a swap-back re-match. A
+    /// same-identity refresh of the already-active (last) entry stamps nothing.
     /// </summary>
-    public void Capture(CapturedLoadout capture, long combatMarker)
+    public void Capture(CapturedLoadout capture, long combatMarker, long nowMs = 0)
     {
         if (!_byProfession.TryGetValue(capture.ProfessionId, out var entries))
         {
@@ -110,7 +128,7 @@ internal sealed class LoadoutCapture
 
         if (entries.Count == 0)
         {
-            entries.Add(new Entry(capture, combatMarker));
+            entries.Add(new Entry(Activate(capture, nowMs), combatMarker));   // mint — first activation
             return;
         }
 
@@ -120,17 +138,64 @@ internal sealed class LoadoutCapture
             var refreshed = combatMarker != last.MarkerAtCapture
                 ? RefreshFought(last.Capture, capture)   // fought-with — freeze the class-switch-racy fields
                 : capture;                                // unfought draft — wholesale refresh, as before
-            entries[^1] = new Entry(refreshed, last.MarkerAtCapture);
+            // The last entry IS this class's active setup — a same-identity refresh appends NO
+            // activation; the entry's existing timeline is carried forward untouched.
+            entries[^1] = new Entry(refreshed with { Activations = last.Capture.Activations }, last.MarkerAtCapture);
             return;
         }
+
+        if (TryRematchEarlier(entries, capture, combatMarker, nowMs)) return;   // swap-back → re-activate
 
         if (combatMarker == last.MarkerAtCapture)
         {
-            entries[^1] = new Entry(capture, combatMarker);   // unfought draft — overwrite in place
+            // Unfought draft — overwrite in place; the dead draft's activation stamps die with it.
+            entries[^1] = new Entry(Activate(capture, nowMs), combatMarker);
             return;
         }
 
-        entries.Add(new Entry(capture, combatMarker));   // fought-with — preserve it, start a new entry
+        entries.Add(new Entry(Activate(capture, nowMs), combatMarker));   // fought-with — preserve it, new entry activates
+    }
+
+    // Appends nowMs to the capture's activation timeline — the moment this setup BECAME the equipped
+    // identity (owner ruling 2026-08-23: the span starts at the SWAP, never the first hit — players
+    // swap pre-run and between clear and boss phases). Timebase = ICombatSnapshot.ServerNowMs, the
+    // SAME clock the uploaded classSpans stamp (TickClassTimeline), so the site intersects the two.
+    private static CapturedLoadout Activate(CapturedLoadout capture, long nowMs)
+    {
+        var prior = capture.Activations;
+        var stamps = new List<long>((prior?.Count ?? 0) + 1);
+        if (prior is not null) stamps.AddRange(prior);
+        stamps.Add(nowMs);
+        return capture with { Activations = stamps };
+    }
+
+    // Swap-back (owner-approved activation-timeline design, 2026-08-23): re-equipping a setup
+    // identical to an EARLIER entry of this class RE-ACTIVATES that entry — a new activation stamp,
+    // and the entry moves to the end (the class's active slot, which ResolveLoadoutFields /
+    // ResolveSelfEquipment read as "currently equipped") — instead of minting a duplicate. Content
+    // refreshes under the same fought-freeze rules as a last-entry match (a non-last entry is fought
+    // by construction: an unfought last entry is always replaced, never appended past). An unfought
+    // draft sitting at the end dies, its activation stamps with it (the draft-replacement rule).
+    private static bool TryRematchEarlier(List<Entry> entries, CapturedLoadout capture, long combatMarker, long nowMs)
+    {
+        for (var i = entries.Count - 2; i >= 0; i--)
+        {
+            if (!SameSetup(entries[i].Capture, capture)) continue;
+            var matched = entries[i];
+            var refreshed = combatMarker != matched.MarkerAtCapture
+                ? RefreshFought(matched.Capture, capture)
+                : capture;
+            if (combatMarker == entries[^1].MarkerAtCapture)
+            {
+                entries.RemoveAt(entries.Count - 1);   // the trailing unfought draft dies
+            }
+            entries.RemoveAt(i);
+            entries.Add(new Entry(
+                Activate(refreshed with { Activations = matched.Capture.Activations }, nowMs),
+                matched.MarkerAtCapture));
+            return true;
+        }
+        return false;
     }
 
     /// <summary>Same-identity refresh of a FOUGHT-WITH entry: keep the fought capture's
@@ -169,7 +234,10 @@ internal sealed class LoadoutCapture
     /// <summary>Every entry captured so far this run, for the upload assembler. A class played once
     /// with no fought-with equipment change carries exactly one entry (unchanged from before this
     /// spec evolved); a class fought with, then changed, carries one entry PER distinct fought-with
-    /// setup, oldest first. Classes never played this run are absent.</summary>
+    /// setup. Per-class order is LAST-ACTIVATION order (a swap-back moves the re-activated entry to
+    /// the end), so each class's LAST entry is its currently-active setup — the invariant the
+    /// top-level mirrors (ResolveLoadoutFields / ResolveSelfEquipment) read. Classes never played
+    /// this run are absent.</summary>
     public IReadOnlyList<CapturedLoadout> Snapshot()
     {
         var result = new List<CapturedLoadout>();
