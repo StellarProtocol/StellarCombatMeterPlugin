@@ -468,25 +468,28 @@ public sealed partial class Plugin
     {
         var v = verdict ?? new UploadVerdict(true, false);
         _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
-        // Chunks upload only after the summary landed (ordering guarantee) — the
-        // worker cannot associate orphaned chunks with a run it never saw. Skip when
-        // this upload lost the multi-uploader merge (Kept=false): the logId is not a
-        // segment's blob, so chunk POSTs would all 400 ("unknown-log").
-        if (v.Kept && chunks.Count > 0)
+        // UPLOAD ALL — never skip on the merge verdict (owner rule 2026-08-25: "all uploads kept, never
+        // drop"). Every uploader streams its OWN event chunks + positions regardless of `Kept`, so each
+        // uploader's per-uploader view (`?upload=`) is COMPLETE. The worker keeps every contributor's
+        // logId in the segment's ledger (resolveIngest.upsertUploadRef, logId-keyed) and accepts every
+        // ledger logId's chunks (`acceptedLogIds`); positions attach to this uploader's OWN UploadRef
+        // (`withUploaderPositionsRef`, incl. the non-representative "superseded" path). The old
+        // `Kept`/`HavePositions` skips are what dropped a non-elected uploader's data — removed.
+        // Chunks still upload only AFTER the summary landed (ordering guarantee — the worker cannot
+        // associate chunks with a run it never saw).
+        if (chunks.Count > 0)
             ChunkUploader.UploadChunksFireAndForget(
                 LogUploader.ApiBase, log.Header.Region,
                 log.Header.Encounter.LevelUuid, log.Header.LogId, chunks,
                 msg => _services.Log.Warning(msg));
-        else if (!v.Kept && chunks.Count > 0)
-            _services.Log.Info($"[CombatMeter.SP1] Run already fully uploaded by a party member — skipping {chunks.Count} chunk upload(s).");
         if (replayDoc is not null)
         {
-            // The doc is now built even when the replay cell is off (it must be RETAINED regardless), so
-            // the send is gated here too — otherwise `off` would still ship positions.
+            // The doc is built even when the replay cell is off (it must be RETAINED regardless), so the
+            // send is gated ONLY on the replay cell — no longer on the server's `HavePositions`, so each
+            // uploader's own tracks reach the server for their per-uploader replay.
             if (!replaySendAllowed)
                 _services.Log.Info("[CombatMeter.SP1] Positions retained, not uploaded (replay cell off).");
-            else if (!v.HavePositions) UploadReplayDoc(replayDoc);
-            else _services.Log.Info("[CombatMeter.SP1] Positions already attached server-side — skipping positions upload.");
+            else UploadReplayDoc(replayDoc);
         }
     }
 
