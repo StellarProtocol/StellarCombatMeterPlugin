@@ -441,7 +441,7 @@ public sealed partial class Plugin
     /// alongside the existing sticky <c>killed</c> flag (wire-confirmed death OR the scripted-vanish
     /// inference, both resolved upstream in <see cref="BossStatus"/>). MarkDead is idempotent, so
     /// evaluating both conditions every tick is safe.</summary>
-    private void TickStageBossHpTracks(HpTimelineSampler sampler, long combatStartMs, int nowMs)
+    private void TickStageBossHpTracks(HpTimelineSampler sampler, long combatStartMs, long nowMs)
     {
         if (_stageBosses.Count > 0)
         {

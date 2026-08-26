@@ -29,7 +29,14 @@ internal sealed class ReplayCapture
     // INTENTIONALLY preserved across Active on/off toggles within one encounter (combat lulls) so
     // the replay timeline is continuous. Reset() (called per-encounter at archive) re-arms the stamp.
     // This is deliberate, NOT a bug.
-    private int _combatStartMs;
+    //
+    // P0 int32-wrap fix (2026-08-26, owner-proven arithmetically on run sea/dN42ox4Nhd: uploaded
+    // doc.startMs off from the true epoch by EXACTLY 416 * 2^32): this field used to be `int`,
+    // silently wrapping the epoch-scale ServerNowMs value (~1.7e12, far beyond int32's ~2.1e9 range)
+    // modulo 2^32 at the VERY FIRST stamp. Everything computed FROM it (Plugin.ResolveWindowBounds'
+    // captureStartMs input, Plugin.Replay.cs's msOffset) inherited the wrap. `long` end to end now —
+    // see CombatStartMs's doc for the full chain.
+    private long _combatStartMs;
     private bool _startStamped;
 
     public ReplayCapture(TryGetTransform tryGet, int maxSamplesPerTrack, int maxTotalSamples, int sampleIntervalMs)
@@ -43,7 +50,14 @@ internal sealed class ReplayCapture
     public bool Active { get; set; }
     public int TotalSamples { get; private set; }
     public IReadOnlyDictionary<EntityId, PositionTrack> Tracks => _tracks;
-    public int CombatStartMs => _combatStartMs;
+
+    /// <summary>Absolute server-clock ms (<c>ServerNowMs</c> scale, ~1.7e12) at the first Tick after
+    /// Reset() — the run-constant capture-start anchor every position/HP track's relative Ms0 is
+    /// rebased against, and the anchor <c>Plugin.ResolveWindowBounds</c> adds the small capture-
+    /// relative watermark/upperMs deltas onto to recover an ABSOLUTE window bound. MUST stay `long`
+    /// (P0 fix, 2026-08-26): as `int` this silently wrapped modulo 2^32, and every downstream
+    /// absolute-timestamp computation inherited the wrap.</summary>
+    public long CombatStartMs => _combatStartMs;
 
     /// <summary>True once <see cref="NoteEntity"/> refused an id because <see cref="MaxTracks"/>
     /// was reached. Cleared by <see cref="Reset"/>.</summary>
@@ -58,7 +72,7 @@ internal sealed class ReplayCapture
         _order.Add(id);
     }
 
-    public void Tick(int nowMs, float dtMs)
+    public void Tick(long nowMs, float dtMs)
     {
         if (!Active || TotalSamples >= _maxTotalSamples) return;
         if (!_startStamped) { _combatStartMs = nowMs; _startStamped = true; }
@@ -71,10 +85,14 @@ internal sealed class ReplayCapture
         SampleAllEntities(nowMs);
     }
 
-    private void SampleAllEntities(int nowMs)
+    private void SampleAllEntities(long nowMs)
     {
+        // rel is a genuinely SMALL capture-relative delta (ms since _combatStartMs) even though both
+        // operands are epoch-scale — safe to narrow to int for PositionSample's own (intentionally
+        // small, relative) Ms field.
         var rel = nowMs - _combatStartMs;
         if (rel < 0) rel = 0;
+        var relMs = (int)rel;
         for (var i = 0; i < _order.Count; i++)
         {
             if (TotalSamples >= _maxTotalSamples) break;
@@ -87,7 +105,7 @@ internal sealed class ReplayCapture
             // (ReplayCaptureGate.ShouldCapture), so this guard is scoped to instanced-run captures.
             // Regression: run sea/UaU5VejCA0 — docs/recon/thanatos-walkin-geo.md.
             if (IsUnstreamedZeroTransform(p.X, p.Y, p.Z)) continue;
-            _tracks[id].Add(new PositionSample(rel, p.X, p.Y, p.Z, yaw));
+            _tracks[id].Add(new PositionSample(relMs, p.X, p.Y, p.Z, yaw));
             TotalSamples++;
         }
     }

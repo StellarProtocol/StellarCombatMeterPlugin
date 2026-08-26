@@ -18,10 +18,13 @@ namespace Stellar.CombatMeter.Tests;
 // pin it against the exact shapes from the owner's real histdocs.
 public class WindowAnchorTests
 {
-    // A round, easy-to-eyeball absolute anchor for _replay.CombatStartMs (the run-constant capture
-    // start, stamped once at dungeon entry) — real values are ServerNowMs-scale (huge), but only the
-    // DIFFERENCES from this anchor matter for these assertions.
-    private const int CaptureStart = 1_000_000;
+    // P0 int32-wrap fix (2026-08-26, owner-proven arithmetically on run sea/dN42ox4Nhd): a REALISTIC
+    // epoch-scale anchor for _replay.CombatStartMs (the run-constant capture start, stamped once at
+    // dungeon entry) — real values are ServerNowMs-scale, ~1.7e12, far past int.MaxValue (~2.147e9).
+    // The first version of these tests used a small int-range constant (1_000_000) — which is EXACTLY
+    // how the wrap bug escaped detection: every assertion still passed against the (buggy) `int
+    // captureStartMs` signature, because a value that small never wraps. Never shrink this back down.
+    private const long CaptureStart = 1_770_000_000_000L;
 
     [Fact]
     public void Window1_ClaimsEntryToBank_WalkinIncluded()
@@ -108,6 +111,23 @@ public class WindowAnchorTests
         Assert.True(endMs > CaptureStart);
     }
 
+    [Fact]
+    public void EpochScaleCaptureStart_NeverWrapsAtInt32Boundary()
+    {
+        // Direct proof of the int32-wrap fix: (int)1_770_000_000_000L truncates (unchecked, two's
+        // complement low-32-bits) to exactly 473_474_048 in C# — the wrapped value the OLD `int
+        // captureStartMs` signature would have silently produced. Assert the real result equals the
+        // true epoch sum, not that wrapped value (and not off by any other multiple of 2^32 either).
+        const long int32WrapArtifact = 473_474_048L;
+
+        var (startMs, endMs) = Plugin.ResolveWindowBounds(CaptureStart, watermarkMs: -1, upperMs: 500);
+
+        Assert.Equal(CaptureStart, startMs);
+        Assert.Equal(CaptureStart + 500, endMs);
+        Assert.NotEqual(int32WrapArtifact, startMs);
+        Assert.NotEqual(int32WrapArtifact, endMs);
+    }
+
     // ── Differential control: the OLD (pre-fix) formula, byte-identical since 44ee9c8 (2026-07-01) ──
     //
     // PrepareReplayDoc used to assign `StartMs = encounter.StartMs` / `EndMs = encounter.EndMs`
@@ -152,5 +172,41 @@ public class WindowAnchorTests
         Assert.NotEqual(old.StartMs, fixedStart);
         Assert.Equal(27_500, old.StartMs - fixedStart);
         Assert.Equal(fixedEnd, old.EndMs);
+    }
+
+    // ── Differential control: the OLD int32-wrap defect specifically (distinct bug from the anchor- ─
+    //    choice bug above — this one is about the STORAGE TYPE of captureStartMs, not which anchor it
+    //    represents), reproducing the owner's own "off by an exact multiple of 2^32" proof shape.
+
+    /// <summary>Reproduces the SPECIFIC old truncation: `(int)someEpochScaleLong` — the cast
+    /// `Plugin.Replay.cs`'s `nowMs`/`upperMs` computations used to apply to `ServerNowMs` before this
+    /// fix, and that `ReplayCapture._combatStartMs`/`CombatStartMs` used to apply implicitly by being
+    /// declared `int`. Unchecked (C#'s default), so this is a silent low-32-bits truncation, not an
+    /// exception.</summary>
+    private static int TruncateToInt32(long epochScaleMs) => unchecked((int)epochScaleMs);
+
+    [Fact]
+    public void OldInt32Truncation_WrapsByAnExactMultipleOf2Pow32_NewFormulaDoesNot()
+    {
+        // CaptureStart (1_770_000_000_000) truncates to 473_474_048 via the old `(int)` cast — a
+        // wrap of EXACTLY 412 * 2^32, the same "off by an exact multiple of 2^32" shape the owner
+        // proved on the real upload (run sea/dN42ox4Nhd: 416 * 2^32).
+        var wrappedCaptureStart = TruncateToInt32(CaptureStart);
+        Assert.Equal(473_474_048, wrappedCaptureStart);
+
+        var wrapDelta = CaptureStart - wrappedCaptureStart;
+        Assert.Equal(0, wrapDelta % ((long)uint.MaxValue + 1));   // an EXACT multiple of 2^32
+        Assert.Equal(412L * ((long)uint.MaxValue + 1), wrapDelta);
+
+        // The OLD (int-typed) doc-assembly seam would have produced this wrapped StartMs — reproduced
+        // here as the wrapped value ITSELF plus the same small relative offset ResolveWindowBounds
+        // adds, mirroring exactly what a captureStartMs-as-int signature would compute.
+        var oldWrappedStartMs = (long)wrappedCaptureStart + 0;   // watermarkMs=-1 clamps to 0, same as window 1
+
+        var (fixedStart, _) = Plugin.ResolveWindowBounds(CaptureStart, watermarkMs: -1, upperMs: 500);
+
+        Assert.NotEqual(oldWrappedStartMs, fixedStart);
+        Assert.Equal(wrapDelta, fixedStart - oldWrappedStartMs);
+        Assert.Equal(CaptureStart, fixedStart);   // the fix: the TRUE epoch value, un-wrapped
     }
 }

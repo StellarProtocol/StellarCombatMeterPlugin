@@ -56,8 +56,17 @@ public sealed partial class Plugin
     /// (zero position samples during the actual loading screen) still gets CLAIMED by the surrounding
     /// window — this function never inspects the samples, only the window boundaries, so a sparse
     /// window's declared span is never narrowed down to "just where samples happen to exist".</para>
+    ///
+    /// <para><b>P0 int32-wrap fix (2026-08-26):</b> <paramref name="captureStartMs"/> is `long`, not
+    /// `int` — <c>ReplayCapture.CombatStartMs</c> (the source of this value) used to be `int`,
+    /// silently wrapping the epoch-scale ServerNowMs value modulo 2^32 (owner-proven arithmetically
+    /// on run sea/dN42ox4Nhd: the uploaded doc's startMs was off from the true epoch by EXACTLY
+    /// 416 * 2^32). A wrapped `captureStartMs` here would produce a wrapped StartMs/EndMs regardless
+    /// of how correctly this function itself adds — the fix has to hold end to end from the very
+    /// first `ServerNowMs` read (see <c>ReplayCapture._combatStartMs</c>'s doc for the full chain),
+    /// not just at this seam.</para>
     /// </summary>
-    internal static (long StartMs, long EndMs) ResolveWindowBounds(int captureStartMs, long watermarkMs, long upperMs)
+    internal static (long StartMs, long EndMs) ResolveWindowBounds(long captureStartMs, long watermarkMs, long upperMs)
     {
         var lowerCaptureRelativeMs = watermarkMs < 0 ? 0 : watermarkMs;
         return (captureStartMs + lowerCaptureRelativeMs, captureStartMs + upperMs);

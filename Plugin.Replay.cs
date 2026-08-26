@@ -209,7 +209,8 @@ public sealed partial class Plugin
         // events, which by definition haven't happened yet during the walk-in. NoteEntity is a cheap
         // idempotent dict-contains check, safe to call every tick (covers late-joining members too).
         NoteRosterEntities();
-        var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
+        // P0 int32-wrap fix: raw `long` ServerNowMs — an (int) cast here used to wrap mod 2^32 (owner-proven on run sea/dN42ox4Nhd) and every downstream absolute timestamp inherited it.
+        var nowMs = _services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
         // Post-scene-change settle gate — skip probing while the mass entity teardown/rebuild after a
         // line-switch / dungeon-enter is still in flight (see SafeTryGetTransform's crash rationale).
@@ -305,7 +306,7 @@ public sealed partial class Plugin
     /// coexist; <c>Track</c> is idempotent so re-tracking the same entity from both blocks is a
     /// harmless no-op.
     /// </summary>
-    private void TickHpTimelines(int nowMs, float dtMs)
+    private void TickHpTimelines(long nowMs, float dtMs)
     {
         if (_hpSampler is null || _replay is null) return;
         // HP timelines stay committed-only: pre-combat vitals are unknown/absent (no boss
@@ -430,16 +431,18 @@ public sealed partial class Plugin
             // Open field is still excluded, structurally: a field fight has no run id.
             if (entry.LevelUuid == 0) return null;
 
-            // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs); a boss-cut cap (same truncation) moves it earlier.
-            var upperMs = (long)((int)_services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs);
-            if (replayUpperCapServerMs != ReplayUpperCapUnset) upperMs = ReplayWindow.CapUpper(upperMs, (int)replayUpperCapServerMs - _replay.CombatStartMs, _replayWatermarkMs);
+            // upperMs = capture-relative "now" (a genuinely small delta — see _replayWatermarkMs); a boss-cut cap moves it earlier.
+            // P0 int32-wrap fix: stays `long` end to end — the old `(int)ServerNowMs`/`(int)replayUpperCapServerMs` casts wrapped mod 2^32 (owner-proven on run sea/dN42ox4Nhd).
+            var upperMs = _services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs;
+            if (replayUpperCapServerMs != ReplayUpperCapUnset) upperMs = ReplayWindow.CapUpper(upperMs, replayUpperCapServerMs - _replay.CombatStartMs, _replayWatermarkMs);
             var windowTracks = SliceWindowPositions(_replayWatermarkMs, upperMs);
             if (windowTracks.Count == 0) return null;                // empty window → no upload, watermark unchanged
             _replayWindowUpperMs = upperMs;
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
             // Per-doc contract unchanged: rebase Ms0 onto THIS segment's combat start (capture zero is run-constant).
-            var msOffset = _replay.CombatStartMs - (int)encounter.StartMs;
+            // P0 int32-wrap fix: subtract in `long` (both epoch-scale) THEN narrow — the old `(int)encounter.StartMs` cast wrapped independently of _replay.CombatStartMs.
+            var msOffset = (int)(_replay.CombatStartMs - encounter.StartMs);
 
             var boss = ResolveWindowBossFields(windowTracks, upperMs, msOffset);
             // Multi-boss (Task 4): every stage-set boss, windowed — feeds Bosses[] + the meta-id union.
