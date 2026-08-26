@@ -130,6 +130,28 @@ public sealed partial class Plugin
         BankRunBoundary(reason);
     }
 
+    // Segment CUT with run identity preserved (raid run-split fix, spec 2026-08-26). A mid-run
+    // loading flash resolved by a combat event with NO re-key evidence (same run id, same
+    // IRunTimer.Epoch) is a stage transition INSIDE one run — measured 7×/raid on Clash! Field of
+    // Forgotten Illusions (668840469433679872 / 420861014951591936). Bank the segment exactly as
+    // the old boundary commit did (same ArchiveReason → trig "boundary", same run-scoped tracker
+    // resets, same stage-boss/elite latch hygiene) but KEEP the identity block: _lastRunId,
+    // _lastRunStartMs and _relaunchPartyFallback survive, the relaunch marker stays, and
+    // NotifyDiscordRunEnded does not fire (the run did NOT end — it used to fire 7×/raid here).
+    // This is what makes a split structurally impossible without run-id/epoch evidence: the
+    // once-per-run start latch can no longer be reset mid-run, so a framework timer rank-upgrade
+    // has nothing to re-latch through. Owner decision 2026-08-26: cuts are PRESERVED (the
+    // scripted-death stage seam is cut only by this path), identity is not.
+    private void RunSegmentCut(AutoArchive.ArchiveReason reason)
+    {
+        ResetRunScopedTrackers();
+        ManualArchive(reason);
+        // Same post-archive latch hygiene as BankRunBoundary (see its 2026-08-13 staleness note):
+        // this boundary-shaped archive attempt had its read; the latches must not outlive it.
+        _segmentStageBosses = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        _segmentElites = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+    }
+
     // Run-boundary poll (spec 2026-08-12, B-mode glue landed Task 4). Alloc-free: four reads + a mask
     // compare + an enum compare. Called from Plugin.cs's OnUpdate BEFORE TrackClearLatch() so a commit
     // banks the OLD run before the new run's state starts tracking. The CommittedOldRunId == _lastRunId
@@ -146,7 +168,7 @@ public sealed partial class Plugin
     {
         bool loading = (_services.ClientState.UiState & GameUIState.Loading) != 0;
         var boundaryAction = _runBoundary.Observe(
-            _services.Dungeon.CurrentRunId, _services.Dungeon.RunTimerStartMs,
+            _services.Dungeon.CurrentRunId, _services.RunTimer.Epoch,
             inWorldLoading: loading, combatEvent: false, nowMs: _services.CombatSnapshot.ServerNowMs);
         if (boundaryAction == RunBoundaryTracker.BoundaryAction.Commit && _runBoundary.CommittedOldRunId == _lastRunId)
         {
@@ -168,12 +190,17 @@ public sealed partial class Plugin
         if (!_runBoundary.IsArmed) return;
         bool loading = (_services.ClientState.UiState & GameUIState.Loading) != 0;
         var boundaryAction = _runBoundary.Observe(
-            _services.Dungeon.CurrentRunId, _services.Dungeon.RunTimerStartMs,
+            _services.Dungeon.CurrentRunId, _services.RunTimer.Epoch,
             inWorldLoading: loading, combatEvent: true, nowMs: _services.CombatSnapshot.ServerNowMs);
         if (boundaryAction == RunBoundaryTracker.BoundaryAction.Commit && _runBoundary.CommittedOldRunId == _lastRunId)
         {
             LogRunBoundary("combat-belt", _runBoundary.CommittedOldRunId, _services.Dungeon.CurrentRunId, _stats.Count);
             RunBoundaryCore(AutoArchive.ArchiveReason.RunBoundary);
+        }
+        else if (boundaryAction == RunBoundaryTracker.BoundaryAction.Cut)
+        {
+            LogRunBoundary("combat-belt-cut", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+            RunSegmentCut(AutoArchive.ArchiveReason.RunBoundary);
         }
     }
 }

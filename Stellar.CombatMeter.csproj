@@ -17,7 +17,7 @@
     <!-- Requires framework 2.2.0: ILoadout.LiveState + ILoadout.LiveStateChanged (live-first,
          event-driven build capture) and IPluginServices.DeepSlumber. Published on nuget.org
          2026-08-24; the registry manifest's minModSystemVersion must match. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.2.0" />
+    <PackageReference Include="Stellar.Abstractions" Version="2.5.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
