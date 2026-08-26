@@ -93,13 +93,13 @@ public sealed partial class Plugin
             : (default, "", null, null, false);
     }
 
-    // Multi-boss (Task 4): every stage-set boss's id/configId/HP, sliced+rebased to THIS window — the
+    // Multi-boss (Task 4): every boss member's id/configId/HP, sliced+rebased to THIS window — the
     // source for both the additive Bosses[] array and the meta-id union below. Reuses BuildBossHpTracks()
-    // (Task 3, Plugin.Replay.cs) as the per-member source and mirrors ResolveWindowBossFields's own
-    // per-member inWindow rule (sliced HP present OR a position track this window) — a boss that
+    // (Plugin.BossDetection.cs — moved there by spec item 3/recon L3, which extended its membership to
+    // the sampler-tracked ∪ stage-set union) as the per-member source and mirrors ResolveWindowBossFields's
+    // own per-member inWindow rule (sliced HP present OR a position track this window) — a boss that
     // vanished on death still rides the array on its death-0 HP sample alone, same as the scalar. Returns
-    // null when the stage set is empty (today's non-boss-phase configs) or every member is absent from
-    // this window.
+    // null when the merged membership is empty or every member is absent from this window.
     private List<(EntityId id, int configId, HpTrack? hp)>? BuildWindowBossMembers(
         Dictionary<EntityId, PositionSample[]> windowTracks, long upperMs, int msOffset)
     {
@@ -109,7 +109,11 @@ public sealed partial class Plugin
         foreach (var (id, configId, track) in members)
         {
             var hp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
-            if (hp is null && !windowTracks.ContainsKey(id)) continue;   // absent from this window entirely
+            var inDoc = hp is not null || windowTracks.ContainsKey(id);
+            // recon §6 line 6 — per-boss sample accounting at archive time (settles L2 grid drift +
+            // L3 captured-vs-uploaded in the field). Diagnostics-gated; see Plugin.Diagnostics.cs.
+            LogBossHpArchive(id, track, hp, upperMs, inDoc);
+            if (!inDoc) continue;   // absent from this window entirely
             (list ??= new List<(EntityId, int, HpTrack?)>(members.Count)).Add((id, configId, hp));
         }
         return list;

@@ -19,17 +19,91 @@ public class HpTimelineSamplerTests
     }
 
     [Fact]
-    public void ClampsPctAndSkipsWhenMaxHpUnknown()
+    public void ClampsPctAndAppendsSentinelWhenMaxHpUnknown()
     {
+        // L2 fix (2026-08-26 raid-bosshp-capture-design): an unusable tick (maxHp<=0) APPENDS the
+        // sentinel instead of skipping — Ms0 stays the FIRST tracked time and every later sample's
+        // grid position (Ms0 + i*cadence) still names the real elapsed time.
         var reads = new Queue<(long, long)>(new[] { (150L, 100L), (0L, 0L), (-5L, 100L) });
         var s = new HpTimelineSampler(_ => reads.Dequeue());
         s.Track(7, ms0: 1000);
         s.Tick(500f); // 150/100 -> clamped 100
-        s.Tick(500f); // maxHp 0 -> skipped
+        s.Tick(500f); // maxHp 0 -> sentinel (-1), grid position preserved
         s.Tick(500f); // -5/100 -> clamped 0
         var t = s.GetTrack(7)!;
-        Assert.Equal(new[] { 100, 0 }, t.Pct);
+        Assert.Equal(new[] { 100, HpTimelineSampler.SentinelPct, 0 }, t.Pct);
         Assert.Equal(1000, t.Ms0);
+    }
+
+    [Fact]
+    public void SentinelGrid_KeepsGridPositionHonest_AcrossASkipRun()
+    {
+        // A run of several unusable ticks in a row must each still occupy their own grid slot — the
+        // whole point of the L2 fix is that a LATER real sample's Ms0+i*cadence position matches when
+        // it actually happened, not an earlier position shifted by the skipped ticks.
+        var reads = new Queue<(long, long)>(new[]
+        {
+            (50L, 100L),   // real: 50%
+            (0L, 0L), (0L, 0L), (0L, 0L),   // three unusable ticks in a row
+            (75L, 100L),   // real: 75%, at grid index 4 (Ms0 + 4*500 = 2000)
+        });
+        var s = new HpTimelineSampler(_ => reads.Dequeue());
+        s.Track(1, ms0: 0);
+        for (var i = 0; i < 5; i++) s.Tick(500f);
+        var t = s.GetTrack(1)!;
+        Assert.Equal(new[] { 50, -1, -1, -1, 75 }, t.Pct);
+        // The final real sample's grid time is Ms0 + 4*500 = 2000 — exactly when it was captured,
+        // not shifted early by the three skipped ticks (the pre-fix bug).
+        Assert.Equal(2000, t.Ms0 + 4L * HpTimelineSampler.SampleIntervalMs);
+    }
+
+    [Fact]
+    public void SentinelGrid_TrimBelow_CountsSentinelsAsOrdinaryGridSlots()
+    {
+        // TrimBelow's math is purely positional (Ms0 + i*cadence), so a sentinel occupies a grid slot
+        // exactly like a real sample — this pins that a run of sentinels doesn't confuse the trim.
+        var reads = new Queue<(long, long)>(new[]
+        {
+            (50L, 100L), (0L, 0L), (0L, 0L), (60L, 100L),
+        });
+        var s = new HpTimelineSampler(_ => reads.Dequeue());
+        s.Track(1, ms0: 0);
+        for (var i = 0; i < 4; i++) s.Tick(500f);   // grid 0,500,1000,1500 -> [50,-1,-1,60]
+        s.TrimBelow(1000, cadenceMs: 500);          // drop grid <= 1000 (indices 0,1,2 incl. 2 sentinels)
+        var t = s.GetTrack(1)!;
+        Assert.Equal(1500, t.Ms0);
+        Assert.Equal(new[] { 60 }, t.Pct);
+    }
+
+    [Fact]
+    public void MarkDead_IgnoresTrailingSentinels_NoOpWhenRealLastSampleIsZero()
+    {
+        // A real 0% was already recorded, then a couple of unusable ticks (sentinels) landed after
+        // it — MarkDead must look PAST the sentinels to see the real terminal 0 and stay idempotent
+        // instead of appending a redundant duplicate.
+        var reads = new Queue<(long, long)>(new[] { (0L, 100L), (0L, 0L), (0L, 0L) });
+        var s = new HpTimelineSampler(_ => reads.Dequeue());
+        s.Track(7, ms0: 0);
+        s.Tick(500f);   // real 0%
+        s.Tick(500f);   // sentinel
+        s.Tick(500f);   // sentinel
+        s.MarkDead(7, 1500);
+        Assert.Equal(new[] { 0, -1, -1 }, s.GetTrack(7)!.Pct);   // no duplicate 0 appended
+    }
+
+    [Fact]
+    public void MarkDead_AppendsZero_AfterTrailingSentinels_WhenNoRealZeroYet()
+    {
+        // No real 0% has landed — only sentinels trail the last real (non-zero) sample. A death
+        // observed after a run of gaps must still append the terminal 0.
+        var reads = new Queue<(long, long)>(new[] { (40L, 100L), (0L, 0L), (0L, 0L) });
+        var s = new HpTimelineSampler(_ => reads.Dequeue());
+        s.Track(7, ms0: 0);
+        s.Tick(500f);   // real 40%
+        s.Tick(500f);   // sentinel
+        s.Tick(500f);   // sentinel
+        s.MarkDead(7, 1500);
+        Assert.Equal(new[] { 40, -1, -1, 0 }, s.GetTrack(7)!.Pct);
     }
 
     [Fact]

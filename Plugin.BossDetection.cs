@@ -414,8 +414,8 @@ public sealed partial class Plugin
 
     /// <summary>Archive-time resolver: the LIVE stage-boss set when it still has members, else
     /// <see cref="_segmentStageBosses"/>. Consumed by BuildHistoryEntry (Plugin.History.cs) and
-    /// BuildBossHpTracks (Plugin.Replay.cs, feeds BuildWindowBossMembers). Allocates via
-    /// MembersSnapshot() — archive/window-assembly time only, never per-frame (see
+    /// <see cref="BuildBossHpTracks"/> (feeds BuildWindowBossMembers, Plugin.ReplayWindow.cs).
+    /// Allocates via MembersSnapshot() — archive/window-assembly time only, never per-frame (see
     /// <see cref="TickStageBossHpTracks"/> for the alloc-free hot-path equivalent).</summary>
     private IReadOnlyList<(EntityId Id, int ConfigId, bool Killed)> ResolveCurrentStageBosses()
         => PreferLiveStageBosses(_stageBosses.MembersSnapshot(), _segmentStageBosses);
@@ -427,7 +427,13 @@ public sealed partial class Plugin
     /// gone. Called every replay tick (Plugin.Replay.cs's TickHpTimelines) — alloc-free either way:
     /// MemberAt is indexed access into the live set; the latch is an already-allocated snapshot from the
     /// drain/reset moment, indexed here with a plain [] read — no new allocation on this per-frame
-    /// path.</summary>
+    /// path.
+    ///
+    /// Spec item 4 (2026-08-26 raid-bosshp-capture-design): MarkDead ALSO fires on
+    /// <see cref="IsNativeBossZero"/> — the native boss-blood tap reporting the bar at literal 0% —
+    /// alongside the existing sticky <c>killed</c> flag (wire-confirmed death OR the scripted-vanish
+    /// inference, both resolved upstream in <see cref="BossStatus"/>). MarkDead is idempotent, so
+    /// evaluating both conditions every tick is safe.</summary>
     private void TickStageBossHpTracks(HpTimelineSampler sampler, long combatStartMs, int nowMs)
     {
         if (_stageBosses.Count > 0)
@@ -436,7 +442,7 @@ public sealed partial class Plugin
             {
                 var (id, _, killed) = _stageBosses.MemberAt(i);
                 sampler.Track(id.Value, nowMs - combatStartMs);
-                if (killed) sampler.MarkDead(id.Value, nowMs - combatStartMs);
+                if (ShouldMarkBossDead(killed, IsNativeBossZero(id))) sampler.MarkDead(id.Value, nowMs - combatStartMs);
             }
             return;
         }
@@ -444,7 +450,12 @@ public sealed partial class Plugin
         {
             var (id, _, killed) = _segmentStageBosses[i];
             sampler.Track(id.Value, nowMs - combatStartMs);
-            if (killed) sampler.MarkDead(id.Value, nowMs - combatStartMs);
+            if (ShouldMarkBossDead(killed, IsNativeBossZero(id))) sampler.MarkDead(id.Value, nowMs - combatStartMs);
         }
     }
+
+    // IsNativeBossZero / BuildBossHpTracks / MergeBossMembership / LookupReplayMonster (spec items 3+4,
+    // recon L3) live in Plugin.BossHpMembership.cs — this file was at the 500-LoC guardrail and that
+    // group is a cohesive, separately-testable unit (the replay HP-track membership union), not core
+    // boss-candidate/kill detection.
 }

@@ -266,6 +266,7 @@ public sealed partial class Plugin
         _replaySpecs.Clear();
         _trackCapLogged = false;
         _bossDeathMarked = false;
+        _bossHpTickLastState.Clear();   // recon §6 line-2 rate-limit latch (Plugin.Diagnostics.cs)
         _replayWatermarkMs  = ReplayWatermarkUnset;
         _replayWindowUpperMs = 0;
     }
@@ -317,12 +318,14 @@ public sealed partial class Plugin
             }
         }
 
-        // When the boss's vitals read dead (hp <= 0 while it was a known boss), stamp a final 0%
-        // on its HP track so the replay shows the kill (see HpTimelineSampler.MarkDead). One-shot.
+        // When the boss's vitals read dead (hp <= 0 while it was a known boss) OR the native
+        // boss-blood tap reads literal 0% (spec item 4 — an independent signal for a raid boss whose
+        // WIRE vitals starve, recon L1), stamp a final 0% on its HP track so the replay shows the
+        // kill (see HpTimelineSampler.MarkDead). One-shot.
         if (!_bossDeathMarked && _bossEntityId.Value != 0)
         {
             var bv = _services.CombatLookup.GetVitals(_bossEntityId);
-            if (bv.MaxHp > 0 && bv.Hp <= 0)
+            if (ShouldMarkBossDead(bv.MaxHp > 0 && bv.Hp <= 0, IsNativeBossZero(_bossEntityId)))
             {
                 _hpSampler.MarkDead(_bossEntityId.Value, nowMs - _replay.CombatStartMs);
                 _bossDeathMarked = true;
@@ -513,29 +516,10 @@ public sealed partial class Plugin
         return (bossIdStr, _bossMonsterInfo);
     }
 
-    /// <summary>
-    /// Per-member HP-track builder (multi-boss plan Task 3): every current stage-set boss's id,
-    /// monster config id, and sampled HP track (null if the sampler has no samples for it yet).
-    /// Consumed by <c>BuildWindowBossMembers</c> (Task 4, Plugin.ReplayWindow.cs), which slices+rebases
-    /// each member's track to the upload window and feeds both the additive
-    /// <see cref="Replay.PositionUploadDoc.Bosses"/> array and the meta-id union. Critical 1 fix (final
-    /// review): reads <c>ResolveCurrentStageBosses()</c> (Plugin.BossDetection.cs) — the live set, or the
-    /// sticky latch when the live set already drained/reset before this ran — instead of the live set
-    /// directly, so a window built after the boss died/the run boundary fired still carries it. This
-    /// allocates a list of size Count either way, which is fine here (archive/window-assembly time,
-    /// never per-tick).
-    /// </summary>
-    private IReadOnlyList<(EntityId id, int configId, HpTrack? track)> BuildBossHpTracks()
-    {
-        var members = ResolveCurrentStageBosses();
-        var list = new List<(EntityId, int, HpTrack?)>(members.Count);
-        for (var i = 0; i < members.Count; i++)
-        {
-            var (id, configId, _) = members[i];
-            list.Add((id, configId, _hpSampler?.GetTrack(id.Value)));
-        }
-        return list;
-    }
+    // BuildBossHpTracks (multi-boss plan Task 3, extended by spec item 3/recon L3 to union in
+    // sampler-tracked-but-not-in-stage-set bosses) moved to Plugin.BossDetection.cs alongside
+    // ResolveCurrentStageBosses/MergeBossMembership — it now needs that file's stage-boss-set state
+    // and pure merge helper, and Plugin.Replay.cs is already at the file-size guardrail.
 
     // -----------------------------------------------------------------------
     // Helpers
