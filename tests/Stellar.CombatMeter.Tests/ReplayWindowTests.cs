@@ -189,6 +189,15 @@ public class ReplayWindowTests
     public void IsAllSentinel_false_for_an_empty_track()
         => Assert.False(ReplayWindow.IsAllSentinel(new HpTrack(0, System.Array.Empty<int>())));
 
+    // Minor 1 (2026-08-26 full-chain re-review): mirrors the boss cases above — IsAllSentinel is the
+    // SAME entity-agnostic predicate Plugin.ReplayWindow.cs's BuildWindowEliteMembers now consults
+    // (identically to BuildWindowBossMembers/ResolveWindowBossFields), so an elite whose only HP
+    // samples this window are all L2 gaps is treated as "no data" too, never admitted with a
+    // data-less HP chip.
+    [Fact]
+    public void IsAllSentinel_true_for_an_elite_track_that_is_all_gaps()
+        => Assert.True(ReplayWindow.IsAllSentinel(new HpTrack(0, new[] { -1, -1, -1, -1 })));
+
     // ── CapUpper: inline boss-phase upper cap (Task 7) — moves the trash/boss boundary earlier while
     //    keeping the windows contiguous (the concatenation invariant this whole file guards). ──
 

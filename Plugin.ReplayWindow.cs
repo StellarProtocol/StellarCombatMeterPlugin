@@ -135,6 +135,11 @@ public sealed partial class Plugin
     // ResolveCurrentElites (Plugin.EliteDetection.cs) instead of the stage-boss set. CAPTURE ONLY: feeds
     // PositionUploadDoc.Elites and nothing else — no meta-id union, no scalar representative (see
     // PositionUploadDoc.Elites' own doc for the full boundary).
+    //
+    // Minor 1 (2026-08-26 full-chain re-review): mirrors BuildWindowBossMembers's M2 fix — an
+    // ALL-SENTINEL slice (every sample a L2 gap, no real data) is nulled before the "in window" test,
+    // the same "no HP data" handling the boss sites already got, so an elite doesn't get admitted
+    // with a data-less HP chip either.
     private List<(EntityId id, int configId, HpTrack? hp)>? BuildWindowEliteMembers(
         Dictionary<EntityId, PositionSample[]> windowTracks, long upperMs, int msOffset)
     {
@@ -143,7 +148,8 @@ public sealed partial class Plugin
         List<(EntityId, int, HpTrack?)>? list = null;
         foreach (var (id, configId, track) in members)
         {
-            var hp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            var slicedHp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            var hp = slicedHp is not null && ReplayWindow.IsAllSentinel(slicedHp) ? null : slicedHp;
             if (hp is null && !windowTracks.ContainsKey(id)) continue;   // absent from this window entirely
             (list ??= new List<(EntityId, int, HpTrack?)>(members.Count)).Add((id, configId, hp));
         }

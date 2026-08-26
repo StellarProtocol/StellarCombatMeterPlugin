@@ -306,8 +306,12 @@ public class RaidKillMissTests
 
         // The boss walks to another stage of the raid's one big map — a Normal disappear. The
         // framework KEEPS the row (LeftAoi=true), stale-but-real, last seen at 1% (under the 15%
-        // scripted floor) — TickHarness's `evicted = !v.IsKnown || v.LeftAoi` must catch this.
-        h.Tick(boss, KeptButLeftAoi(100, 10_000), pending: false, nowMs: 216_000);
+        // scripted floor) — TickHarness's `evicted = !v.IsKnown || v.LeftAoi` must catch this. Assert
+        // the ENGINE-FACING return, not just the set's post-drain state (Minor 3, full-chain
+        // re-review): this pins that the kill reaches ArchiveReason.BossKill — i.e. an actual archive
+        // fires — not merely that the stage set happens to empty out.
+        Assert.Equal(ArchiveReason.BossKill,
+            h.Tick(boss, KeptButLeftAoi(100, 10_000), pending: false, nowMs: 216_000));
 
         // The set must have drained — proving the stage does NOT wedge open forever, so a later
         // stage's boss can be admitted fresh.

@@ -111,12 +111,21 @@ public sealed partial class Plugin
         // of "Unknown" — GetEntityName alone returns "Unknown" for the local player / weak cases. Captured at
         // archive time while the entity is still live, which is correct.
         EntityId self = _services.CombatSnapshot.LocalEntityId;
+        // Minor 2 (2026-08-26 full-chain re-review): gate on IsStillAoiKnown (Plugin.Replay.cs), not
+        // IsKnown alone — a KEPT-but-LeftAoi row (framework LeftAoi fix) is `IsKnown=true` with
+        // STALE Hp/MaxHp from before the entity left AOI. This is a display-only snapshot (the
+        // Entity Inspector's frozen header), so showing that stale pair as if it were current is
+        // misleading; falling to 0 reproduces the pre-LeftAoi-fix honest "unknown" experience
+        // instead. Reuses the SAME pure seam SafeTryGetTransform's crash-risk gate (I4) already
+        // uses and that ReplayProbeGuardTests.IsStillAoiKnown_* already pins — no new test needed
+        // here, this call site is IL2CPP-adjacent glue like SafeTryGetTransform's own wiring.
+        var stillKnown = IsStillAoiKnown(vitals);
         var snap = new EntitySnapshot
         {
             Name       = EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
             FightPoint = _services.CombatLookup.GetFightPoint(id),
-            Hp         = vitals.IsKnown ? vitals.Hp : 0,
-            MaxHp      = vitals.IsKnown ? vitals.MaxHp : 0,
+            Hp         = stillKnown ? vitals.Hp : 0,
+            MaxHp      = stillKnown ? vitals.MaxHp : 0,
             TeamId     = _services.CombatLookup.GetTeamId(id),
         };
         CaptureAttributes(id, snap);
