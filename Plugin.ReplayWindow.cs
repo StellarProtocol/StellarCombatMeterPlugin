@@ -20,6 +20,49 @@ public sealed partial class Plugin
     // stay contiguous → concatenation unbroken). Consumed in PrepareReplayDoc via ReplayWindow.CapUpper.
     internal const long ReplayUpperCapUnset = long.MaxValue;
 
+    /// <summary>
+    /// P0 walk-in-anchor fix (2026-08-26, owner ground-truth run qCUzbYtTmI): the replay window's
+    /// DECLARED <c>[StartMs, EndMs]</c> bounds — what the uploaded doc CLAIMS to cover — as ABSOLUTE
+    /// server-clock timestamps, the SAME scale <c>entry.EnteredAtMs</c>/<c>ArchivedAtMs</c> (and
+    /// therefore <c>encounter.StartMs</c>/<c>EndMs</c>, <c>CombatLogAssembler.BuildEncounter</c>)
+    /// already use — <b>NOT</b> the small, per-window, combat-start-ZEROED relative numbers
+    /// individual track/HP samples carry as their own <c>Ms0</c> (those intentionally reset to a
+    /// DIFFERENT reference every window, via <c>msOffset</c>, so they cannot double as a cross-window
+    /// stitching anchor — a site ordering/placing several windows on one real-world session timeline
+    /// needs an ABSOLUTE, monotonically-comparable value, exactly like <c>EnteredAtMs</c>/
+    /// <c>ArchivedAtMs</c> already provide for every OTHER archived entry).
+    ///
+    /// Before this fix, <c>PrepareReplayDoc</c> set these two fields from
+    /// <c>encounter.StartMs</c>/<c>encounter.EndMs</c> — the DPS/damage-log's own COMBAT-ONLY span
+    /// (<c>entry.EnteredAtMs</c>/<c>ArchivedAtMs</c>) — a field-level bug present in this file's
+    /// ENTIRE git history back to the walk-in-capture arc's original commit (44ee9c8, 2026-07-01),
+    /// verified via <c>git log -L</c>, so it predates every commit on this branch AND the released
+    /// 2.5.0 build. A site that trusts <c>StartMs</c>/<c>EndMs</c> as the window's valid range (a
+    /// completely reasonable reading of those field names) would clip/hide any track sample whose
+    /// reconstructed absolute time falls outside them — and every pre-combat sample's true time does,
+    /// since the window genuinely starts BEFORE combat (the dungeon-entry walk-in, or a post-teleport
+    /// arrival). The owner's "the replay renders the wrong spawn" / "post-teleport arrival + heal-up
+    /// movement unclaimed" symptoms are both explained by this: the doc always claimed only its own
+    /// combat-only sub-span, never the true watermark-to-cut window.
+    ///
+    /// <para>Window 1 (<paramref name="watermarkMs"/> == <see cref="ReplayWatermarkUnset"/>, i.e.
+    /// nothing has been banked yet this run) claims from <paramref name="captureStartMs"/> itself —
+    /// the dungeon-entry walk-in's own absolute anchor. Window N (a real watermark from the PREVIOUS
+    /// archive's own cut, in capture-relative ms) claims from THAT cut, converted back to absolute via
+    /// <c>captureStartMs + watermarkMs</c>. <see cref="EndMs"/> is always <c>captureStartMs +
+    /// upperMs</c> (THIS archive's own cut) — never <c>encounter.EndMs</c>, for the identical reason
+    /// (though the two are numerically close in practice, since both represent "now" at archive time
+    /// read a tick apart; this one is exact for what the tracks actually cover). An empty load segment
+    /// (zero position samples during the actual loading screen) still gets CLAIMED by the surrounding
+    /// window — this function never inspects the samples, only the window boundaries, so a sparse
+    /// window's declared span is never narrowed down to "just where samples happen to exist".</para>
+    /// </summary>
+    internal static (long StartMs, long EndMs) ResolveWindowBounds(int captureStartMs, long watermarkMs, long upperMs)
+    {
+        var lowerCaptureRelativeMs = watermarkMs < 0 ? 0 : watermarkMs;
+        return (captureStartMs + lowerCaptureRelativeMs, captureStartMs + upperMs);
+    }
+
     // Slices the position buffer to the window (lowerExclusive, upperInclusive]; keeps only entities
     // with at least one sample in the window (they define the window's meta set). Pure slicing via
     // ReplayWindow; the source buffers are not mutated here (freeing happens in AdvanceReplayWatermark).

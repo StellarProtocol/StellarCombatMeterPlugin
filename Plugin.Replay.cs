@@ -445,6 +445,7 @@ public sealed partial class Plugin
             // Multi-boss (Task 4): every stage-set boss, windowed — feeds Bosses[] + the meta-id union.
             var windowBosses = BuildWindowBossMembers(windowTracks, upperMs, msOffset);
             var windowElites = BuildWindowEliteMembers(windowTracks, upperMs, msOffset);   // ELITE CAPTURE channel — feeds Elites[] only, see PositionUploadDoc.Elites' doc
+            var (windowStartMs, windowEndMs) = ResolveWindowBounds(_replay.CombatStartMs, _replayWatermarkMs, upperMs);   // P0 walk-in-anchor fix — see its doc (Plugin.ReplayWindow.cs)
 
             var doc = PositionTrackAssembler.Assemble(
                 samplesByEntity: windowTracks,
@@ -461,8 +462,8 @@ public sealed partial class Plugin
                 LogId        = GenerateReplayLogId(),
                 LevelUuid    = entry.LevelUuid,
                 LocalUid     = localUid,
-                StartMs      = encounter.StartMs,
-                EndMs        = encounter.EndMs,
+                StartMs      = windowStartMs,
+                EndMs        = windowEndMs,
                 Nonce        = GenerateReplayNonce(),
                 BossEntityId = boss.idStr,
                 BossHp       = boss.hp,
