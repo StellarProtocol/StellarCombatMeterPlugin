@@ -181,6 +181,25 @@ public class HpTimelineSamplerTests
     }
 
     [Fact]
+    public void MarkDead_IsExempt_FromTheMaxSamplesCap()
+    {
+        // I5 (2026-08-26 full-chain review): with the L2 sentinel-grid fix a long-gappy track can
+        // legitimately sit AT the cap (every tick unusable -> sentinel). MarkDead appends at most one
+        // terminating sample (idempotency guarantees that), so the cap that exists to bound unbounded
+        // per-tick growth must never be the reason the terminal death 0% goes missing.
+        var s = new HpTimelineSampler(_ => (0, 0));   // every tick unusable -> sentinel
+        s.Track(1, 0);
+        for (var i = 0; i < HpTimelineSampler.MaxSamplesPerEntity; i++) s.Tick(500f);
+        Assert.Equal(HpTimelineSampler.MaxSamplesPerEntity, s.GetTrack(1)!.Pct.Count);   // at the cap
+
+        s.MarkDead(1, 999_999);
+
+        var track = s.GetTrack(1)!;
+        Assert.Equal(HpTimelineSampler.MaxSamplesPerEntity + 1, track.Pct.Count);   // exceeds the cap by one
+        Assert.Equal(0, track.Pct[^1]);
+    }
+
+    [Fact]
     public void MarkDead_appends_a_final_zero_sample()
     {
         long hp = 50, maxHp = 100;

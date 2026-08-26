@@ -82,12 +82,18 @@ public sealed partial class Plugin
     // detection). Gating BossHp on position presence re-clipped the replay short of 0% — the exact
     // bug this release fixes. Returns blanks + null HP only when the boss is absent from the window
     // entirely (no HP AND no positions).
+    //
+    // M2 (2026-08-26 full-chain review): an ALL-SENTINEL slice (every sample a L2 gap, no real data)
+    // is treated the SAME as no HP data — nulled before the "in window" test — so a boss whose only
+    // HP entry this window is an unbroken run of gaps doesn't get admitted with a data-less HP chip;
+    // it still rides the window on its position samples alone, same as any other no-HP-data boss.
     private (EntityId id, string idStr, MonsterInfo? info, HpTrack? hp, bool inWindow) ResolveWindowBossFields(
         Dictionary<EntityId, PositionSample[]> windowTracks, long upperMs, int msOffset)
     {
         var (repId, idStr, info) = ResolveBossRepresentative();
         if (repId.Value == 0) return (default, "", null, null, false);
-        var hp = RebaseHpTrack(SliceHpWindow(_hpSampler?.GetTrack(repId.Value), upperMs), msOffset);
+        var slicedHp = RebaseHpTrack(SliceHpWindow(_hpSampler?.GetTrack(repId.Value), upperMs), msOffset);
+        var hp = slicedHp is not null && ReplayWindow.IsAllSentinel(slicedHp) ? null : slicedHp;
         return hp is not null || windowTracks.ContainsKey(repId)
             ? (repId, idStr, info, hp, true)
             : (default, "", null, null, false);
@@ -95,8 +101,8 @@ public sealed partial class Plugin
 
     // Multi-boss (Task 4): every boss member's id/configId/HP, sliced+rebased to THIS window — the
     // source for both the additive Bosses[] array and the meta-id union below. Reuses BuildBossHpTracks()
-    // (Plugin.BossDetection.cs — moved there by spec item 3/recon L3, which extended its membership to
-    // the sampler-tracked ∪ stage-set union) as the per-member source and mirrors ResolveWindowBossFields's
+    // (Plugin.BossHpMembership.cs — moved there by spec item 3/recon L3, which extended its membership
+    // to the sampler-tracked ∪ stage-set union) as the per-member source and mirrors ResolveWindowBossFields's
     // own per-member inWindow rule (sliced HP present OR a position track this window) — a boss that
     // vanished on death still rides the array on its death-0 HP sample alone, same as the scalar. Returns
     // null when the merged membership is empty or every member is absent from this window.
@@ -108,11 +114,16 @@ public sealed partial class Plugin
         List<(EntityId, int, HpTrack?)>? list = null;
         foreach (var (id, configId, track) in members)
         {
-            var hp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            var slicedHp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            // M2: an all-sentinel slice ("all gaps, no real data") is nulled before the doc-membership
+            // test — see ResolveWindowBossFields's doc for the full rationale. The diagnostic below
+            // still logs the RAW sliced result (pre-nulling) so a field read shows the true slice size
+            // even when it was discarded for being data-less.
+            var hp = slicedHp is not null && ReplayWindow.IsAllSentinel(slicedHp) ? null : slicedHp;
             var inDoc = hp is not null || windowTracks.ContainsKey(id);
             // recon §6 line 6 — per-boss sample accounting at archive time (settles L2 grid drift +
             // L3 captured-vs-uploaded in the field). Diagnostics-gated; see Plugin.Diagnostics.cs.
-            LogBossHpArchive(id, track, hp, upperMs, inDoc);
+            LogBossHpArchive(id, track, slicedHp, upperMs, inDoc);
             if (!inDoc) continue;   // absent from this window entirely
             (list ??= new List<(EntityId, int, HpTrack?)>(members.Count)).Add((id, configId, hp));
         }

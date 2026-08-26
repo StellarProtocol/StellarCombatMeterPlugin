@@ -179,7 +179,14 @@ public sealed partial class Plugin
             var (id, _, _) = _stageBosses.MemberAt(i);
             var v = _services.CombatLookup.GetVitals(id);
             bool dead    = IsRealBossDeath(v);
-            bool evicted = !v.IsKnown;
+            // C1b (2026-08-26 raid-bosshp-capture-design, full-chain review): a Normal AOI-disappear no
+            // longer evicts the vitals row (framework LeftAoi fix) — it KEEPS stale-but-known data, so
+            // IsKnown alone no longer means "still in AOI". This code's whole "left AOI" signal (the
+            // scripted-kill/stage-drain inference below) depended on IsKnown flipping false on eviction;
+            // without also checking LeftAoi, a raid boss that legitimately left AOI to another stage
+            // reads Present forever and Aggregate().gone never fires — the run-wide §13 wedge. DO NOT
+            // weaken this back to `!v.IsKnown` alone.
+            bool evicted = !v.IsKnown || v.LeftAoi;
 
             // UPLOAD-ONLY: remember this member's last LIVE HP fraction for the scripted-kill inference
             // below (deliberately re-writing the SAME value ObserveBossKillState wrote this tick — see its

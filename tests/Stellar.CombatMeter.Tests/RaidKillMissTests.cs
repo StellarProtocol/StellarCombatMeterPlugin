@@ -38,6 +38,13 @@ public class RaidKillMissTests
     private static EntityVitals MaxHpOnly(long maxHp) => new(0, maxHp, IsKnown: true) { HasHpObservation = false };
     private static readonly EntityVitals Vanished = EntityVitals.Unknown;   // evicted — not known at all
 
+    // C1b fixture: a Normal AOI-disappear (framework 2026-08-26 fix) KEEPS the row — IsKnown stays
+    // true and HasHpObservation stays whatever it last was — but flags LeftAoi. This is the shape
+    // BossStatus's "evicted" test must ALSO catch (`!v.IsKnown || v.LeftAoi`), or a raid boss that
+    // legitimately left AOI to another stage reads Present forever.
+    private static EntityVitals KeptButLeftAoi(long hp, long maxHp) =>
+        new(hp, maxHp, IsKnown: true) { HasHpObservation = true, LeftAoi = true };
+
     // ── PIN 2 (part a): observation marks Killed ONLY on a real Hp<=0 read — NO low-HP inference ──────
     //
     // Owner explicitly rejected "<=2 % = dead": a wipe leaves the boss alive at 0.01 %. IsRealBossDeath is
@@ -179,7 +186,12 @@ public class RaidKillMissTests
             {
                 if (v.HasHpObservation && v.MaxHp > 0) _frac[boss.Value] = (float)v.Hp / v.MaxHp;
                 bool dead = Plugin.IsRealBossDeath(v);
-                bool evicted = !v.IsKnown;
+                // C1b (2026-08-26 raid-bosshp-capture-design, full-chain review): mirrors the REAL
+                // BossStatus() fix exactly — a Normal AOI-disappear now KEEPS the vitals row
+                // (IsKnown stays true), so "left AOI" is `!v.IsKnown || v.LeftAoi`, not `!v.IsKnown`
+                // alone. Weakening this back re-opens the §13 run-wide wedge THIS HARNESS exists to
+                // catch — see A_kept_but_left_aoi_row_still_scripted_kills_and_drains_the_stage below.
+                bool evicted = !v.IsKnown || v.LeftAoi;
                 float lastFrac = _frac.TryGetValue(boss.Value, out var f) ? f : -1f;
                 bool scripted = Plugin.IsScriptedRaidVanishKill(evicted, isRaid: true, lastFrac);
                 Stage.SetLiveness(boss, new StageBossSet.BossLiveness
@@ -269,6 +281,54 @@ public class RaidKillMissTests
         // no BossKill. This is the exact sea/CvCyokazcx upload.
         Assert.Null(missed.Tick(boss, Vanished, pending: false, nowMs: 230_000));
         Assert.False(GetKilled(missed, boss));
+    }
+
+    // ── C1b (2026-08-26 full-chain review): a KEPT-but-LeftAoi row must still evict/scripted-kill ───
+    //
+    // The framework's raid-bosshp-capture-design fix stopped evicting the vitals row on a Normal
+    // AOI-disappear (a raid boss walking to another stage of the raid's one big map) — the row is now
+    // KEPT, stale-but-real, with IsKnown staying true and a new LeftAoi flag set. BossStatus's
+    // `evicted` test existed ONLY to detect "left AOI" as a precondition for the scripted-vanish rule;
+    // without also checking LeftAoi it would never fire again for a kept row, the stage would never
+    // read Aggregate().gone, and DrainIfAllGone would never run — the run-wide §13 wedge (a LATER
+    // stage's boss can never be admitted because the earlier stage never closes). These pin the fix
+    // AND the exact wedge it closes as a differential control. NEVER weaken `evicted` back to
+    // `!v.IsKnown` alone.
+
+    [Fact]
+    public void A_kept_but_left_aoi_row_still_scripted_kills_and_drains_the_stage()
+    {
+        var boss = E(102900);
+        var h = new TickHarness(observe: true);
+        Assert.True(h.Stage.Admit(boss, 102900));
+
+        Assert.Null(h.Tick(boss, At(9_000, 10_000), pending: false, nowMs: 210_000));   // 90%, fighting
+
+        // The boss walks to another stage of the raid's one big map — a Normal disappear. The
+        // framework KEEPS the row (LeftAoi=true), stale-but-real, last seen at 1% (under the 15%
+        // scripted floor) — TickHarness's `evicted = !v.IsKnown || v.LeftAoi` must catch this.
+        h.Tick(boss, KeptButLeftAoi(100, 10_000), pending: false, nowMs: 216_000);
+
+        // The set must have drained — proving the stage does NOT wedge open forever, so a later
+        // stage's boss can be admitted fresh.
+        Assert.Equal(0, h.Stage.Count);
+    }
+
+    [Fact]
+    public void Evicted_without_the_LeftAoi_check_never_fires_on_a_kept_row_the_wedge_this_fix_closes()
+    {
+        // Differential control: recomputes the OLD (pre-C1b) `evicted` — `!v.IsKnown` alone — against
+        // the SAME kept-but-left-aoi vitals shape, proving the exact wedge the fix closes: a kept row
+        // never reads evicted, so the scripted-vanish rule never fires and the stage never drains.
+        var v = KeptButLeftAoi(100, 10_000);   // IsKnown=true, LeftAoi=true, 1% last known
+        bool oldEvicted = !v.IsKnown;          // the reverted (WRONG) computation — DO NOT reintroduce
+        bool newEvicted = !v.IsKnown || v.LeftAoi;   // the C1b fix, mirrors BossStatus()
+
+        Assert.False(oldEvicted);   // the bug: a kept row never looks evicted under the old check
+        Assert.True(newEvicted);    // the fix: LeftAoi is honored
+
+        Assert.False(Plugin.IsScriptedRaidVanishKill(oldEvicted, isRaid: true, lastFrac: 0.01f));   // wedge
+        Assert.True(Plugin.IsScriptedRaidVanishKill(newEvicted, isRaid: true, lastFrac: 0.01f));    // fixed
     }
 
     // Reads the sticky killed flag for a member that may or may not have drained (drained → false, which

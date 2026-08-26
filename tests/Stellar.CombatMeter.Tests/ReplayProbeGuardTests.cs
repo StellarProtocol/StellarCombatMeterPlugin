@@ -33,6 +33,27 @@ public class ReplayProbeGuardTests
     public void Unknown_non_party_is_skipped()    // a not-yet-engaged / despawned mob
         => Assert.False(Plugin.ShouldProbeTransform(Id(9), Id(7), isPartyMember: false, aoiKnown: false));
 
+    // --- I4 (2026-08-26 raid-bosshp-capture-design): IsStillAoiKnown — IsKnown alone stopped meaning
+    //     "still in AOI" once the framework's LeftAoi fix landed (a Normal AOI-disappear now KEEPS the
+    //     vitals row instead of evicting it). Holding the crash-risk probe gate open for a kept-but-
+    //     left-AOI row is exactly the class of bug ShouldProbeTransform exists to prevent. ---
+
+    private static EntityVitals Vitals(bool isKnown, bool leftAoi) => new(0, 0, isKnown) { LeftAoi = leftAoi };
+
+    [Fact]
+    public void IsStillAoiKnown_true_for_a_normal_known_row()
+        => Assert.True(Plugin.IsStillAoiKnown(Vitals(isKnown: true, leftAoi: false)));
+
+    [Fact]
+    public void IsStillAoiKnown_false_for_an_unknown_row()
+        => Assert.False(Plugin.IsStillAoiKnown(Vitals(isKnown: false, leftAoi: false)));
+
+    [Fact]
+    public void IsStillAoiKnown_false_for_a_kept_but_left_aoi_row()
+        // The row is IsKnown=true (kept, not evicted) but LeftAoi=true — must NOT read as "still in
+        // AOI", or the probe gate stays open for a possibly-freed IL2CPP model.
+        => Assert.False(Plugin.IsStillAoiKnown(Vitals(isKnown: true, leftAoi: true)));
+
     // --- settle gate: skip the whole sample pass for ReplaySettleMs after a scene change ---
 
     [Fact]

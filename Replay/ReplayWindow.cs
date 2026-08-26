@@ -59,4 +59,19 @@ internal static class ReplayWindow
         if (first < 0) return null;
         return new HpTrack(track.Ms0 + (long)first * cadenceMs, kept.ToArray());
     }
+
+    /// <summary>M2 (2026-08-26 full-chain review): true when EVERY sample in a sliced
+    /// <paramref name="track"/> is the L2 sentinel (<c>HpTimelineSampler.SentinelPct</c>, -1) — an
+    /// "all gaps, no real data" window. A caller resolving window/doc membership must treat this the
+    /// SAME as "no HP data this window" (hp omitted; drop the entity entirely if it also has no
+    /// positions), never admit a boss whose sole HP entry renders as an unbroken run of gaps (a
+    /// data-less chip on the site). An empty track (impossible via <see cref="SliceHp"/>'s own
+    /// contract — it returns null instead) is NOT considered all-sentinel.</summary>
+    internal static bool IsAllSentinel(HpTrack track)
+    {
+        if (track.Pct.Count == 0) return false;
+        for (var i = 0; i < track.Pct.Count; i++)
+            if (track.Pct[i] != HpTimelineSampler.SentinelPct) return false;
+        return true;
+    }
 }

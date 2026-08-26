@@ -132,6 +132,63 @@ public class ReplayWindowTests
         Assert.Equal(1500, late.Ms0);
     }
 
+    // ── M3 (2026-08-26 full-chain review): SliceHp over a sentinel-bearing track ────────────────────
+    //    keeps real samples at their CORRECT grid times and passes sentinels through unmodified —
+    //    the missing spec test for the L2 sentinel-grid fix's slicing half.
+
+    [Fact]
+    public void SliceHp_keepsRealSamplesAtCorrectGridTimes_AndPassesSentinelsThrough()
+    {
+        // grid 0,500,1000,1500 -> [50,-1,-1,75]. A window covering the whole track must keep BOTH real
+        // samples at their true grid times and the two sentinels positioned between them — SliceHp's
+        // math is purely positional (Ms0 + i*cadence), so it never inspects/filters the value.
+        var track = new HpTrack(0, new[] { 50, -1, -1, 75 });
+        var w = ReplayWindow.SliceHp(track, -1, 1500, cadenceMs: 500)!;
+        Assert.Equal(0, w.Ms0);
+        Assert.Equal(new[] { 50, -1, -1, 75 }, w.Pct);
+    }
+
+    [Fact]
+    public void SliceHp_windowedSlice_keepsTheRealSample_AtItsRecomputedGridTime()
+    {
+        // Same track, but the window only covers the tail (1000, 1500] -> grid 1500, index 3 (the real
+        // 75), skipping the two sentinels at grid 500/1000. New Ms0 must land on the KEPT sample's
+        // true grid time (1500), not be shifted by the excluded sentinels.
+        var track = new HpTrack(0, new[] { 50, -1, -1, 75 });
+        var w = ReplayWindow.SliceHp(track, 1000, 1500, cadenceMs: 500)!;
+        Assert.Equal(1500, w.Ms0);
+        Assert.Equal(new[] { 75 }, w.Pct);
+    }
+
+    [Fact]
+    public void SliceHp_windowOfOnlySentinels_stillReturnsThem_NotNull()
+    {
+        // A window landing entirely on sentinel grid slots still returns a track (SliceHp itself does
+        // not judge "is this data" — that's IsAllSentinel's job downstream, M2).
+        var track = new HpTrack(0, new[] { 50, -1, -1, 75 });
+        var w = ReplayWindow.SliceHp(track, 0, 1000, cadenceMs: 500)!;
+        Assert.NotNull(w);
+        Assert.Equal(new[] { -1, -1 }, w.Pct);
+    }
+
+    // ── M2 (2026-08-26 full-chain review): IsAllSentinel — an "all gaps, no data" slice must be ─────
+    //    treated the same as no HP data, never admit a boss with a data-less HP chip.
+
+    [Fact]
+    public void IsAllSentinel_true_when_every_sample_is_the_sentinel()
+        => Assert.True(ReplayWindow.IsAllSentinel(new HpTrack(0, new[] { -1, -1, -1 })));
+
+    [Fact]
+    public void IsAllSentinel_false_when_any_sample_is_real()
+    {
+        Assert.False(ReplayWindow.IsAllSentinel(new HpTrack(0, new[] { -1, 50, -1 })));
+        Assert.False(ReplayWindow.IsAllSentinel(new HpTrack(0, new[] { 0, -1, -1 })));   // real 0% counts
+    }
+
+    [Fact]
+    public void IsAllSentinel_false_for_an_empty_track()
+        => Assert.False(ReplayWindow.IsAllSentinel(new HpTrack(0, System.Array.Empty<int>())));
+
     // ── CapUpper: inline boss-phase upper cap (Task 7) — moves the trash/boss boundary earlier while
     //    keeping the windows contiguous (the concatenation invariant this whole file guards). ──
 

@@ -127,15 +127,30 @@ public sealed partial class Plugin
     internal static bool IsWithinReplaySettle(long nowMs, long lastSceneChangeMs)
         => lastSceneChangeMs != 0 && nowMs >= lastSceneChangeMs && nowMs - lastSceneChangeMs < ReplaySettleMs;
 
+    /// <summary>I4 (2026-08-26 raid-bosshp-capture-design, full-chain review): the "still in AOI"
+    /// input to <see cref="ShouldProbeTransform"/>'s crash-risk gate. <c>IsKnown</c> ALONE stopped
+    /// meaning "still in AOI" once the framework's LeftAoi fix landed — a Normal AOI-disappear now
+    /// KEEPS the vitals row (IsKnown stays true, stale-but-real) instead of evicting it, so a kept
+    /// row must NOT hold the probe gate open. Pure/static so it pins headless.</summary>
+    internal static bool IsStillAoiKnown(EntityVitals vitals) => vitals.IsKnown && !vitals.LeftAoi;
+
     // Delegate handed to ReplayCapture — gates the live-transform probe on entity liveness so it can
     // never dereference a freed IL2CPP model. GetVitals is a managed cache read (no IL2CPP), so the
     // gate itself is always safe to evaluate even mid-teardown.
+    //
+    // I4 (2026-08-26 raid-bosshp-capture-design, full-chain review): `IsKnown` alone stopped meaning
+    // "still in AOI" once the framework's LeftAoi fix landed — a Normal AOI-disappear now KEEPS the
+    // vitals row (IsKnown stays true, stale-but-real). Gating this probe on IsKnown alone would hold
+    // the crash-risk gate OPEN for an entity that actually left AOI (and whose IL2CPP model may
+    // already be freed) — exactly the class of bug this gate exists to prevent. `!vitals.LeftAoi` is
+    // required alongside IsKnown.
     private bool SafeTryGetTransform(EntityId id, out Position3D position, out float yaw)
     {
         position = Position3D.Zero;
         yaw = 0f;
+        var vitals = _services.CombatLookup.GetVitals(id);
         if (!ShouldProbeTransform(id, _services.CombatSnapshot.LocalEntityId,
-                IsRosterMember(id), _services.CombatLookup.GetVitals(id).IsKnown))
+                IsRosterMember(id), IsStillAoiKnown(vitals)))
             return false;
         return _services.EntityTransforms.TryGetTransform(id, out position, out yaw);
     }
@@ -517,9 +532,10 @@ public sealed partial class Plugin
     }
 
     // BuildBossHpTracks (multi-boss plan Task 3, extended by spec item 3/recon L3 to union in
-    // sampler-tracked-but-not-in-stage-set bosses) moved to Plugin.BossDetection.cs alongside
-    // ResolveCurrentStageBosses/MergeBossMembership — it now needs that file's stage-boss-set state
-    // and pure merge helper, and Plugin.Replay.cs is already at the file-size guardrail.
+    // sampler-tracked-but-not-in-stage-set bosses) moved to Plugin.BossHpMembership.cs alongside
+    // MergeBossMembership/LookupReplayMonster/IsNativeBossZero — it now needs
+    // ResolveCurrentStageBosses (Plugin.BossDetection.cs) plus that pure merge helper, and both
+    // Plugin.Replay.cs and Plugin.BossDetection.cs are already at the file-size guardrail.
 
     // -----------------------------------------------------------------------
     // Helpers

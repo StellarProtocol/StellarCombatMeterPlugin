@@ -91,7 +91,14 @@ internal sealed class HpTimelineSampler
     /// sentinels never block the append — a death observed after a run of gaps still appends the 0.
     /// ms0 is combat-relative, clamped ≥ 0 (unused here — samples share one implicit 500 ms grid
     /// rooted at Track's ms0, there is no per-sample timestamp to stamp; kept in the signature so
-    /// callers pass the death instant for parity with Track/the rest of the sampler API).</summary>
+    /// callers pass the death instant for parity with Track/the rest of the sampler API).
+    ///
+    /// I5 (2026-08-26 full-chain review): deliberately NOT capped by <see cref="MaxSamplesPerEntity"/>
+    /// — unlike <see cref="Tick"/>, this appends AT MOST ONE sample per call (idempotency above
+    /// guarantees that), so it cannot runaway-grow a track. With the L2 sentinel-grid fix a
+    /// long-gappy track can legitimately SIT at the cap (every tick a sentinel), and the terminal
+    /// death sample — the whole point of this method — must never be the one sample silently
+    /// dropped by a cap meant to bound unbounded per-tick growth, not a single terminating write.</summary>
     internal void MarkDead(long entityId, long ms0)
     {
         if (!_entries.TryGetValue(entityId, out var e)) return;
@@ -101,7 +108,6 @@ internal sealed class HpTimelineSampler
             if (e.Pct[i] == 0) return;   // already terminated — idempotent no-op
             break;                       // last REAL sample is non-zero — fall through to append
         }
-        if (e.Pct.Count >= MaxSamplesPerEntity) return;
         e.Pct.Add(0);
     }
 
