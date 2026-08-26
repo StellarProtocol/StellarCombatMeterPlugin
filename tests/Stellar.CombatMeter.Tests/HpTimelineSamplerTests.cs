@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Stellar.CombatMeter.Replay;
 using Xunit;
 
@@ -73,6 +74,105 @@ public class HpTimelineSamplerTests
         var t = s.GetTrack(1)!;
         Assert.Equal(1500, t.Ms0);
         Assert.Equal(new[] { 60 }, t.Pct);
+    }
+
+    // ── Catch-up loop (2026-08-26 grid-drift fix, owner-measured gridDriftMs=2970 on a raid segment)
+    //    A dtMs spanning multiple 500 ms intervals (loading-screen hitches run at 1-10 Hz) must
+    //    append ONE slot per owed interval, not a single slot with the remainder silently zeroed —
+    //    the old single-step drain left every LATER sample's grid position labeled earlier than it
+    //    actually happened. ──
+
+    [Fact]
+    public void CatchUp_dt1600ms_appendsThreeSlots_GridStaysTrue()
+    {
+        var s = new HpTimelineSampler(_ => (50, 100));
+        s.Track(1, ms0: 0);
+        s.Tick(1600f);   // 1600/500 = 3 whole intervals, 100ms remainder carries in the accumulator
+        Assert.Equal(new[] { 50, 50, 50 }, s.GetTrack(1)!.Pct);
+
+        // The 100 ms remainder is honored on the NEXT tick — 400 more ms completes the 4th slot at
+        // its true grid time (2000 ms), proving the accumulator wasn't just reset to 0.
+        s.Tick(400f);
+        Assert.Equal(new[] { 50, 50, 50, 50 }, s.GetTrack(1)!.Pct);
+    }
+
+    [Fact]
+    public void CatchUp_tenSecondHitch_appendsExactlyTwenty()
+    {
+        var s = new HpTimelineSampler(_ => (75, 100));
+        s.Track(1, ms0: 0);
+        s.Tick(10_000f);   // exactly MaxCatchUpSlotsPerTick (20) * 500ms — no sentinel drain needed
+        var t = s.GetTrack(1)!;
+        Assert.Equal(20, t.Pct.Count);
+        Assert.All(t.Pct, p => Assert.Equal(75, p));
+    }
+
+    [Fact]
+    public void CatchUp_valuesRepeatAcrossSlots_OneReadPerTickCall()
+    {
+        // The reader is called ONCE per Tick call regardless of how many slots the hitch spans — a
+        // Queue that only has ONE entry proves this (a second read attempt would throw).
+        var reads = new Queue<(long, long)>(new[] { (33L, 100L) });
+        var s = new HpTimelineSampler(_ => reads.Dequeue());
+        s.Track(1, ms0: 0);
+        s.Tick(2000f);   // 4 catch-up slots from ONE read
+        Assert.Equal(new[] { 33, 33, 33, 33 }, s.GetTrack(1)!.Pct);
+        Assert.Empty(reads);
+    }
+
+    [Fact]
+    public void CatchUp_unusableRead_appendsSentinelForEveryOwedSlot()
+    {
+        var s = new HpTimelineSampler(_ => (0, 0));   // maxHp unknown — unusable every slot
+        s.Track(1, ms0: 0);
+        s.Tick(1500f);   // 3 owed slots, all unusable
+        Assert.Equal(new[] { -1, -1, -1 }, s.GetTrack(1)!.Pct);
+    }
+
+    [Fact]
+    public void CatchUp_beyondTwentySlots_drainsTheRemainderAsSentinels()
+    {
+        // 15s hitch = 30 owed slots: the first MaxCatchUpSlotsPerTick (20) repeat the real read, the
+        // remaining 10 (past the 10s real-read bound, within the 20s sentinel-drain bound) are
+        // sentinels — never more real reads of an already-stale frozen value.
+        var s = new HpTimelineSampler(_ => (60, 100));
+        s.Track(1, ms0: 0);
+        s.Tick(15_000f);
+        var t = s.GetTrack(1)!;
+        Assert.Equal(30, t.Pct.Count);
+        Assert.All(t.Pct.Take(20), p => Assert.Equal(60, p));
+        Assert.All(t.Pct.Skip(20), p => Assert.Equal(-1, p));
+    }
+
+    [Fact]
+    public void CatchUp_pathologicalDt_neverSpins_AndDropsTheUnrepresentableRemainder()
+    {
+        // A truly extreme dtMs (100s = 200 owed slots) must not make Tick loop hundreds of times —
+        // it appends at most MaxCatchUpSlotsPerTick + MaxSentinelDrainSlotsPerTick (40) slots and
+        // resets the accumulator, dropping the unrepresentable remainder rather than spinning.
+        var s = new HpTimelineSampler(_ => (10, 100));
+        s.Track(1, ms0: 0);
+        s.Tick(100_000f);
+        Assert.Equal(
+            HpTimelineSampler.MaxCatchUpSlotsPerTick + HpTimelineSampler.MaxSentinelDrainSlotsPerTick,
+            s.GetTrack(1)!.Pct.Count);
+
+        // The accumulator was reset (not left mid-hitch), so a normal-sized next tick samples cleanly
+        // instead of immediately re-triggering another huge catch-up burst.
+        s.Tick(500f);
+        Assert.Equal(
+            HpTimelineSampler.MaxCatchUpSlotsPerTick + HpTimelineSampler.MaxSentinelDrainSlotsPerTick + 1,
+            s.GetTrack(1)!.Pct.Count);
+    }
+
+    [Fact]
+    public void CatchUp_respectsMaxSamplesPerEntity_AcrossABurst()
+    {
+        var s = new HpTimelineSampler(_ => (5, 100));
+        s.Track(1, ms0: 0);
+        for (var i = 0; i < HpTimelineSampler.MaxSamplesPerEntity - 5; i++) s.Tick(500f);   // fill to 5 below cap
+        s.Tick(10_000f);   // a 20-slot catch-up burst would overshoot the cap by 15 without the guard
+        Assert.Equal(HpTimelineSampler.MaxSamplesPerEntity, s.GetTrack(1)!.Pct.Count);
     }
 
     [Fact]

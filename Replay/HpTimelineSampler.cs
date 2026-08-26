@@ -34,6 +34,25 @@ internal sealed class HpTimelineSampler
     /// The upload writer ships it as-is; the site treats a negative pct as a gap, not a value.</summary>
     internal const int SentinelPct = -1;
 
+    /// <summary>Catch-up bound (2026-08-26 grid-drift fix — owner-measured <c>gridDriftMs=2970</c> on
+    /// one raid segment via the recon §6 archive diagnostic): the max number of REAL (repeated-value)
+    /// catch-up slots a single <see cref="Tick"/> call appends when <c>dtMs</c> spans MULTIPLE 500 ms
+    /// intervals (loading screens run at 1-10 Hz; any multi-second hitch). 20 slots = a 10 s hitch.
+    /// Beyond this, additional whole intervals still owed are drained as SENTINEL slots (see
+    /// <see cref="MaxSentinelDrainSlotsPerTick"/>) instead of more repeats of the same frozen read —
+    /// re-appending an identical value dozens more times adds no information. Both bounds together
+    /// mean a single pathological <c>dtMs</c> (a resumed-from-suspend process, a corrupt float) can
+    /// NEVER make <see cref="Tick"/> spin: total loop iterations are capped regardless of how large
+    /// <c>dtMs</c> is.</summary>
+    internal const int MaxCatchUpSlotsPerTick = 20;
+
+    /// <summary>Hard outer bound on the SENTINEL drain past <see cref="MaxCatchUpSlotsPerTick"/> —
+    /// caps the combined worst case at (MaxCatchUpSlotsPerTick + this) = 40 slots = 20 s of grid-time
+    /// processed in one <see cref="Tick"/> call. Any remainder beyond BOTH bounds is dropped (the
+    /// accumulator resets to 0) rather than looped over further — reachable only by a truly
+    /// pathological <c>dtMs</c>, never a realistic loading-screen hitch.</summary>
+    internal const int MaxSentinelDrainSlotsPerTick = 20;
+
     private readonly Func<long, (long Hp, long MaxHp)> _readHp;
     private readonly Dictionary<long, Entry> _entries = new();
     private float _accumMs;
@@ -53,30 +72,60 @@ internal sealed class HpTimelineSampler
         _entries[entityId] = new Entry { Ms0 = ms0 < 0 ? 0 : ms0 };
     }
 
-    /// <summary>Advances the shared accumulator; emits one sample per entity per 500 ms window.</summary>
+    /// <summary>Advances the shared accumulator; emits one sample per entity per 500 ms window OWED
+    /// by <paramref name="dtMs"/> — a catch-up loop, not a single step (2026-08-26 grid-drift fix).
+    /// A frame whose <c>dtMs</c> spans MULTIPLE 500 ms intervals (loading screens run at 1-10 Hz;
+    /// hitches) must append ONE slot per owed interval, not one slot with the remainder silently
+    /// zeroed — the old single-step drain shifted every LATER sample's nominal grid time earlier
+    /// than it actually happened (owner-measured <c>gridDriftMs=2970</c> on one raid segment,
+    /// recon §6). Each entity's live value is read ONCE per <see cref="Tick"/> call and repeated
+    /// across that entity's real catch-up slots (see <see cref="MaxCatchUpSlotsPerTick"/>) — the
+    /// game was frozen for the whole hitch, so there is only one true observation regardless of how
+    /// many grid slots it spans; re-querying would not produce new information. An unusable read
+    /// still appends the sentinel for EVERY owed slot, same semantics as before.</summary>
     internal void Tick(float dtMs)
     {
         _accumMs += dtMs;
         if (_accumMs < SampleIntervalMs) return;
-        _accumMs -= SampleIntervalMs;
+
+        // Slot counts are computed BEFORE any entity read, so every entity reads its live value
+        // exactly once this call regardless of how many slots the hitch spans (see doc above). Two
+        // bounded loops, never one unbounded loop — see MaxCatchUpSlotsPerTick/
+        // MaxSentinelDrainSlotsPerTick for why a pathological dtMs can never make this spin.
+        var realSlots = 0;
+        while (_accumMs >= SampleIntervalMs && realSlots < MaxCatchUpSlotsPerTick)
+        {
+            _accumMs -= SampleIntervalMs;
+            realSlots++;
+        }
+        var sentinelSlots = 0;
+        while (_accumMs >= SampleIntervalMs && sentinelSlots < MaxSentinelDrainSlotsPerTick)
+        {
+            _accumMs -= SampleIntervalMs;
+            sentinelSlots++;
+        }
+        // Remainder beyond BOTH bounds (a truly extreme dtMs) — drop it rather than loop further.
+        // Grid fidelity is already best-effort past this point; the whole point of the bounds is
+        // that Tick never spins, regardless of how large dtMs is.
         if (_accumMs >= SampleIntervalMs) _accumMs = 0f;
 
         foreach (var kv in _entries)
         {
             var entry = kv.Value;
-            if (entry.Pct.Count >= MaxSamplesPerEntity) continue;
+            if (entry.Pct.Count >= MaxSamplesPerEntity) continue;   // already at cap — skip the read entirely
             var (hp, maxHp) = _readHp(kv.Key);
-            if (maxHp <= 0)
-            {
-                // L2 fix: append a sentinel, not a skip — Ms0 + i*cadenceMs must keep naming the
-                // real elapsed time even for a tick whose read was unusable (class doc). Still
-                // subject to the same MaxSamplesPerEntity cap checked above — a sentinel is an
-                // honest grid slot, so it counts toward the cap like any other sample.
+            var usable = maxHp > 0;
+            var raw = usable ? (int)Math.Round(100.0 * hp / maxHp) : 0;
+            var pct = raw < 0 ? 0 : raw > 100 ? 100 : raw;
+
+            // Real catch-up slots repeat this ONE read; the sentinel-drain remainder (if the hitch
+            // exceeded MaxCatchUpSlotsPerTick) is always the sentinel regardless of usable — no
+            // further reads are attempted for it (see class/Tick doc). MaxSamplesPerEntity is still
+            // enforced per-slot, so a catch-up burst can't overshoot the cap.
+            for (var i = 0; i < realSlots && entry.Pct.Count < MaxSamplesPerEntity; i++)
+                entry.Pct.Add(usable ? pct : SentinelPct);
+            for (var i = 0; i < sentinelSlots && entry.Pct.Count < MaxSamplesPerEntity; i++)
                 entry.Pct.Add(SentinelPct);
-                continue;
-            }
-            var pct = (int)Math.Round(100.0 * hp / maxHp);
-            entry.Pct.Add(pct < 0 ? 0 : pct > 100 ? 100 : pct);
         }
     }
 
