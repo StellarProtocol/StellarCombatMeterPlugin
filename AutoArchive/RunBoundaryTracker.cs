@@ -11,12 +11,12 @@ namespace Stellar.CombatMeter.AutoArchive;
 /// cref="NotifySceneBoundaryHandled"/> arriving first (the normal case) cancels it silently, and
 /// only a later Observe tick that crosses the deadline while still pending returns Commit — the
 /// missed-scene-event heal (re-entry yank / open-world line switch) this poll exists for. B-mode
-/// adds the load cycle: rising edge ARMs a (runId, runTimerStartMs) reference; the falling edge
+/// adds the load cycle: rising edge ARMs a (runId, runTimerEpoch) reference; the falling edge
 /// commits when the run id OR the run-timer LATCH EPOCH differs (yank: stale id, re-keyed run —
-/// the measured IkriESpwsl shape) and discards when both match; a combat event while armed
-/// resolves the same comparison early and, with no evidence, banks a segment Cut instead of a
-/// boundary (raid run-split fix 2026-08-26 — the timer VALUE is rank-UPGRADED mid-run and is
-/// never compared here) (same-instance teleport — replay continuity, P0). An id change WHILE a
+/// the measured IkriESpwsl shape) and discards when both match (same-instance teleport — replay
+/// continuity, P0); a combat event while armed resolves the same comparison early and, with no
+/// evidence, banks a segment Cut instead of a boundary (raid run-split fix 2026-08-26 — the timer
+/// VALUE is rank-UPGRADED mid-run and is never compared here). An id change WHILE a
 /// concrete loading bit is already known (B-mode, inWorldLoading is not null) commits immediately,
 /// same as before this fix — the grace window only guards the pure-C-mode poll usage, where no
 /// other signal distinguishes "the scene path just hasn't run yet" from "the scene path was

@@ -195,6 +195,10 @@ public class RunBoundaryTrackerTests
         for (int i = 0; i < 7; i++)
         {
             t.Observe(100, 1, true, false, nowMs: now);                       // stage flash: ARM
+            // Retention: a quiet still-loading tick mid-flash must not drop the armed reference.
+            Assert.Equal(RunBoundaryTracker.BoundaryAction.None,
+                t.Observe(100, 1, true, false, nowMs: now + 50));
+            Assert.True(t.IsArmed);
             var resolved = t.Observe(100, 1, true, true, nowMs: now + 100);   // combat resolves it
             Assert.Equal(RunBoundaryTracker.BoundaryAction.Cut, resolved);
             // The flash's own falling edge afterwards is inert (nothing armed anymore).
