@@ -134,19 +134,39 @@ public sealed partial class Plugin
     /// drilled into without putting every archive back in the list. Hidden for a single-archive run, where a
     /// lone "1" chip would be noise.
     ///
-    /// <para>Chips, not a dropdown: the set is small, and which segment you are on should be readable at a
-    /// glance rather than behind a click. Labels are 1-based positions; the archive's own trigger is already
-    /// named in the summary line below.</para></summary>
+    /// <para>Chips, not a dropdown: which segment you are on should be readable at a glance rather than
+    /// behind a click. Labels are 1-based positions; the archive's own trigger is already named in the
+    /// summary line below. WRAPPED since 2026-08-26 (owner report: a raid session banks 13 archives and the
+    /// old single row hard-hid everything past chip 8 — all of stage 3): chips lay out in up to
+    /// <c>MaxSegmentChips / SegmentChipsPerRow</c> rows of <c>SegmentChipsPerRow</c>, later rows shown only
+    /// when the session needs them (ListElement's VisibleCount; slots built once, poll-only).</para></summary>
     private HudElement BuildSegmentPicker()
     {
-        var kids = new HudElement[MaxSegmentChips + 1];
+        var rows = new HudElement[MaxSegmentChips / SegmentChipsPerRow];
+        for (var r = 0; r < rows.Length; r++)
+            rows[r] = BuildSegmentChipRow(firstSlot: r * SegmentChipsPerRow);
+        // Only meaningful when the run actually HAS multiple archives.
+        return new ConditionalElement(
+            () => _selectedSegments.Length > 1,
+            new ListElement(
+                () => Math.Min(rows.Length,
+                    (_selectedSegments.Length + SegmentChipsPerRow - 1) / SegmentChipsPerRow),
+                rows));
+    }
+
+    /// <summary>One picker row of <see cref="SegmentChipsPerRow"/> chip slots starting at
+    /// <paramref name="firstSlot"/>. The first row carries the "segments" caption; continuation rows carry
+    /// an equal-width blank so their chips align under the first row's.</summary>
+    private HudElement BuildSegmentChipRow(int firstSlot)
+    {
+        var kids = new HudElement[SegmentChipsPerRow + 1];
         // NoWrap + enough width: at 60f the word wrapped and dropped its final "s" onto a second line
         // (owner screenshot 2026-07-30). MEASURED via the history sandbox story, not guessed.
-        kids[0] = new TextElement(() => "segments", MutedCol, Width: 76f, NoWrap: true);
-        for (var i = 0; i < MaxSegmentChips; i++)
+        kids[0] = new TextElement(() => firstSlot == 0 ? "segments" : "", MutedCol, Width: 76f, NoWrap: true);
+        for (var i = 0; i < SegmentChipsPerRow; i++)
         {
-            var slot = i;
-            kids[slot + 1] = new ConditionalElement(
+            var slot = firstSlot + i;
+            kids[i + 1] = new ConditionalElement(
                 () => slot < _selectedSegments.Length,
                 // No fixed Width: the chip auto-sizes to its label. Widths cannot be per-frame (Width is a
                 // ctor value, not a Func) and the labels vary in length, so pinning one width would either
@@ -156,8 +176,7 @@ public sealed partial class Plugin
                     () => { if (slot < _selectedSegments.Length) SelectSession(_selectedSegments[slot]); },
                     Active: () => slot < _selectedSegments.Length && _selectedSegments[slot] == _historyIndex));
         }
-        // Only meaningful when the run actually HAS multiple archives.
-        return new ConditionalElement(() => _selectedSegments.Length > 1, new RowElement(kids, Gap: 4f));
+        return new RowElement(kids, Gap: 4f);
     }
 
     /// <summary>How this segment came to exist — the archive's own trigger (bosskill / stage / scene / wipe /
