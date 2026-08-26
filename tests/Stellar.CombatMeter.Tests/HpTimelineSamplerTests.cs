@@ -145,24 +145,40 @@ public class HpTimelineSamplerTests
     }
 
     [Fact]
-    public void CatchUp_pathologicalDt_neverSpins_AndDropsTheUnrepresentableRemainder()
+    public void CatchUp_pathologicalDt_neverSpinsPerCall_AndCarriesTheRemainderForward_NoTimeLost()
     {
-        // A truly extreme dtMs (100s = 200 owed slots) must not make Tick loop hundreds of times —
-        // it appends at most MaxCatchUpSlotsPerTick + MaxSentinelDrainSlotsPerTick (40) slots and
-        // resets the accumulator, dropping the unrepresentable remainder rather than spinning.
+        // P0 REGRESSION FIX (2026-08-26, full-chain re-review of commit 250cf96): the first version
+        // of this bound reset the accumulator to 0 once BOTH per-call bounds were exhausted — i.e. it
+        // silently DROPPED any remainder beyond 40 slots. A truly extreme dtMs (100s = 200 owed
+        // slots) must still NOT make a SINGLE Tick call loop hundreds of times (still bounded to
+        // MaxCatchUpSlotsPerTick + MaxSentinelDrainSlotsPerTick = 40 slots per call) — but the
+        // remainder is NEVER dropped: it stays queued in the accumulator and the NEXT Tick call keeps
+        // draining it (itself bounded, with a fresh read), until every owed interval is accounted
+        // for. No slot is ever silently lost — this is what "keeps the original gridDriftMs goal
+        // without ever shortening what a doc covers" means in code.
         var s = new HpTimelineSampler(_ => (10, 100));
         s.Track(1, ms0: 0);
-        s.Tick(100_000f);
+
+        s.Tick(100_000f);   // first call: bounded to 40 slots — NOT reset, 80s (160 slots) still owed
         Assert.Equal(
             HpTimelineSampler.MaxCatchUpSlotsPerTick + HpTimelineSampler.MaxSentinelDrainSlotsPerTick,
             s.GetTrack(1)!.Pct.Count);
 
-        // The accumulator was reset (not left mid-hitch), so a normal-sized next tick samples cleanly
-        // instead of immediately re-triggering another huge catch-up burst.
+        // Subsequent ticks — even with dt=0, since the LEFTOVER accumulator alone still owes multiple
+        // intervals — keep draining 40 MORE slots each, not just one: proof the remainder survived
+        // instead of being dropped by the old "reset to 0" bug.
+        s.Tick(0f);
+        Assert.Equal(80, s.GetTrack(1)!.Pct.Count);
+        s.Tick(0f);
+        Assert.Equal(120, s.GetTrack(1)!.Pct.Count);
+        s.Tick(0f);
+        Assert.Equal(160, s.GetTrack(1)!.Pct.Count);
+        s.Tick(0f);
+        Assert.Equal(200, s.GetTrack(1)!.Pct.Count);   // fully drained: 100_000ms / 500ms = 200 exactly
+
+        // Fully drained — a normal-sized next tick samples exactly ONE more, not another huge burst.
         s.Tick(500f);
-        Assert.Equal(
-            HpTimelineSampler.MaxCatchUpSlotsPerTick + HpTimelineSampler.MaxSentinelDrainSlotsPerTick + 1,
-            s.GetTrack(1)!.Pct.Count);
+        Assert.Equal(201, s.GetTrack(1)!.Pct.Count);
     }
 
     [Fact]

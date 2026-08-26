@@ -40,17 +40,27 @@ internal sealed class HpTimelineSampler
     /// intervals (loading screens run at 1-10 Hz; any multi-second hitch). 20 slots = a 10 s hitch.
     /// Beyond this, additional whole intervals still owed are drained as SENTINEL slots (see
     /// <see cref="MaxSentinelDrainSlotsPerTick"/>) instead of more repeats of the same frozen read —
-    /// re-appending an identical value dozens more times adds no information. Both bounds together
-    /// mean a single pathological <c>dtMs</c> (a resumed-from-suspend process, a corrupt float) can
-    /// NEVER make <see cref="Tick"/> spin: total loop iterations are capped regardless of how large
-    /// <c>dtMs</c> is.</summary>
+    /// re-appending an identical value dozens more times adds no information. PER-CALL bound only —
+    /// see <see cref="MaxSentinelDrainSlotsPerTick"/>'s doc for why any leftover time is NEVER
+    /// dropped, only deferred to the next <see cref="Tick"/> call.</summary>
     internal const int MaxCatchUpSlotsPerTick = 20;
 
-    /// <summary>Hard outer bound on the SENTINEL drain past <see cref="MaxCatchUpSlotsPerTick"/> —
-    /// caps the combined worst case at (MaxCatchUpSlotsPerTick + this) = 40 slots = 20 s of grid-time
-    /// processed in one <see cref="Tick"/> call. Any remainder beyond BOTH bounds is dropped (the
-    /// accumulator resets to 0) rather than looped over further — reachable only by a truly
-    /// pathological <c>dtMs</c>, never a realistic loading-screen hitch.</summary>
+    /// <summary>Second PER-CALL bound on the SENTINEL drain past <see cref="MaxCatchUpSlotsPerTick"/>
+    /// — caps a SINGLE <see cref="Tick"/> call's work at (MaxCatchUpSlotsPerTick + this) = 40 slots =
+    /// 20 s of grid-time, so one call can never spin regardless of how large <c>dtMs</c> is.
+    ///
+    /// <para><b>P0 regression fix (2026-08-26, full-chain re-review):</b> the FIRST version of this
+    /// bound (commit <c>250cf96</c>) reset the accumulator to 0 once BOTH per-call bounds were
+    /// exhausted — i.e. it silently DROPPED any remainder beyond 40 slots instead of accounting for
+    /// it. That is exactly the class of bug the L2 sentinel-grid fix exists to prevent: any silently
+    /// discarded interval shifts every LATER real sample's nominal grid time earlier than it actually
+    /// happened, which can push a later window's genuinely-captured sample outside that window's
+    /// slice bound — i.e. it can shorten what an uploaded window covers, the exact failure this whole
+    /// class exists to close. The fix: a remainder beyond BOTH per-call bounds simply STAYS in
+    /// <c>_accumMs</c> and is drained by the NEXT <see cref="Tick"/> call (itself bounded the same
+    /// way, with a FRESH read) — a pathological <c>dtMs</c> just spreads its catch-up across a
+    /// handful of extra frames instead of losing time. Every call is still bounded (never spins);
+    /// no interval is ever unaccounted for (never silently shortens a window).</para></summary>
     internal const int MaxSentinelDrainSlotsPerTick = 20;
 
     private readonly Func<long, (long Hp, long MaxHp)> _readHp;
@@ -82,7 +92,12 @@ internal sealed class HpTimelineSampler
     /// across that entity's real catch-up slots (see <see cref="MaxCatchUpSlotsPerTick"/>) — the
     /// game was frozen for the whole hitch, so there is only one true observation regardless of how
     /// many grid slots it spans; re-querying would not produce new information. An unusable read
-    /// still appends the sentinel for EVERY owed slot, same semantics as before.</summary>
+    /// still appends the sentinel for EVERY owed slot, same semantics as before.
+    ///
+    /// This call NEVER drops time: any interval still owed after both per-call bounds
+    /// (<see cref="MaxCatchUpSlotsPerTick"/>/<see cref="MaxSentinelDrainSlotsPerTick"/>) are
+    /// exhausted stays queued in the accumulator for the NEXT call — see
+    /// <see cref="MaxSentinelDrainSlotsPerTick"/>'s doc for the P0 this fixed.</summary>
     internal void Tick(float dtMs)
     {
         _accumMs += dtMs;
@@ -90,8 +105,8 @@ internal sealed class HpTimelineSampler
 
         // Slot counts are computed BEFORE any entity read, so every entity reads its live value
         // exactly once this call regardless of how many slots the hitch spans (see doc above). Two
-        // bounded loops, never one unbounded loop — see MaxCatchUpSlotsPerTick/
-        // MaxSentinelDrainSlotsPerTick for why a pathological dtMs can never make this spin.
+        // bounded loops, never one unbounded loop, so a single call can never spin — but nothing past
+        // the bounds is discarded: whatever remains in _accumMs simply waits for the next call.
         var realSlots = 0;
         while (_accumMs >= SampleIntervalMs && realSlots < MaxCatchUpSlotsPerTick)
         {
@@ -104,10 +119,6 @@ internal sealed class HpTimelineSampler
             _accumMs -= SampleIntervalMs;
             sentinelSlots++;
         }
-        // Remainder beyond BOTH bounds (a truly extreme dtMs) — drop it rather than loop further.
-        // Grid fidelity is already best-effort past this point; the whole point of the bounds is
-        // that Tick never spins, regardless of how large dtMs is.
-        if (_accumMs >= SampleIntervalMs) _accumMs = 0f;
 
         foreach (var kv in _entries)
         {
