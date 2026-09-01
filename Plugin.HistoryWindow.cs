@@ -52,9 +52,16 @@ public sealed partial class Plugin
     private int[] _selectedSegments = System.Array.Empty<int>();
 
     // Chip slots for the segment picker. The element tree is built ONCE and polled, so the count is fixed
-    // and surplus slots hide via ConditionalElement. 8 covers a fight + a tail per run-end stage + the
-    // scene tail several times over; a run with more than 8 archives shows the first 8 and is logged below.
-    private const int MaxSegmentChips = 8;
+    // and surplus slots hide via ConditionalElement. Was 8 — a real RAID banks 13 archives per session
+    // (measured 2026-08-25, Clash! Field of Forgotten Illusions ×2: prepare/bosskill/cut per stage), so
+    // the owner's detail pane silently hid all of stage 3. 24 = three wrapping rows of
+    // SegmentChipsPerRow; a session with even more archives still shows only the first 24 (unseen in
+    // any capture; the history itself is capped at 50 entries total).
+    private const int MaxSegmentChips = 24;
+
+    // Chips per picker row. 8 measured to fit the default 780f pane width beside the 76f "segments"
+    // label (see BuildSegmentPicker's NoWrap note); rows beyond the first appear only when needed.
+    private const int SegmentChipsPerRow = 8;
 
     // Field struct (no constructor) — keeps clear of the analyzer's ctor-dependency cap.
     private struct SourceRow

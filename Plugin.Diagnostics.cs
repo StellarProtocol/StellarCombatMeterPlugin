@@ -382,4 +382,62 @@ public sealed partial class Plugin
     private void LogKilledBossEviction(EntityId evictedId, EntityId newlyMarkedId)
         => _services.Log.Warning(
             $"[CombatMeter][killed-boss] cap hit ({AutoArchive.KilledBossTracker.MaxEntries}) — evicted oldest mark id={evictedId.Value} to record id={newlyMarkedId.Value}; evicted id is re-adoptable again");
+
+    // -----------------------------------------------------------------------
+    // Raid boss-HP capture (2026-08-26 raid-bosshp-capture-design § 6) — the layer this plugin owns:
+    // recon §6 line 2 (per-tick source/decision) and line 6 (per-archive sample accounting). Lines
+    // 1/3/4/5/7 are framework-owned (EntityVitalsService/PandaCombatStubProbe diagnostics).
+    // -----------------------------------------------------------------------
+
+    // Rate-limit latch for LogBossHpTick, keyed by entity id: only the (src, decision) pair CHANGING
+    // triggers a line, never a per-tick emission — ReadHpPair runs at 2 Hz for every sampler-tracked
+    // entity (players + bosses + elites share the one reader) for the run's whole duration, so an
+    // unconditional line would flood the log. Cleared alongside the rest of the replay-scoped
+    // diagnostics state in ResetReplay() (Plugin.Replay.cs) so it never grows across runs.
+    private readonly Dictionary<long, string> _bossHpTickLastState = new();
+
+    /// <summary>Recon §6 line 2: <c>ReadHpPair</c>'s per-tick outcome for one entity — which source
+    /// tier answered (<c>native</c>/<c>vitals</c>/<c>attr11321</c>/<c>none</c>) and whether the read
+    /// was usable (<c>sample</c>) or fell through to the sampler's sentinel (<c>sentinel</c>, maxHp
+    /// unusable). Settles L1 (does the native tap keep answering while wire vitals starve?) and the
+    /// false-0% defect (does the HasHpObservation gate actually block a MaxHp-only read?) in the
+    /// field. Rate-limited to state changes per entity via <see cref="_bossHpTickLastState"/>.</summary>
+    private void LogBossHpTick(long entityId, long hp, long maxHp, bool hasHpObs, string src)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        var decision = maxHp > 0 ? "sample" : "sentinel";
+        var state = $"{src}:{decision}";
+        if (_bossHpTickLastState.TryGetValue(entityId, out var last) && last == state) return;
+        _bossHpTickLastState[entityId] = state;
+        _services.Log.Info(
+            $"[BossHp] tick eid={entityId} hp={hp} maxHp={maxHp} hasHpObs={hasHpObs} src={src} decision={decision}");
+    }
+
+    /// <summary>Recon §6 line 6: per-boss sample accounting at archive time, settling L2 (grid drift —
+    /// should stay near zero now that L2's sentinel-append fix is in) and L3 (a boss captured by the
+    /// sampler but absent from the uploaded doc) in the field. <paramref name="track"/> is the FULL
+    /// untrimmed track the sampler currently holds for this entity (before <c>AdvanceReplayWatermark</c>
+    /// runs); <paramref name="sliced"/> is this window's slice of it; <paramref name="inDoc"/> mirrors
+    /// <c>BuildWindowBossMembers</c>'s own membership test. <c>trimmed</c> is a DRY-RUN count using the
+    /// exact same grid math as <c>HpTimelineSampler.TrimBelow</c> (position-only, ≤ <paramref
+    /// name="upperMs"/>) — this line runs before the real trim, so it never mutates the sampler.
+    /// <c>gridDriftMs</c> is <paramref name="upperMs"/> minus the track's last grid slot's nominal time;
+    /// a healthy post-fix run stays within one cadence tick (≤ 500 ms accumulator jitter).</summary>
+    private void LogBossHpArchive(EntityId id, HpTrack? track, HpTrack? sliced, long upperMs, bool inDoc)
+    {
+        if (!StellarDiagnostics.IsEnabled) return;
+        var captured = track?.Pct.Count ?? 0;
+        var slicedCount = sliced?.Pct.Count ?? 0;
+        var trimmed = 0;
+        var gridDriftMs = 0L;
+        if (track is not null && captured > 0)
+        {
+            while (trimmed < captured && track.Ms0 + (long)trimmed * ReplaySampleIntervalMs <= upperMs) trimmed++;
+            var lastGridMs = track.Ms0 + (long)(captured - 1) * ReplaySampleIntervalMs;
+            gridDriftMs = upperMs - lastGridMs;
+        }
+        _services.Log.Info(
+            $"[BossHp] archive eid={id.Value} captured={captured} sliced={slicedCount} trimmed={trimmed} " +
+            $"inDoc={inDoc} gridDriftMs={gridDriftMs}");
+    }
 }

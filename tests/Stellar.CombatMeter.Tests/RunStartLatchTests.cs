@@ -89,4 +89,22 @@ public sealed class RunStartLatchTests
     [Fact]
     public void A_never_latched_run_falls_back_to_the_live_run_timer()
         => Assert.Equal(777000, Plugin.LatchRunStartMs(latched: 0, live: 777000));
+
+    // -------------------------------------------------------------------------
+    // (5) Raid run-split P0 (spec 2026-08-26, measured run 668840469433679872): a segment Cut
+    //     (RunSegmentCut) deliberately does NOT zero _lastRunStartMs, so this latch must keep
+    //     winning over the live value across every mid-run cut — see the PIN below.
+    // -------------------------------------------------------------------------
+
+    // PIN (raid run-split P0, spec 2026-08-26, measured run 668840469433679872): a segment Cut
+    // (RunSegmentCut) deliberately does NOT zero _lastRunStartMs, so across every mid-run cut the
+    // once-per-run latch keeps winning over the live (rank-upgraded) framework value — the upgraded
+    // 620 start can never re-key archives while the run's own 588 latch is alive. If a refactor
+    // ever makes a Cut reset the latch, the LatchRunStartMs preference alone cannot save identity —
+    // this pin names that dependency.
+    [Fact]
+    public void Cut_preserved_latch_beats_rank_upgraded_live_value()
+    {
+        Assert.Equal(1787662588000, Plugin.LatchRunStartMs(latched: 1787662588000, live: 1787662620000));
+    }
 }

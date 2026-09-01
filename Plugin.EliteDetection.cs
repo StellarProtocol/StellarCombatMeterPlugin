@@ -94,7 +94,7 @@ public sealed partial class Plugin
     // from TickHpTimelines (Plugin.Replay.cs) at the SAME per-frame cadence as TickStageBossHpTracks —
     // gated only on replay capture being active (never on _autoArchive.BossEnabled), so elite HP/kill
     // capture runs whenever boss HP capture does. Alloc-free: plain indexed `for` over Count/MemberAt.
-    private void TickEliteHpTracks(HpTimelineSampler sampler, long combatStartMs, int nowMs)
+    private void TickEliteHpTracks(HpTimelineSampler sampler, long combatStartMs, long nowMs)
     {
         for (var i = 0; i < _eliteSet.Count; i++)
         {

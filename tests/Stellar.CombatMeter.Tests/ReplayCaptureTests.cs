@@ -46,6 +46,27 @@ public class ReplayCaptureTests
         Assert.Equal(2, cap.TotalSamples);
     }
 
+    // P0 int32-wrap fix (2026-08-26, owner-proven arithmetically on run sea/dN42ox4Nhd — the uploaded
+    // doc's startMs was off from the true epoch by EXACTLY 416 * 2^32): CombatStartMs used to be
+    // `int`, silently wrapping ServerNowMs-scale values (~1.7e12, far beyond int32's ~2.147e9 max)
+    // modulo 2^32 at the FIRST stamp. This is the ORIGIN of the wrap — everything downstream
+    // (Plugin.ResolveWindowBounds' captureStartMs input, msOffset) inherits whatever CombatStartMs
+    // itself already got wrong, so the fix has to hold here first.
+    [Fact]
+    public void CombatStartMs_StaysEpochScale_NeverWrapsAtInt32Boundary()
+    {
+        const long epochNowMs = 1_770_000_000_000L;   // realistic 2026-epoch ms — WAY past int.MaxValue (~2.147e9)
+        var cap = Make(new(), out _);
+        cap.Active = true;
+        cap.Tick(epochNowMs, dtMs: 100f);   // any dt under one interval — just needs to stamp the first tick
+
+        Assert.Equal(epochNowMs, cap.CombatStartMs);
+        // The tell-tale wrapped value a `(int)` truncation would have produced instead — assert we
+        // are NOT it, so a regression back to an int-typed field fails loudly and specifically rather
+        // than just "some wrong number".
+        Assert.NotEqual(473_474_048L, cap.CombatStartMs);
+    }
+
     [Fact]
     public void UnresolvableEntity_IsSkippedThatTick_ProducesNoSample()
     {

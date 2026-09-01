@@ -20,6 +20,58 @@ public sealed partial class Plugin
     // stay contiguous → concatenation unbroken). Consumed in PrepareReplayDoc via ReplayWindow.CapUpper.
     internal const long ReplayUpperCapUnset = long.MaxValue;
 
+    /// <summary>
+    /// P0 walk-in-anchor fix (2026-08-26, owner ground-truth run qCUzbYtTmI): the replay window's
+    /// DECLARED <c>[StartMs, EndMs]</c> bounds — what the uploaded doc CLAIMS to cover — as ABSOLUTE
+    /// server-clock timestamps, the SAME scale <c>entry.EnteredAtMs</c>/<c>ArchivedAtMs</c> (and
+    /// therefore <c>encounter.StartMs</c>/<c>EndMs</c>, <c>CombatLogAssembler.BuildEncounter</c>)
+    /// already use — <b>NOT</b> the small, per-window, combat-start-ZEROED relative numbers
+    /// individual track/HP samples carry as their own <c>Ms0</c> (those intentionally reset to a
+    /// DIFFERENT reference every window, via <c>msOffset</c>, so they cannot double as a cross-window
+    /// stitching anchor — a site ordering/placing several windows on one real-world session timeline
+    /// needs an ABSOLUTE, monotonically-comparable value, exactly like <c>EnteredAtMs</c>/
+    /// <c>ArchivedAtMs</c> already provide for every OTHER archived entry).
+    ///
+    /// Before this fix, <c>PrepareReplayDoc</c> set these two fields from
+    /// <c>encounter.StartMs</c>/<c>encounter.EndMs</c> — the DPS/damage-log's own COMBAT-ONLY span
+    /// (<c>entry.EnteredAtMs</c>/<c>ArchivedAtMs</c>) — a field-level bug present in this file's
+    /// ENTIRE git history back to the walk-in-capture arc's original commit (44ee9c8, 2026-07-01),
+    /// verified via <c>git log -L</c>, so it predates every commit on this branch AND the released
+    /// 2.5.0 build. A site that trusts <c>StartMs</c>/<c>EndMs</c> as the window's valid range (a
+    /// completely reasonable reading of those field names) would clip/hide any track sample whose
+    /// reconstructed absolute time falls outside them — and every pre-combat sample's true time does,
+    /// since the window genuinely starts BEFORE combat (the dungeon-entry walk-in, or a post-teleport
+    /// arrival). The owner's "the replay renders the wrong spawn" / "post-teleport arrival + heal-up
+    /// movement unclaimed" symptoms are both explained by this: the doc always claimed only its own
+    /// combat-only sub-span, never the true watermark-to-cut window.
+    ///
+    /// <para>Window 1 (<paramref name="watermarkMs"/> == <see cref="ReplayWatermarkUnset"/>, i.e.
+    /// nothing has been banked yet this run) claims from <paramref name="captureStartMs"/> itself —
+    /// the dungeon-entry walk-in's own absolute anchor. Window N (a real watermark from the PREVIOUS
+    /// archive's own cut, in capture-relative ms) claims from THAT cut, converted back to absolute via
+    /// <c>captureStartMs + watermarkMs</c>. <see cref="EndMs"/> is always <c>captureStartMs +
+    /// upperMs</c> (THIS archive's own cut) — never <c>encounter.EndMs</c>, for the identical reason
+    /// (though the two are numerically close in practice, since both represent "now" at archive time
+    /// read a tick apart; this one is exact for what the tracks actually cover). An empty load segment
+    /// (zero position samples during the actual loading screen) still gets CLAIMED by the surrounding
+    /// window — this function never inspects the samples, only the window boundaries, so a sparse
+    /// window's declared span is never narrowed down to "just where samples happen to exist".</para>
+    ///
+    /// <para><b>P0 int32-wrap fix (2026-08-26):</b> <paramref name="captureStartMs"/> is `long`, not
+    /// `int` — <c>ReplayCapture.CombatStartMs</c> (the source of this value) used to be `int`,
+    /// silently wrapping the epoch-scale ServerNowMs value modulo 2^32 (owner-proven arithmetically
+    /// on run sea/dN42ox4Nhd: the uploaded doc's startMs was off from the true epoch by EXACTLY
+    /// 416 * 2^32). A wrapped `captureStartMs` here would produce a wrapped StartMs/EndMs regardless
+    /// of how correctly this function itself adds — the fix has to hold end to end from the very
+    /// first `ServerNowMs` read (see <c>ReplayCapture._combatStartMs</c>'s doc for the full chain),
+    /// not just at this seam.</para>
+    /// </summary>
+    internal static (long StartMs, long EndMs) ResolveWindowBounds(long captureStartMs, long watermarkMs, long upperMs)
+    {
+        var lowerCaptureRelativeMs = watermarkMs < 0 ? 0 : watermarkMs;
+        return (captureStartMs + lowerCaptureRelativeMs, captureStartMs + upperMs);
+    }
+
     // Slices the position buffer to the window (lowerExclusive, upperInclusive]; keeps only entities
     // with at least one sample in the window (they define the window's meta set). Pure slicing via
     // ReplayWindow; the source buffers are not mutated here (freeing happens in AdvanceReplayWatermark).
@@ -82,24 +134,30 @@ public sealed partial class Plugin
     // detection). Gating BossHp on position presence re-clipped the replay short of 0% — the exact
     // bug this release fixes. Returns blanks + null HP only when the boss is absent from the window
     // entirely (no HP AND no positions).
+    //
+    // M2 (2026-08-26 full-chain review): an ALL-SENTINEL slice (every sample a L2 gap, no real data)
+    // is treated the SAME as no HP data — nulled before the "in window" test — so a boss whose only
+    // HP entry this window is an unbroken run of gaps doesn't get admitted with a data-less HP chip;
+    // it still rides the window on its position samples alone, same as any other no-HP-data boss.
     private (EntityId id, string idStr, MonsterInfo? info, HpTrack? hp, bool inWindow) ResolveWindowBossFields(
         Dictionary<EntityId, PositionSample[]> windowTracks, long upperMs, int msOffset)
     {
         var (repId, idStr, info) = ResolveBossRepresentative();
         if (repId.Value == 0) return (default, "", null, null, false);
-        var hp = RebaseHpTrack(SliceHpWindow(_hpSampler?.GetTrack(repId.Value), upperMs), msOffset);
+        var slicedHp = RebaseHpTrack(SliceHpWindow(_hpSampler?.GetTrack(repId.Value), upperMs), msOffset);
+        var hp = slicedHp is not null && ReplayWindow.IsAllSentinel(slicedHp) ? null : slicedHp;
         return hp is not null || windowTracks.ContainsKey(repId)
             ? (repId, idStr, info, hp, true)
             : (default, "", null, null, false);
     }
 
-    // Multi-boss (Task 4): every stage-set boss's id/configId/HP, sliced+rebased to THIS window — the
+    // Multi-boss (Task 4): every boss member's id/configId/HP, sliced+rebased to THIS window — the
     // source for both the additive Bosses[] array and the meta-id union below. Reuses BuildBossHpTracks()
-    // (Task 3, Plugin.Replay.cs) as the per-member source and mirrors ResolveWindowBossFields's own
-    // per-member inWindow rule (sliced HP present OR a position track this window) — a boss that
+    // (Plugin.BossHpMembership.cs — moved there by spec item 3/recon L3, which extended its membership
+    // to the sampler-tracked ∪ stage-set union) as the per-member source and mirrors ResolveWindowBossFields's
+    // own per-member inWindow rule (sliced HP present OR a position track this window) — a boss that
     // vanished on death still rides the array on its death-0 HP sample alone, same as the scalar. Returns
-    // null when the stage set is empty (today's non-boss-phase configs) or every member is absent from
-    // this window.
+    // null when the merged membership is empty or every member is absent from this window.
     private List<(EntityId id, int configId, HpTrack? hp)>? BuildWindowBossMembers(
         Dictionary<EntityId, PositionSample[]> windowTracks, long upperMs, int msOffset)
     {
@@ -108,8 +166,17 @@ public sealed partial class Plugin
         List<(EntityId, int, HpTrack?)>? list = null;
         foreach (var (id, configId, track) in members)
         {
-            var hp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
-            if (hp is null && !windowTracks.ContainsKey(id)) continue;   // absent from this window entirely
+            var slicedHp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            // M2: an all-sentinel slice ("all gaps, no real data") is nulled before the doc-membership
+            // test — see ResolveWindowBossFields's doc for the full rationale. The diagnostic below
+            // still logs the RAW sliced result (pre-nulling) so a field read shows the true slice size
+            // even when it was discarded for being data-less.
+            var hp = slicedHp is not null && ReplayWindow.IsAllSentinel(slicedHp) ? null : slicedHp;
+            var inDoc = hp is not null || windowTracks.ContainsKey(id);
+            // recon §6 line 6 — per-boss sample accounting at archive time (settles L2 grid drift +
+            // L3 captured-vs-uploaded in the field). Diagnostics-gated; see Plugin.Diagnostics.cs.
+            LogBossHpArchive(id, track, slicedHp, upperMs, inDoc);
+            if (!inDoc) continue;   // absent from this window entirely
             (list ??= new List<(EntityId, int, HpTrack?)>(members.Count)).Add((id, configId, hp));
         }
         return list;
@@ -120,6 +187,11 @@ public sealed partial class Plugin
     // ResolveCurrentElites (Plugin.EliteDetection.cs) instead of the stage-boss set. CAPTURE ONLY: feeds
     // PositionUploadDoc.Elites and nothing else — no meta-id union, no scalar representative (see
     // PositionUploadDoc.Elites' own doc for the full boundary).
+    //
+    // Minor 1 (2026-08-26 full-chain re-review): mirrors BuildWindowBossMembers's M2 fix — an
+    // ALL-SENTINEL slice (every sample a L2 gap, no real data) is nulled before the "in window" test,
+    // the same "no HP data" handling the boss sites already got, so an elite doesn't get admitted
+    // with a data-less HP chip either.
     private List<(EntityId id, int configId, HpTrack? hp)>? BuildWindowEliteMembers(
         Dictionary<EntityId, PositionSample[]> windowTracks, long upperMs, int msOffset)
     {
@@ -128,7 +200,8 @@ public sealed partial class Plugin
         List<(EntityId, int, HpTrack?)>? list = null;
         foreach (var (id, configId, track) in members)
         {
-            var hp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            var slicedHp = RebaseHpTrack(SliceHpWindow(track, upperMs), msOffset);
+            var hp = slicedHp is not null && ReplayWindow.IsAllSentinel(slicedHp) ? null : slicedHp;
             if (hp is null && !windowTracks.ContainsKey(id)) continue;   // absent from this window entirely
             (list ??= new List<(EntityId, int, HpTrack?)>(members.Count)).Add((id, configId, hp));
         }

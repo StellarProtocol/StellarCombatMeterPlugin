@@ -19,6 +19,14 @@ public sealed partial class Plugin
     // scene observation — exactly like 3fd7559 did, while the archive half (BankRunBoundary below)
     // stays gated behind OnSceneChanged's own early-return guard. RunBoundaryCore still composes both
     // halves as one unit for the poll, which has no separate earlier reset call of its own.
+    // Since 2026-08-26 this is ALSO called from RunSegmentCut (the evidence-less belt cut) —
+    // deliberately: the pre-2026-08-26 belt commit ran this identical reset at these identical
+    // moments (measured 7×/raid), and the owner's "keep cutting" decision preserves that behavior
+    // byte-for-byte; only the identity block (BankRunBoundary's half, below) moved out of the cut
+    // path. Where a field comment below says a value must "survive a mid-run archive", that
+    // contrast is against the WITHIN-RUN auto-archive triggers (wipe/boss/idle/stage call
+    // ManualArchive directly) — those still never run this reset; RunSegmentCut is boundary-shaped
+    // (like RunBoundaryCore/OnSceneChanged), not a within-run trigger.
     private void ResetRunScopedTrackers()
     {
         // New run = new run: forget which bosses died in the previous one, so the same boss template
@@ -102,10 +110,12 @@ public sealed partial class Plugin
         // and misattribute a stale boss to itself. Reset unconditionally here, right after ManualArchive
         // above returns (whichever branch it took — banked, skip-empty, or suppressed all count as "this
         // boundary's archive attempt already had its read"), so the latch can never survive past the
-        // boundary entitled to consume it. Boundary-scoped ONLY — this method runs from RunBoundaryCore's
-        // poll-commit path and OnSceneChanged's post-guard call, never from a within-run auto-archive
-        // trigger (wipe/boss/idle/stage calls ManualArchive directly, not through here) — so a still-open
-        // stage's latch keeps flowing forward correctly within the same run.
+        // boundary entitled to consume it. Boundary-scoped ONLY — this reset runs from RunBoundaryCore's
+        // poll-commit path, OnSceneChanged's post-guard call, and (2026-08-26) RunSegmentCut's
+        // evidence-less belt cut (its own inline copy of this same staleness fix — see that method's
+        // doc) — still never from a within-run auto-archive trigger (wipe/boss/idle/stage calls
+        // ManualArchive directly, not through here) — so a still-open stage's latch keeps flowing
+        // forward correctly within the same run.
         // GLUE GAP (documented, not pinned — same IL2CPP-adjacent convention as the other instance-state
         // mutations in this region; Plugin can't be instantiated in tests): this call itself is untestable
         // headless. The invariant it restores — empty live set + empty latch yields no bosses — is pinned
@@ -130,6 +140,33 @@ public sealed partial class Plugin
         BankRunBoundary(reason);
     }
 
+    // Segment CUT with run identity preserved (raid run-split fix, spec 2026-08-26). A mid-run
+    // loading flash resolved by a combat event with NO re-key evidence (same run id, same
+    // IRunTimer.Epoch) is a stage transition INSIDE one run — measured 7×/raid on Clash! Field of
+    // Forgotten Illusions (668840469433679872 / 420861014951591936). Bank the segment exactly as
+    // the old boundary commit did (same ArchiveReason → trig "boundary", same run-scoped tracker
+    // resets, same stage-boss/elite latch hygiene) but KEEP the identity block: _lastRunId,
+    // _lastRunStartMs and _relaunchPartyFallback survive, the relaunch marker stays, and
+    // NotifyDiscordRunEnded does not fire (the run did NOT end — it used to fire 7×/raid here).
+    // This is what makes a split structurally impossible without run-id/epoch evidence: the
+    // once-per-run start latch can no longer be reset mid-run, so a framework timer rank-upgrade
+    // has nothing to re-latch through. Owner decision 2026-08-26: cuts are PRESERVED (the
+    // scripted-death stage seam is cut only by this path), identity is not.
+    private void RunSegmentCut(AutoArchive.ArchiveReason reason)
+    {
+        ResetRunScopedTrackers();
+        ManualArchive(reason);
+        // Same post-archive latch hygiene as BankRunBoundary (see its 2026-08-13 staleness note):
+        // this boundary-shaped archive attempt had its read; the latches must not outlive it. Load-
+        // bearing order, not an inert leftover: ResetRunScopedTrackers (above) LATCHES the outgoing
+        // stage into _segmentStageBosses/_segmentElites (LatchStageBosses/LatchElites) before
+        // clearing the live sets; ManualArchive's BuildHistoryEntry then CONSUMES that latch to build
+        // THIS segment's boss/elite rows; only once that read has happened may the latch be CLEARED
+        // below — same latch→consume→clear order as BankRunBoundary.
+        _segmentStageBosses = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+        _segmentElites = Array.Empty<(EntityId Id, int ConfigId, bool Killed)>();
+    }
+
     // Run-boundary poll (spec 2026-08-12, B-mode glue landed Task 4). Alloc-free: four reads + a mask
     // compare + an enum compare. Called from Plugin.cs's OnUpdate BEFORE TrackClearLatch() so a commit
     // banks the OLD run before the new run's state starts tracking. The CommittedOldRunId == _lastRunId
@@ -146,7 +183,7 @@ public sealed partial class Plugin
     {
         bool loading = (_services.ClientState.UiState & GameUIState.Loading) != 0;
         var boundaryAction = _runBoundary.Observe(
-            _services.Dungeon.CurrentRunId, _services.Dungeon.RunTimerStartMs,
+            _services.Dungeon.CurrentRunId, _services.RunTimer.Epoch,
             inWorldLoading: loading, combatEvent: false, nowMs: _services.CombatSnapshot.ServerNowMs);
         if (boundaryAction == RunBoundaryTracker.BoundaryAction.Commit && _runBoundary.CommittedOldRunId == _lastRunId)
         {
@@ -168,12 +205,22 @@ public sealed partial class Plugin
         if (!_runBoundary.IsArmed) return;
         bool loading = (_services.ClientState.UiState & GameUIState.Loading) != 0;
         var boundaryAction = _runBoundary.Observe(
-            _services.Dungeon.CurrentRunId, _services.Dungeon.RunTimerStartMs,
+            _services.Dungeon.CurrentRunId, _services.RunTimer.Epoch,
             inWorldLoading: loading, combatEvent: true, nowMs: _services.CombatSnapshot.ServerNowMs);
         if (boundaryAction == RunBoundaryTracker.BoundaryAction.Commit && _runBoundary.CommittedOldRunId == _lastRunId)
         {
             LogRunBoundary("combat-belt", _runBoundary.CommittedOldRunId, _services.Dungeon.CurrentRunId, _stats.Count);
             RunBoundaryCore(AutoArchive.ArchiveReason.RunBoundary);
+        }
+        else if (boundaryAction == RunBoundaryTracker.BoundaryAction.Cut && _lastRunId != 0)
+        {
+            // Guard: a Cut with no latched _lastRunId means a boundary Commit already banked (and
+            // zeroed the identity latch) earlier THIS tick — the absorb-pending-into-rising-edge
+            // re-arm interleave lets the tracker independently resolve Cut on the same frame its own
+            // Commit already zeroed Plugin._lastRunId. There is nothing left to cut; skip rather than
+            // stamp a bogus LevelUuid = 0 segment archive.
+            LogRunBoundary("combat-belt-cut", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+            RunSegmentCut(AutoArchive.ArchiveReason.RunBoundary);
         }
     }
 }

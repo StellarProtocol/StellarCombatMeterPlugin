@@ -11,14 +11,17 @@ namespace Stellar.CombatMeter.AutoArchive;
 /// cref="NotifySceneBoundaryHandled"/> arriving first (the normal case) cancels it silently, and
 /// only a later Observe tick that crosses the deadline while still pending returns Commit — the
 /// missed-scene-event heal (re-entry yank / open-world line switch) this poll exists for. B-mode
-/// adds the load cycle: rising edge ARMs a (runId, runTimerStartMs) reference; the falling edge
-/// commits when EITHER differs (yank: stale id, fresh timer — the measured IkriESpwsl shape) and
-/// discards when both match (same-instance teleport — replay continuity, P0). An id change WHILE a
+/// adds the load cycle: rising edge ARMs a (runId, runTimerEpoch) reference; the falling edge
+/// commits when the run id OR the run-timer LATCH EPOCH differs (yank: stale id, re-keyed run —
+/// the measured IkriESpwsl shape) and discards when both match (same-instance teleport — replay
+/// continuity, P0); a combat event while armed resolves the same comparison early and, with no
+/// evidence, banks a segment Cut instead of a boundary (raid run-split fix 2026-08-26 — the timer
+/// VALUE is rank-UPGRADED mid-run and is never compared here). An id change WHILE a
 /// concrete loading bit is already known (B-mode, inWorldLoading is not null) commits immediately,
 /// same as before this fix — the grace window only guards the pure-C-mode poll usage, where no
 /// other signal distinguishes "the scene path just hasn't run yet" from "the scene path was
-/// missed". Timer changes compare ONLY across a load cycle: mid-run rank-upgrade refinements
-/// (SetRunTimerStart) must never cut a run. Alloc-free; plain fields only.
+/// missed". Epoch changes compare ONLY across a load cycle; the timer VALUE is not an input at
+/// all — mid-run rank-upgrade refinements are invisible by construction. Alloc-free; plain fields only.
 ///
 /// <para>rb-task-4 review fixes: (1) a loading rising edge arriving while a C-mode candidate is still
 /// pending grace now banks the pending boundary immediately and arms fresh for the load cycle that is
@@ -29,7 +32,7 @@ namespace Stellar.CombatMeter.AutoArchive;
 /// </summary>
 internal sealed class RunBoundaryTracker
 {
-    internal enum BoundaryAction { None, Commit, Discard }
+    internal enum BoundaryAction { None, Commit, Discard, Cut }
 
     // Grace window the pure-C-mode poll gives the scene path to claim a run-id change itself
     // (NotifySceneBoundaryHandled) before this tracker commits it unilaterally. Normal play calls
@@ -39,7 +42,7 @@ internal sealed class RunBoundaryTracker
 
     private long _lastRunId;
     private long _armedRunId;        // 0 = not armed
-    private long _armedTimerMs;
+    private int _armedEpoch;
     private bool _lastLoading;
     private bool _hasObserved;       // false only before the very first Observe call ever made
 
@@ -55,7 +58,7 @@ internal sealed class RunBoundaryTracker
     /// on this so the hot path costs exactly one bool test when the tracker is not armed.</summary>
     internal bool IsArmed => _armedRunId != 0;
 
-    internal BoundaryAction Observe(long runId, long runTimerStartMs, bool? inWorldLoading, bool combatEvent, long nowMs)
+    internal BoundaryAction Observe(long runId, int runTimerEpoch, bool? inWorldLoading, bool combatEvent, long nowMs)
     {
         bool loading = inWorldLoading ?? false;
 
@@ -95,7 +98,7 @@ internal sealed class RunBoundaryTracker
             // AbsorbPendingIntoRisingEdge's doc for why this sub-branch must be checked FIRST.
             if (inWorldLoading is not null && loading && !_lastLoading && runId != 0)
             {
-                action = AbsorbPendingIntoRisingEdge(runId, runTimerStartMs);
+                action = AbsorbPendingIntoRisingEdge(runId, runTimerEpoch);
             }
             else if (nowMs >= _pendingDeadlineMs)
             {
@@ -107,22 +110,27 @@ internal sealed class RunBoundaryTracker
         }
         else if (inWorldLoading is not null && _armedRunId != 0)
         {
-            if (combatEvent || (!loading && _lastLoading && runTimerStartMs != _armedTimerMs))
+            bool resolved = combatEvent || (!loading && _lastLoading);
+            if (resolved && runTimerEpoch != _armedEpoch)
             {
-                CommittedOldRunId = _armedRunId;     // yank: same stale id, run restarted
+                CommittedOldRunId = _armedRunId;      // yank: same stale id, run re-KEYED
                 action = BoundaryAction.Commit;
                 _armedRunId = 0;
             }
-            else if (!loading && _lastLoading)
+            else if (resolved)
             {
-                action = BoundaryAction.Discard;      // same instance, same run
+                // No re-key evidence. A combat event proves the load resolved into the SAME
+                // still-keyed run — bank a segment CUT (granularity preserved) but the caller
+                // must NOT reset run identity. A quiet falling edge is the same-instance
+                // teleport: Discard, no archive (unchanged).
+                action = combatEvent ? BoundaryAction.Cut : BoundaryAction.Discard;
                 _armedRunId = 0;
             }
         }
         else if (inWorldLoading is not null && loading && !_lastLoading && runId != 0)
         {
             _armedRunId = runId;                      // rising edge: ARM
-            _armedTimerMs = runTimerStartMs;
+            _armedEpoch = runTimerEpoch;
         }
 
         _lastRunId = runId;
@@ -155,12 +163,12 @@ internal sealed class RunBoundaryTracker
     /// boundary), so this banks the pending boundary NOW instead of waiting out the grace window, then
     /// arms fresh for the load cycle that is genuinely starting — two distinct boundaries (the
     /// already-confirmed old id, and whatever this new load resolves into), so nothing double-commits.</summary>
-    private BoundaryAction AbsorbPendingIntoRisingEdge(long runId, long runTimerStartMs)
+    private BoundaryAction AbsorbPendingIntoRisingEdge(long runId, int runTimerEpoch)
     {
         CommittedOldRunId = _pendingOldRunId;
         _pendingOldRunId = 0;
         _armedRunId = runId;
-        _armedTimerMs = runTimerStartMs;
+        _armedEpoch = runTimerEpoch;
         return BoundaryAction.Commit;
     }
 

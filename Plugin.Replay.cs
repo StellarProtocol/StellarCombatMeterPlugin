@@ -127,15 +127,30 @@ public sealed partial class Plugin
     internal static bool IsWithinReplaySettle(long nowMs, long lastSceneChangeMs)
         => lastSceneChangeMs != 0 && nowMs >= lastSceneChangeMs && nowMs - lastSceneChangeMs < ReplaySettleMs;
 
+    /// <summary>I4 (2026-08-26 raid-bosshp-capture-design, full-chain review): the "still in AOI"
+    /// input to <see cref="ShouldProbeTransform"/>'s crash-risk gate. <c>IsKnown</c> ALONE stopped
+    /// meaning "still in AOI" once the framework's LeftAoi fix landed — a Normal AOI-disappear now
+    /// KEEPS the vitals row (IsKnown stays true, stale-but-real) instead of evicting it, so a kept
+    /// row must NOT hold the probe gate open. Pure/static so it pins headless.</summary>
+    internal static bool IsStillAoiKnown(EntityVitals vitals) => vitals.IsKnown && !vitals.LeftAoi;
+
     // Delegate handed to ReplayCapture — gates the live-transform probe on entity liveness so it can
     // never dereference a freed IL2CPP model. GetVitals is a managed cache read (no IL2CPP), so the
     // gate itself is always safe to evaluate even mid-teardown.
+    //
+    // I4 (2026-08-26 raid-bosshp-capture-design, full-chain review): `IsKnown` alone stopped meaning
+    // "still in AOI" once the framework's LeftAoi fix landed — a Normal AOI-disappear now KEEPS the
+    // vitals row (IsKnown stays true, stale-but-real). Gating this probe on IsKnown alone would hold
+    // the crash-risk gate OPEN for an entity that actually left AOI (and whose IL2CPP model may
+    // already be freed) — exactly the class of bug this gate exists to prevent. `!vitals.LeftAoi` is
+    // required alongside IsKnown.
     private bool SafeTryGetTransform(EntityId id, out Position3D position, out float yaw)
     {
         position = Position3D.Zero;
         yaw = 0f;
+        var vitals = _services.CombatLookup.GetVitals(id);
         if (!ShouldProbeTransform(id, _services.CombatSnapshot.LocalEntityId,
-                IsRosterMember(id), _services.CombatLookup.GetVitals(id).IsKnown))
+                IsRosterMember(id), IsStillAoiKnown(vitals)))
             return false;
         return _services.EntityTransforms.TryGetTransform(id, out position, out yaw);
     }
@@ -194,7 +209,8 @@ public sealed partial class Plugin
         // events, which by definition haven't happened yet during the walk-in. NoteEntity is a cheap
         // idempotent dict-contains check, safe to call every tick (covers late-joining members too).
         NoteRosterEntities();
-        var nowMs = (int)_services.CombatSnapshot.ServerNowMs;
+        // P0 int32-wrap fix: raw `long` ServerNowMs — an (int) cast here used to wrap mod 2^32 (owner-proven on run sea/dN42ox4Nhd) and every downstream absolute timestamp inherited it.
+        var nowMs = _services.CombatSnapshot.ServerNowMs;
         var dtMs  = deltaTimeSec * 1000f;
         // Post-scene-change settle gate — skip probing while the mass entity teardown/rebuild after a
         // line-switch / dungeon-enter is still in flight (see SafeTryGetTransform's crash rationale).
@@ -266,6 +282,7 @@ public sealed partial class Plugin
         _replaySpecs.Clear();
         _trackCapLogged = false;
         _bossDeathMarked = false;
+        _bossHpTickLastState.Clear();   // recon §6 line-2 rate-limit latch (Plugin.Diagnostics.cs)
         _replayWatermarkMs  = ReplayWatermarkUnset;
         _replayWindowUpperMs = 0;
     }
@@ -289,7 +306,7 @@ public sealed partial class Plugin
     /// coexist; <c>Track</c> is idempotent so re-tracking the same entity from both blocks is a
     /// harmless no-op.
     /// </summary>
-    private void TickHpTimelines(int nowMs, float dtMs)
+    private void TickHpTimelines(long nowMs, float dtMs)
     {
         if (_hpSampler is null || _replay is null) return;
         // HP timelines stay committed-only: pre-combat vitals are unknown/absent (no boss
@@ -317,12 +334,14 @@ public sealed partial class Plugin
             }
         }
 
-        // When the boss's vitals read dead (hp <= 0 while it was a known boss), stamp a final 0%
-        // on its HP track so the replay shows the kill (see HpTimelineSampler.MarkDead). One-shot.
+        // When the boss's vitals read dead (hp <= 0 while it was a known boss) OR the native
+        // boss-blood tap reads literal 0% (spec item 4 — an independent signal for a raid boss whose
+        // WIRE vitals starve, recon L1), stamp a final 0% on its HP track so the replay shows the
+        // kill (see HpTimelineSampler.MarkDead). One-shot.
         if (!_bossDeathMarked && _bossEntityId.Value != 0)
         {
             var bv = _services.CombatLookup.GetVitals(_bossEntityId);
-            if (bv.MaxHp > 0 && bv.Hp <= 0)
+            if (ShouldMarkBossDead(bv.MaxHp > 0 && bv.Hp <= 0, IsNativeBossZero(_bossEntityId)))
             {
                 _hpSampler.MarkDead(_bossEntityId.Value, nowMs - _replay.CombatStartMs);
                 _bossDeathMarked = true;
@@ -412,21 +431,24 @@ public sealed partial class Plugin
             // Open field is still excluded, structurally: a field fight has no run id.
             if (entry.LevelUuid == 0) return null;
 
-            // upperMs = capture-relative "now" (int32-since-enter; see _replayWatermarkMs); a boss-cut cap (same truncation) moves it earlier.
-            var upperMs = (long)((int)_services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs);
-            if (replayUpperCapServerMs != ReplayUpperCapUnset) upperMs = ReplayWindow.CapUpper(upperMs, (int)replayUpperCapServerMs - _replay.CombatStartMs, _replayWatermarkMs);
+            // upperMs = capture-relative "now" (a genuinely small delta — see _replayWatermarkMs); a boss-cut cap moves it earlier.
+            // P0 int32-wrap fix: stays `long` end to end — the old `(int)ServerNowMs`/`(int)replayUpperCapServerMs` casts wrapped mod 2^32 (owner-proven on run sea/dN42ox4Nhd).
+            var upperMs = _services.CombatSnapshot.ServerNowMs - _replay.CombatStartMs;
+            if (replayUpperCapServerMs != ReplayUpperCapUnset) upperMs = ReplayWindow.CapUpper(upperMs, replayUpperCapServerMs - _replay.CombatStartMs, _replayWatermarkMs);
             var windowTracks = SliceWindowPositions(_replayWatermarkMs, upperMs);
             if (windowTracks.Count == 0) return null;                // empty window → no upload, watermark unchanged
             _replayWindowUpperMs = upperMs;
             var localUid  = _services.CombatSnapshot.LocalEntityId.Value;
             var encounter = CombatLogAssembler.BuildEncounter(entry);
             // Per-doc contract unchanged: rebase Ms0 onto THIS segment's combat start (capture zero is run-constant).
-            var msOffset = _replay.CombatStartMs - (int)encounter.StartMs;
+            // P0 int32-wrap fix: subtract in `long` (both epoch-scale) THEN narrow — the old `(int)encounter.StartMs` cast wrapped independently of _replay.CombatStartMs.
+            var msOffset = (int)(_replay.CombatStartMs - encounter.StartMs);
 
             var boss = ResolveWindowBossFields(windowTracks, upperMs, msOffset);
             // Multi-boss (Task 4): every stage-set boss, windowed — feeds Bosses[] + the meta-id union.
             var windowBosses = BuildWindowBossMembers(windowTracks, upperMs, msOffset);
             var windowElites = BuildWindowEliteMembers(windowTracks, upperMs, msOffset);   // ELITE CAPTURE channel — feeds Elites[] only, see PositionUploadDoc.Elites' doc
+            var (windowStartMs, windowEndMs) = ResolveWindowBounds(_replay.CombatStartMs, _replayWatermarkMs, upperMs);   // P0 walk-in-anchor fix — see its doc (Plugin.ReplayWindow.cs)
 
             var doc = PositionTrackAssembler.Assemble(
                 samplesByEntity: windowTracks,
@@ -443,8 +465,8 @@ public sealed partial class Plugin
                 LogId        = GenerateReplayLogId(),
                 LevelUuid    = entry.LevelUuid,
                 LocalUid     = localUid,
-                StartMs      = encounter.StartMs,
-                EndMs        = encounter.EndMs,
+                StartMs      = windowStartMs,
+                EndMs        = windowEndMs,
                 Nonce        = GenerateReplayNonce(),
                 BossEntityId = boss.idStr,
                 BossHp       = boss.hp,
@@ -513,29 +535,11 @@ public sealed partial class Plugin
         return (bossIdStr, _bossMonsterInfo);
     }
 
-    /// <summary>
-    /// Per-member HP-track builder (multi-boss plan Task 3): every current stage-set boss's id,
-    /// monster config id, and sampled HP track (null if the sampler has no samples for it yet).
-    /// Consumed by <c>BuildWindowBossMembers</c> (Task 4, Plugin.ReplayWindow.cs), which slices+rebases
-    /// each member's track to the upload window and feeds both the additive
-    /// <see cref="Replay.PositionUploadDoc.Bosses"/> array and the meta-id union. Critical 1 fix (final
-    /// review): reads <c>ResolveCurrentStageBosses()</c> (Plugin.BossDetection.cs) — the live set, or the
-    /// sticky latch when the live set already drained/reset before this ran — instead of the live set
-    /// directly, so a window built after the boss died/the run boundary fired still carries it. This
-    /// allocates a list of size Count either way, which is fine here (archive/window-assembly time,
-    /// never per-tick).
-    /// </summary>
-    private IReadOnlyList<(EntityId id, int configId, HpTrack? track)> BuildBossHpTracks()
-    {
-        var members = ResolveCurrentStageBosses();
-        var list = new List<(EntityId, int, HpTrack?)>(members.Count);
-        for (var i = 0; i < members.Count; i++)
-        {
-            var (id, configId, _) = members[i];
-            list.Add((id, configId, _hpSampler?.GetTrack(id.Value)));
-        }
-        return list;
-    }
+    // BuildBossHpTracks (multi-boss plan Task 3, extended by spec item 3/recon L3 to union in
+    // sampler-tracked-but-not-in-stage-set bosses) moved to Plugin.BossHpMembership.cs alongside
+    // MergeBossMembership/LookupReplayMonster/IsNativeBossZero — it now needs
+    // ResolveCurrentStageBosses (Plugin.BossDetection.cs) plus that pure merge helper, and both
+    // Plugin.Replay.cs and Plugin.BossDetection.cs are already at the file-size guardrail.
 
     // -----------------------------------------------------------------------
     // Helpers
