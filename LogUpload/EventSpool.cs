@@ -41,6 +41,7 @@ internal sealed class EventSpool
         _buffx = new SpoolTrack(SpoolCodec.TrackBuffRejected, _segmentId, store, chunkEvents);
     }
 
+    /// <summary>Events whose CombatEvent case has no wire mapping since the last Rotate (forward-compat net). Read it BEFORE <see cref="Rotate"/> — rotating starts a fresh segment and zeroes the counter. EntityAttributesChanged is handled before the converter and never counts here.</summary>
     internal int SkippedUnknownEvents { get; private set; }
 
     /// <summary>True until this segment has its keyframe. Plugin.SheetCapture's tick asks this once per tick.</summary>
@@ -73,12 +74,15 @@ internal sealed class EventSpool
         if (wire is null) { SkippedUnknownEvents++; return; }
         if (evt is CombatEvent.BuffChanged b)
         {
+            // ROUTE, never drop: the filter picks the uploaded track or the disk-only one. The firer is
+            // resolved to its OWNER first (spec § 6.8) so a player's summon counts as that player.
             (BuffUploadFilter.ShouldUpload(_owners.OwnerOf(b.FirerId), b.TargetId, self) ? _buff : _buffx).Add(wire);
             return;
         }
         _dmg.Add(wire);
     }
 
+    /// <summary>Seal all four tracks into a segment and start a fresh one. Main thread; O(1) apart from the last batch hand-off (its serialize+gzip+write runs on the thread pool, awaited via the segment's <see cref="SpoolSegment.Completion"/> — the main thread NEVER awaits it).</summary>
     internal SpoolSegment Rotate()
     {
         var (dmg, tDmg, cDmg, fDmg) = _dmg.Seal();
@@ -91,8 +95,10 @@ internal sealed class EventSpool
         return seg;
     }
 
+    /// <summary>Drop the current segment: its blobs are deleted after their writes finish. Replaces the ring's Clear(). Fire-and-forget — the deletion task is rooted by its own continuation, so nothing is retained here (a per-call list would grow for the life of the process).</summary>
     internal void Discard() => _ = DiscardAsync();
 
+    /// <summary>Awaitable form of <see cref="Discard"/> — tests await it to observe the blobs gone.</summary>
     internal Task DiscardAsync()
     {
         var (dmg, _, cDmg, _) = _dmg.Seal();
