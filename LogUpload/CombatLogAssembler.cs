@@ -56,8 +56,7 @@ internal sealed class CombatLogAssembler
         bool truncatedEvents,
         int eventChunks = 0,
         InstallKey? installKey = null,
-        bool truncatedBuffEvents = false,
-        IReadOnlyList<BuffEffectAgg>? buffEffects = null)
+        bool truncatedBuffEvents = false)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
@@ -124,7 +123,7 @@ internal sealed class CombatLogAssembler
             EventChunks:  eventChunks);
 
         // Plugin-authoritative aggregates (uncapped) ride alongside the (capped) raw event detail track.
-        var derived = DerivedBuilder.Build(entry, truncatedEvents, truncatedBuffEvents, buffEffects);
+        var derived = DerivedBuilder.Build(entry, truncatedEvents, truncatedBuffEvents);
         // Task 8: the summary blob always ships events: [] — the raw stream (if any) uploads
         // separately via sequential chunk POSTs once this summary lands (see ChunkUploader).
         var logUnsigned = new CombatLog(1, header, actors, Array.Empty<CombatLogEvent>(), derived);

@@ -10,7 +10,7 @@ namespace Stellar.CombatMeter.LogUpload;
 internal static class DerivedBuilder
 {
     internal static Derived Build(Plugin.EncounterHistoryEntry entry, bool truncatedEvents,
-        bool truncatedBuffEvents = false, IReadOnlyList<BuffEffectAgg>? buffEffects = null)
+        bool truncatedBuffEvents = false)
     {
         var perActor = new Dictionary<string, ActorAgg>(entry.Stats.Count);
         var dmgSkills = new Dictionary<string, IReadOnlyList<SkillAgg>>();
@@ -59,8 +59,7 @@ internal static class DerivedBuilder
             casts.Count > 0 ? casts : null,
             boss.Dealt, boss.Taken, boss.Series,
             elite.Dealt, elite.Taken, elite.Series,
-            truncatedBuffEvents,
-            buffEffects is { Count: > 0 } ? buffEffects : null);
+            truncatedBuffEvents);
     }
 
     private static SeriesBlock BuildSeries(Plugin.EncounterHistoryEntry entry, int bucketMs)

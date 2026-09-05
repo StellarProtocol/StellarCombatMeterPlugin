@@ -418,13 +418,11 @@ public sealed partial class Plugin
             // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
             // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
             // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
-            var buffEffects = flushBuffer ? _buffEffects.Drain() : null;
-            // manual re-upload (flushBuffer=false) must not drain the LIVE sampler onto an OLD run — same hazard as the boss-set note above (stale live state mislabeling a different run)
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, buffEffects);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff);
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
-            LogSegmentOutcome("Uploading", log, seg, buffEffects?.Count ?? 0);
+            LogSegmentOutcome("Uploading", log, seg);
 
             // Auto uploads (flushBuffer) get spread across a window so the party's simultaneous
             // archives don't all land on the worker in the same second; manual is user-initiated,
@@ -586,11 +584,9 @@ public sealed partial class Plugin
     {
         try
         {
-            // Reached only from flushing (live-archive) callers, never manual re-upload — same "don't drain the LIVE sampler onto an OLD run" hazard as the comment in AssembleAndUpload.
-            var buffEffects = _buffEffects.Drain();
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, buffEffects);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff);
             PersistReUpload(entry, log, seg, replayDoc);
-            LogSegmentOutcome("Retained (not uploaded)", log, seg, buffEffects.Count);
+            LogSegmentOutcome("Retained (not uploaded)", log, seg);
         }
         catch (Exception ex)
         {
