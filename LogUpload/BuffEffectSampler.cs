@@ -41,6 +41,9 @@ internal sealed class BuffEffectSampler
     private long _lastSelfChangeMs = long.MinValue;
 
     internal bool HasPending => _pending.Count > 0;
+    /// <summary>Test-only observation seam for the <see cref="MaxPending"/> cap — replaces a reflection
+    /// probe of the private <c>_pending</c> list (<c>BuffEffectSamplerTests.Pending_is_capped_drop_oldest</c>).</summary>
+    internal int PendingCount => _pending.Count;
 
     /// <summary>Convenience overload for an already-read sheet (tests; and any future eager caller).
     /// Delegates to the lazy overload so the admission rule lives in exactly one place.</summary>

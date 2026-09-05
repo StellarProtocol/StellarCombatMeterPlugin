@@ -424,11 +424,7 @@ public sealed partial class Plugin
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
-            _services.Log.Info(
-                $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-                $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), {entry.Entities.Count} actors, {buffEffects?.Count ?? 0} buff effect(s)).");
-            if (seg.WriteFaults > 0)
-                _services.Log.Warning($"[CombatMeter.SP1] {seg.WriteFaults} spool blob write(s) failed for segment {seg.SegmentId} — those chunks will be skipped at upload (blob missing).");
+            LogSegmentOutcome("Uploading", log, seg, buffEffects?.Count ?? 0);
 
             // Auto uploads (flushBuffer) get spread across a window so the party's simultaneous
             // archives don't all land on the worker in the same second; manual is user-initiated,
@@ -591,11 +587,10 @@ public sealed partial class Plugin
         try
         {
             // Reached only from flushing (live-archive) callers, never manual re-upload — same "don't drain the LIVE sampler onto an OLD run" hazard as the comment in AssembleAndUpload.
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, _buffEffects.Drain());
+            var buffEffects = _buffEffects.Drain();
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, buffEffects);
             PersistReUpload(entry, log, seg, replayDoc);
-            _services.Log.Info(
-                $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-                $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), replay={(replayDoc is not null)}).");
+            LogSegmentOutcome("Retained (not uploaded)", log, seg, buffEffects.Count);
         }
         catch (Exception ex)
         {

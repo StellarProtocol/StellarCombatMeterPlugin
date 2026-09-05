@@ -149,35 +149,36 @@ public sealed class BuffEffectSamplerTests
         Assert.Empty(notYet.Drain());
     }
 
-    // Reflection probe for the internal (private) _pending list size — the direct, falsifiable check for
-    // the cap. NOTE: Drain()'s own sample total is NOT a substitute for this (verified while writing this
-    // test): the symmetric quiet-window rule marks nearly every one of a back-to-back batch "dirty" against
-    // the LAST feed's _selfChangeSeq, so Drain()'s N stays tiny (≈0-1) whether or not the cap exists — that
-    // assertion alone would pass even with the guard removed. Only the raw pending-list size actually
-    // distinguishes "capped" from "unbounded".
-    private static int PendingCountOf(BuffEffectSampler s)
-        => ((System.Collections.ICollection)typeof(BuffEffectSampler)
-                .GetField("_pending", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .GetValue(s)!).Count;
-
     // Defence in depth: a feed that keeps admitting candidates while nothing ever Ticks (e.g. a stalled
-    // clock) must not grow _pending without bound. Feed 300 quiet, admitted candidates 10s apart (so each
-    // is individually "clean" on admission) with no intervening Tick, then resolve everything at once.
+    // clock) must not grow _pending without bound. Feed MaxPending+44 quiet, admitted candidates 10s apart
+    // (so each is individually "clean" on admission) with no intervening Tick, then resolve everything at
+    // once.
+    //
+    // The genuinely falsifiable check is PendingCount == MaxPending right after the feed loop — the direct,
+    // public observation seam for the cap (replaces a reflection probe of the private _pending list).
+    // Reverting the drop-oldest guard (`if (_pending.Count >= MaxPending) _pending.RemoveAt(0);` in
+    // OnSelfBuff) makes this MaxPending+44 instead, failing the assertion below.
+    //
+    // Drain()'s own sample total is NOT a substitute for that check (verified while writing this test):
+    // every candidate here shares one global _selfChangeSeq, so Tick's dirty-window check
+    // (`_selfChangeSeq != p.SeqAtSnapshot`) discards every admission except the very LAST one fed, whether
+    // or not the cap ever fired — the post-Drain total stays 0-or-1 regardless of the cap. It is kept below
+    // only as a sanity net that draining a capped-then-resolved sampler doesn't blow past the cap, not as
+    // evidence that the OLDEST specifically was the one dropped.
     [Fact]
     public void Pending_is_capped_drop_oldest()
     {
         var s = new BuffEffectSampler();
-        for (var i = 0; i < 300; i++)
+        const int feeds = BuffEffectSampler.MaxPending + 44;
+        for (var i = 0; i < feeds; i++)
         {
             var t = 1_000_000L + i * 10_000L;
             s.OnSelfBuff(Applied(t), Sheet(500, 0), t);
         }
         Assert.True(s.HasPending);
-        // The actual cap: without the drop-oldest guard this grows to 300 (verified: reverting the guard
-        // and re-running this assertion fails with 300 > 256).
-        Assert.True(PendingCountOf(s) <= BuffEffectSampler.MaxPending);
+        Assert.Equal(BuffEffectSampler.MaxPending, s.PendingCount);   // the falsifiable cap check
 
-        s.Tick(() => Sheet(1_500, 800), 1_000_000L + 300 * 10_000L + 10_000L);   // far in the future — every deadline has passed
+        s.Tick(() => Sheet(1_500, 800), 1_000_000L + feeds * 10_000L + 10_000L);   // far in the future — every deadline has passed
         var total = s.Drain().Sum(a => a.N);
         Assert.True(total <= BuffEffectSampler.MaxPending);
     }
