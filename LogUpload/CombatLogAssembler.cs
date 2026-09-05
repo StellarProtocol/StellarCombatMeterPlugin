@@ -56,8 +56,7 @@ internal sealed class CombatLogAssembler
         bool truncatedEvents,
         int eventChunks = 0,
         InstallKey? installKey = null,
-        bool truncatedBuffEvents = false,
-        bool truncatedSheetEvents = false)
+        bool truncatedBuffEvents = false, bool truncatedSheetEvents = false)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;

@@ -13,7 +13,7 @@ public sealed partial class Plugin
     /// <summary>
     /// Emits the one info line both the upload path (<c>AssembleAndUpload</c>) and the retain path
     /// (<c>RetainAssembled</c>) print for an assembled <paramref name="log"/>/<paramref name="seg"/> —
-    /// dmg/buff chunk counts — with the verb/outcome wording supplied by <paramref name="what"/> (e.g.
+    /// dmg/buff/sheet chunk counts — with the verb/outcome wording supplied by <paramref name="what"/> (e.g.
     /// "Uploading" vs "Retained (not uploaded)"), then, only when <paramref name="seg"/> recorded a
     /// write fault, the accompanying warning that those chunks will be skipped at upload (blob missing).
     /// </summary>

@@ -89,7 +89,7 @@ internal static class ChunkUploader
         { Url = url; TerminalOn404 = terminalOn404; Label = label; }
         internal string Url { get; }
         /// <summary>Whether a 404 means "this ROUTE does not exist on that server" (terminal for the whole
-        /// track) rather than "this chunk failed". True for <c>/buff-events</c> ONLY: it ships with this
+        /// track) rather than "this chunk failed". True for <c>/buff-events</c> AND <c>/sheet-events</c>: they ship with this
         /// release, so a 404 there is an old worker. <c>/events</c> has existed all along, so a 404 there is
         /// an ordinary failure and keeps the V1 per-chunk retry semantics.</summary>
         internal bool TerminalOn404 { get; }
