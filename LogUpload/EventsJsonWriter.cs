@@ -45,6 +45,15 @@ internal static class EventsJsonWriter
                     if (b.SrcOwner is not null) w.Name("srcOwner").Str(b.SrcOwner);
                     w.EndObject();
                     break;
+                case SheetEvent s:
+                    w.BeginObject();
+                    w.Name("t").Str("sheet"); w.Name("ms").Number(s.Ms);
+                    if (s.Keyframe) w.Name("k").Number(1);
+                    w.Name("a"); w.BeginArray();
+                    foreach (var pair in s.Attrs) { w.BeginArray(); w.Number(pair[0]); w.Number(pair[1]); w.EndArray(); }
+                    w.EndArray();
+                    w.EndObject();
+                    break;
             }
         }
         w.EndArray();

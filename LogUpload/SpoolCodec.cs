@@ -16,6 +16,10 @@ internal static class SpoolCodec
     /// <summary>Buff rows <see cref="BuffUploadFilter"/> admits. Uploaded to <c>/buff-events</c>.</summary>
     internal const string TrackBuff = "buff";
 
+    /// <summary>The local player's damage-relevant attributes as absolute values, change-only behind one
+    /// keyframe per segment (spec § 6.1). Uploaded (Task 7 names its endpoint).</summary>
+    internal const string TrackSheet = "sheet";
+
     /// <summary>Buff rows the filter REJECTS. Captured to disk like every other row (capture is
     /// unconditional — spec § 4.2 / § 9 invariant 2) but never posted to any endpoint: the filter is a
     /// SEND gate, so these live only in the local blobs the retention container owns.</summary>

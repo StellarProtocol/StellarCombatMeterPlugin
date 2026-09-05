@@ -128,4 +128,69 @@ public sealed class EventSpoolTests
         Assert.Equal(1, seg.Buff.Single().Count);
         Assert.Equal(1, seg.BuffRejected.Single().Count);
     }
+
+    static CombatEvent Attrs(long ms, EntityId who, params (int id, long v)[] pairs)
+    {
+        var list = new System.Collections.Generic.List<AttrValue>();
+        foreach (var (id, v) in pairs) list.Add(new AttrValue(id, v));
+        return new CombatEvent.EntityAttributesChanged(ms, who, list);
+    }
+    static System.Collections.Generic.IReadOnlyDictionary<int, long> LiveSheet() =>
+        new System.Collections.Generic.Dictionary<int, long> { [11710] = 3000, [12670] = 1000, [11320] = 99 };
+
+    [Fact]
+    public async Task Self_attr_events_land_in_the_sheet_track_behind_one_keyframe()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Attrs(10, Self, (11710, 3350)), Self);
+        spool.Add(Attrs(20, Self, (11320, 5)), Self);            // untracked only → no row
+        spool.Add(Attrs(30, Self, (12670, 1200), (13100, 50)), Self);
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(3, seg.Sheet.Single().Count);               // keyframe + 2 delta rows
+        Assert.Equal(1, seg.ChunkCount);                         // sheet counts as UPLOADABLE
+        var json = SpoolCodec.Gunzip(store.Read(seg.Sheet[0].BlobName)!);
+        Assert.StartsWith("[{\"t\":\"sheet\",\"ms\":10,\"k\":1,", json);   // keyframe first, stamped like the first row
+        Assert.Equal(0, spool.SkippedUnknownEvents);
+    }
+
+    [Fact]
+    public async Task Other_players_attr_events_are_ignored_and_not_counted_as_unknown()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Attrs(10, Mate, (11710, 1)), Self);
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Empty(seg.Sheet);
+        Assert.Equal(0, spool.SkippedUnknownEvents);
+    }
+
+    [Fact]
+    public async Task Keyframe_can_be_requested_by_the_tick_and_is_written_once_per_segment()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        Assert.True(spool.NeedsSheetKeyframe);
+        spool.AddSheetKeyframe(5);
+        Assert.False(spool.NeedsSheetKeyframe);
+        spool.AddSheetKeyframe(6);                               // no-op
+        spool.Add(Attrs(10, Self, (11710, 3350)), Self);         // no second keyframe
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(2, seg.Sheet.Single().Count);
+        Assert.True(spool.NeedsSheetKeyframe);                   // fresh segment wants its own
+    }
+
+    [Fact]
+    public async Task Without_a_sheet_reader_no_keyframe_is_written_but_delta_rows_still_are()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store);
+        spool.Add(Attrs(10, Self, (11710, 3350)), Self);
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(1, seg.Sheet.Single().Count);
+    }
 }
