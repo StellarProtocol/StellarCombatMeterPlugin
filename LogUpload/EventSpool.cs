@@ -57,11 +57,11 @@ internal sealed class EventSpool
     /// <see cref="SpoolSegment.Completion"/> — the main thread NEVER awaits it).</summary>
     internal SpoolSegment Rotate()
     {
-        var (dmg, tDmg, cDmg) = _dmg.Seal();
-        var (buff, tBuff, cBuff) = _buff.Seal();
-        var (buffx, tBuffx, cBuffx) = _buffx.Seal();
+        var (dmg, tDmg, cDmg, fDmg) = _dmg.Seal();
+        var (buff, tBuff, cBuff, fBuff) = _buff.Seal();
+        var (buffx, tBuffx, cBuffx, fBuffx) = _buffx.Seal();
         var seg = new SpoolSegment(_segmentId, dmg, buff, buffx, tDmg, tBuff, tBuffx,
-                                   Task.WhenAll(cDmg, cBuff, cBuffx));
+                                   Task.WhenAll(cDmg, cBuff, cBuffx), fDmg + fBuff + fBuffx);
         StartFresh();
         return seg;
     }
@@ -74,9 +74,9 @@ internal sealed class EventSpool
     /// <summary>Awaitable form of <see cref="Discard"/> — tests await it to observe the blobs gone.</summary>
     internal Task DiscardAsync()
     {
-        var (dmg, _, cDmg) = _dmg.Seal();
-        var (buff, _, cBuff) = _buff.Seal();
-        var (buffx, _, cBuffx) = _buffx.Seal();
+        var (dmg, _, cDmg, _) = _dmg.Seal();
+        var (buff, _, cBuff, _) = _buff.Seal();
+        var (buffx, _, cBuffx, _) = _buffx.Seal();
         var store = _store;
         var names = new List<string>(dmg.Count + buff.Count + buffx.Count);
         foreach (var r in dmg) names.Add(r.BlobName);

@@ -9,10 +9,8 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.CombatMeter</RootNamespace>
     <AssemblyName>Stellar.CombatMeter</AssemblyName>
-    <!-- 2.5.1, not 2.5.0: the registry already publishes 2.5.0, and published versions are immutable.
-         Uploads stamp pluginVer from THIS assembly version (LogUpload/CombatLogAssembler.cs:105), so
-         the owner's raid-test build of the run-split fix must be distinguishable from the published
-         2.5.0 in upload headers. -->
+    <!-- 2.6.0: rDPS capture (event spool + buff track + buff-effect sampler); requires framework 2.7.0
+         (Abstractions 2.7.0). Released lock-step with fw 2.7.0. -->
     <Version>2.6.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

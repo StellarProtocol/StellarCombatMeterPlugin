@@ -29,9 +29,11 @@ internal static class ReUploadContainer
     // 2 (2026-09-05, rDPS spool): chunk REFS replace inlined envelopes. V1 containers still read.
     internal const int Version = 2;
 
-    // How much of a container ReferencedBlobs decompresses before falling back to a full read. Comfortably
-    // larger than a maximal ref list (3 tracks × 128 chunks × ~90 B of JSON — dmg, buff, buffx).
-    private const int RefsHeadBytes = 64 * 1024;
+    // How much of a container ReferencedBlobs decompresses before falling back to a full read. Measured:
+    // ~136 B per ref (JSON: track/index/startMs/endMs/count/blob) × 3 tracks × 128 chunks ≈ 52 KB for a
+    // maximal ref list; 96 KB leaves real headroom over that measured shape rather than sitting close to
+    // it. The full-read fallback (TryReadRefsFromHead returning false) is pinned regardless.
+    private const int RefsHeadBytes = 96 * 1024;
 
     internal static string ContainerName(long levelUuid, long archivedAtMs)
         => $"replay/{levelUuid}-{archivedAtMs}.replaydoc";

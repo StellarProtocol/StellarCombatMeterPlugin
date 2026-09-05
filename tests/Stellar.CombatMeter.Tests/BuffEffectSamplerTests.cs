@@ -128,4 +128,57 @@ public sealed class BuffEffectSamplerTests
         s.Tick(() => new Dictionary<int, long>(), 1_700);      // untracked/reset entity — empty sheet
         Assert.Empty(s.Drain());
     }
+
+    // --- P1 final-review fix: one clock for feed + tick; pending cap ---
+
+    // Pins that the sampler treats feed-time and tick-time as ONE clock domain: a window armed at
+    // nowMs=X closes only once tick-time reaches X+WindowMs, on that SAME clock. This is what makes
+    // Plugin.BuffEffectSampler.cs's fix meaningful — feeding ServerNowMs and ticking ServerNowMs must
+    // mean the same 600ms on both ends, not two clocks that happen to agree "close enough".
+    [Fact]
+    public void Deadline_uses_the_same_clock_on_feed_and_tick()
+    {
+        var closes = new BuffEffectSampler();
+        closes.OnSelfBuff(Applied(1_000_000), Sheet(500, 0), 1_000_000);
+        closes.Tick(() => Sheet(1_500, 800), 1_000_000 + 700);   // 700ms later — the 600ms window has closed
+        Assert.Single(closes.Drain());
+
+        var notYet = new BuffEffectSampler();
+        notYet.OnSelfBuff(Applied(1_000_000), Sheet(500, 0), 1_000_000);
+        notYet.Tick(() => Sheet(1_500, 800), 1_000_000 + 500);   // only 500ms later — window has NOT closed
+        Assert.Empty(notYet.Drain());
+    }
+
+    // Reflection probe for the internal (private) _pending list size — the direct, falsifiable check for
+    // the cap. NOTE: Drain()'s own sample total is NOT a substitute for this (verified while writing this
+    // test): the symmetric quiet-window rule marks nearly every one of a back-to-back batch "dirty" against
+    // the LAST feed's _selfChangeSeq, so Drain()'s N stays tiny (≈0-1) whether or not the cap exists — that
+    // assertion alone would pass even with the guard removed. Only the raw pending-list size actually
+    // distinguishes "capped" from "unbounded".
+    private static int PendingCountOf(BuffEffectSampler s)
+        => ((System.Collections.ICollection)typeof(BuffEffectSampler)
+                .GetField("_pending", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(s)!).Count;
+
+    // Defence in depth: a feed that keeps admitting candidates while nothing ever Ticks (e.g. a stalled
+    // clock) must not grow _pending without bound. Feed 300 quiet, admitted candidates 10s apart (so each
+    // is individually "clean" on admission) with no intervening Tick, then resolve everything at once.
+    [Fact]
+    public void Pending_is_capped_drop_oldest()
+    {
+        var s = new BuffEffectSampler();
+        for (var i = 0; i < 300; i++)
+        {
+            var t = 1_000_000L + i * 10_000L;
+            s.OnSelfBuff(Applied(t), Sheet(500, 0), t);
+        }
+        Assert.True(s.HasPending);
+        // The actual cap: without the drop-oldest guard this grows to 300 (verified: reverting the guard
+        // and re-running this assertion fails with 300 > 256).
+        Assert.True(PendingCountOf(s) <= BuffEffectSampler.MaxPending);
+
+        s.Tick(() => Sheet(1_500, 800), 1_000_000L + 300 * 10_000L + 10_000L);   // far in the future — every deadline has passed
+        var total = s.Drain().Sum(a => a.N);
+        Assert.True(total <= BuffEffectSampler.MaxPending);
+    }
 }

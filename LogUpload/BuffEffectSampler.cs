@@ -23,6 +23,11 @@ internal sealed class BuffEffectSampler
     };
     internal const int WindowMs = 600;
     internal const int MaxSamplesPerKey = 32;
+    /// <summary>Defence in depth against a clock that never advances (e.g. <c>ServerNowMs</c> stalled):
+    /// without this cap a feed that keeps admitting candidates while <see cref="Tick"/> never closes any
+    /// window would grow <c>_pending</c> without bound. Drop-oldest keeps memory flat; losing the oldest
+    /// (longest-overdue, most likely already stale) candidate is the least-bad loss.</summary>
+    internal const int MaxPending = 256;
     private const int DirtySeq = -1;   // unmatchable sentinel: _selfChangeSeq never goes negative
 
     private static readonly Dictionary<int, long> EmptyPre = new();
@@ -69,6 +74,9 @@ internal sealed class BuffEffectSampler
             pre = new Dictionary<int, long>(TrackedAttrs.Length);
             foreach (var a in TrackedAttrs) if (sheetNow.TryGetValue(a, out var v)) pre[a] = v;
         }
+        // Defence in depth against a clock that never advances (see MaxPending doc) — drop the oldest
+        // pending candidate rather than let this list grow without bound.
+        if (_pending.Count >= MaxPending) _pending.RemoveAt(0);
         _pending.Add(new Pending
         {
             Key = new Key(b.BaseId, b.Stacks, b.SourceKind, b.SourceId), Pre = pre,

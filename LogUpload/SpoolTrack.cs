@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Stellar.Abstractions.Services;
 
@@ -14,7 +15,8 @@ namespace Stellar.CombatMeter.LogUpload;
 /// </summary>
 internal sealed class SpoolTrack
 {
-    /// <summary>Mirrors the worker's MAX_EVENT_CHUNKS (128 × 4,000 = 512k events per track per segment).</summary>
+    /// <summary>Matches the worker's MAX_EVENT_CHUNKS AFTER the buff-track server release (128; the
+    /// currently deployed worker still enforces 33 — see the release checklist: worker before plugin).</summary>
     internal const int MaxChunksPerTrack = 128;
 
     private readonly string _track, _segmentId;
@@ -24,6 +26,13 @@ internal sealed class SpoolTrack
     private readonly List<SpoolChunkRef> _refs = new();
     private readonly List<Task> _writes = new();
     private bool _truncated;
+    private int _writeFaults;
+
+    /// <summary>Count of blob writes that faulted (serialize/gzip/store.Write threw), so far — writes may
+    /// still be in flight when this is read, and a fault after that read would not be reflected. Never faults
+    /// <see cref="Seal"/>'s <c>completion</c> task (see the catch in <see cref="SealOpen"/>); this is the
+    /// only surviving signal that a chunk silently failed to reach disk.</summary>
+    internal int WriteFaults => Volatile.Read(ref _writeFaults);
 
     internal SpoolTrack(string track, string segmentId, IPluginDataStore store,
                         int chunkEvents = EventChunker.ChunkEvents, int maxChunks = MaxChunksPerTrack)
@@ -41,10 +50,10 @@ internal sealed class SpoolTrack
         if (_open.Count >= _chunkEvents) SealOpen();
     }
 
-    internal (IReadOnlyList<SpoolChunkRef> refs, bool truncated, Task completion) Seal()
+    internal (IReadOnlyList<SpoolChunkRef> refs, bool truncated, Task completion, int faultsSoFar) Seal()
     {
         if (_open.Count > 0) SealOpen();
-        return (_refs.ToArray(), _truncated, Task.WhenAll(_writes.ToArray()));
+        return (_refs.ToArray(), _truncated, Task.WhenAll(_writes.ToArray()), WriteFaults);
     }
 
     private void SealOpen()
@@ -63,8 +72,9 @@ internal sealed class SpoolTrack
             // the whole segment's upload, losing the chunks that DID land. A blob that failed to land is
             // detected at upload time as store.Read(name) == null (ChunkUploader.PostRefsAsync warns and
             // skips just that chunk). Pinned by SpoolTrackTests.A_failed_blob_write_never_faults_the_completion.
+            // The fault is still COUNTED (never silent) so a caller can warn — see WriteFaults.
             try { store.Write(name, SpoolCodec.Gzip(EventsJsonWriter.Write(batch))); }
-            catch { }
+            catch { Interlocked.Increment(ref _writeFaults); }
         }));
     }
 }

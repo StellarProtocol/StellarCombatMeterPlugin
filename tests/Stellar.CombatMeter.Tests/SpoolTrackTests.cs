@@ -16,7 +16,7 @@ public sealed class SpoolTrackTests
         var store = new FakeDataStore();
         var t = new SpoolTrack("dmg", "seg1", store, chunkEvents: 4);
         for (int i = 0; i < 4; i++) t.Add(Ev(i));
-        var (refs, truncated, done) = t.Seal();
+        var (refs, truncated, done, _) = t.Seal();
         await done;
 
         Assert.False(truncated);
@@ -34,7 +34,7 @@ public sealed class SpoolTrackTests
         var store = new FakeDataStore();
         var t = new SpoolTrack("dmg", "seg1", store, chunkEvents: 4);
         for (int i = 0; i < 9; i++) t.Add(Ev(i));
-        var (refs, _, done) = t.Seal();
+        var (refs, _, done, _) = t.Seal();
         await done;
         Assert.Equal(3, refs.Count);
         Assert.Equal(new[] { 0, 1, 2 }, refs.Select(r => r.Index));
@@ -49,7 +49,7 @@ public sealed class SpoolTrackTests
         var store = new FakeDataStore();
         var t = new SpoolTrack("buff", "seg1", store, chunkEvents: 2, maxChunks: 2);
         for (int i = 0; i < 7; i++) t.Add(Ev(i));
-        var (refs, truncated, done) = t.Seal();
+        var (refs, truncated, done, _) = t.Seal();
         await done;
         Assert.True(truncated);
         Assert.Equal(2, refs.Count);
@@ -60,7 +60,7 @@ public sealed class SpoolTrackTests
     public async Task Empty_track_seals_to_nothing()
     {
         var t = new SpoolTrack("buff", "seg1", new FakeDataStore(), chunkEvents: 4);
-        var (refs, truncated, done) = t.Seal();
+        var (refs, truncated, done, _) = t.Seal();
         await done;
         Assert.Empty(refs);
         Assert.False(truncated);
@@ -76,12 +76,28 @@ public sealed class SpoolTrackTests
         var store = new FakeDataStore { ThrowOnWrite = true };
         var t = new SpoolTrack("dmg", "seg1", store, chunkEvents: 2);
         t.Add(Ev(0)); t.Add(Ev(1));
-        var (refs, _, done) = t.Seal();
+        var (refs, _, done, _) = t.Seal();
 
         await done;                                   // must not throw
         Assert.True(done.IsCompletedSuccessfully);
         Assert.Single(refs);
         Assert.Null(store.Read(refs[0].BlobName));    // blob absent — the uploader skips it
+    }
+
+    // A write fault must never be SILENT, even though (above) it must never fault the completion task —
+    // WriteFaults is the surviving signal a caller can warn on. Read AFTER awaiting Completion: at the
+    // moment Seal() returns, the background write may not have run yet, so the tuple's own faultsSoFar
+    // can still read 0 — this asserts the live property instead.
+    [Fact]
+    public async Task A_failed_blob_write_is_counted_via_WriteFaults()
+    {
+        var store = new FakeDataStore { ThrowOnWrite = true };
+        var t = new SpoolTrack("dmg", "seg1", store, chunkEvents: 2);
+        t.Add(Ev(0)); t.Add(Ev(1));
+        var (_, _, done, _) = t.Seal();
+
+        await done;
+        Assert.Equal(1, t.WriteFaults);
     }
 
     [Fact]

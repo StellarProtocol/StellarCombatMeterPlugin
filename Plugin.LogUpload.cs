@@ -395,7 +395,7 @@ public sealed partial class Plugin
                 var skipped = Spool.SkippedUnknownEvents;   // read BEFORE Rotate — it zeroes the counter
                 segment = Spool.Rotate();
                 if (skipped > 0)
-                    _services.Log.Warning($"[CombatMeter.SP1] Skipped {skipped} unrecognized combat event(s) during log flush.");
+                    _services.Log.Warning($"[CombatMeter.SP1] Skipped {skipped} unrecognized combat event(s) during this segment.");
                 if (segment.ChunkCount == 0)
                 {
                     _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
@@ -418,13 +418,17 @@ public sealed partial class Plugin
             // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
             // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
             // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, flushBuffer ? _buffEffects.Drain() : null);   // manual re-upload (flushBuffer=false) must not drain the LIVE sampler onto an OLD run — same hazard as the boss-set note above (stale live state mislabeling a different run)
+            var buffEffects = flushBuffer ? _buffEffects.Drain() : null;
+            // manual re-upload (flushBuffer=false) must not drain the LIVE sampler onto an OLD run — same hazard as the boss-set note above (stale live state mislabeling a different run)
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, buffEffects);
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-                $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), {entry.Entities.Count} actors).");
+                $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), {entry.Entities.Count} actors, {buffEffects?.Count ?? 0} buff effect(s)).");
+            if (seg.WriteFaults > 0)
+                _services.Log.Warning($"[CombatMeter.SP1] {seg.WriteFaults} spool blob write(s) failed for segment {seg.SegmentId} — those chunks will be skipped at upload (blob missing).");
 
             // Auto uploads (flushBuffer) get spread across a window so the party's simultaneous
             // archives don't all land on the worker in the same second; manual is user-initiated,
@@ -586,6 +590,7 @@ public sealed partial class Plugin
     {
         try
         {
+            // Reached only from flushing (live-archive) callers, never manual re-upload — same "don't drain the LIVE sampler onto an OLD run" hazard as the comment in AssembleAndUpload.
             var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, _buffEffects.Drain());
             PersistReUpload(entry, log, seg, replayDoc);
             _services.Log.Info(

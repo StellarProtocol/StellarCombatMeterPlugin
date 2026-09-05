@@ -107,9 +107,18 @@ public sealed partial class Plugin
         return true;
     }
 
-    // Delete a run's retained re-upload payload (mirrors _uploadStatus.Forget). No-op when absent.
+    // Delete a run's retained re-upload payload AND the spool blobs it referenced (mirrors _uploadStatus.Forget).
+    // No-op when absent. Blob lifetime = CONTAINER lifetime (see the comment in SweepOrphanReUploads below) —
+    // this is the SECOND of the two sites that ever delete a container, so it must free the container's blobs
+    // itself rather than leaving them for a sweep that may not run again until the next launch.
     private void ForgetReUpload(EncounterHistoryEntry e)
-        => _services.Data.Delete(ReUploadContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
+    {
+        var name = ReUploadContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs);
+        var bytes = _services.Data.Read(name);
+        if (bytes is not null)
+            foreach (var blob in ReUploadContainer.ReferencedBlobs(bytes)) _services.Data.Delete(blob);
+        _services.Data.Delete(name);
+    }
 
     // Belt-and-braces: drop any replay container with no matching live entry (e.g. left by a crash mid-evict),
     // and with it the spool blobs it referenced. STARTUP ONLY (LoadHistory) — see SweepUnreferencedSpoolBlobs.
@@ -120,7 +129,10 @@ public sealed partial class Plugin
         foreach (var name in ReUploadContainer.OrphanContainerNames(_services.Data.List("replay/"), live))
         {
             // Blob lifetime = CONTAINER lifetime: a segment's blobs back its re-upload, so they are never
-            // deleted on upload success — only here, with the container that owns them.
+            // deleted on upload success — only at the TWO sites that ever delete a container: here (the
+            // startup orphan sweep, for a container whose in-memory entry is already gone) and ForgetReUpload
+            // above (an in-memory-tracked entry's container being deleted directly — eviction, DeleteSession,
+            // ClearAllHistory). Whichever site reaches a container first frees its blobs with it.
             var bytes = _services.Data.Read(name);
             if (bytes is not null)
                 foreach (var blob in ReUploadContainer.ReferencedBlobs(bytes)) _services.Data.Delete(blob);
