@@ -132,24 +132,33 @@ public sealed partial class Plugin
     // A crash between a spool blob's write and the archive that would have referenced it leaves a blob no
     // container owns. STARTUP ONLY (reached from LoadHistory, before OnCombatEvent is ever wired) — mid-run
     // this would delete the LIVE segment's blobs, which no container references YET.
+    //
+    // The delete decision itself is SpoolSweep.Plan (pure, pinned): an incomplete reference set must never
+    // authorize a delete, so one unreadable live container skips the sweep entirely for this launch.
     private void SweepUnreferencedSpoolBlobs()
     {
         var blobs = _services.Data.List(SpoolCodec.Prefix);
         if (blobs.Count == 0) return;
 
-        var referenced = new HashSet<string>(System.StringComparer.Ordinal);
-        foreach (var name in _services.Data.List("replay/"))   // orphans already deleted above → live only
+        var (toDelete, skip) = SpoolSweep.Plan(blobs, LiveReUploadContainers());
+        if (skip is not null)
         {
-            var bytes = _services.Data.Read(name);
-            if (bytes is null) continue;
-            foreach (var blob in ReUploadContainer.ReferencedBlobs(bytes)) referenced.Add(blob);
+            _services.Log.Warning(
+                $"[CombatMeter.SP1] spool sweep skipped this launch: container {skip} unreadable — leftovers cost disk only");
+            return;
         }
 
-        var deleted = 0;
-        foreach (var blob in blobs)
-            if (!referenced.Contains(blob)) { _services.Data.Delete(blob); deleted++; }
-        if (deleted > 0)
-            _services.Log.Info($"[CombatMeter.SP1] Deleted {deleted} unreferenced spool blob(s) (run never archived).");
+        foreach (var blob in toDelete) _services.Data.Delete(blob);
+        if (toDelete.Count > 0)
+            _services.Log.Info($"[CombatMeter.SP1] Deleted {toDelete.Count} unreferenced spool blob(s) (run never archived).");
+    }
+
+    // Lazy so only ONE container's bytes are live at a time (94 containers × ~190 KB on the owner's client).
+    // Orphans were already deleted by the caller, so every name here belongs to a live history entry.
+    private IEnumerable<(string Name, byte[]? Bytes)> LiveReUploadContainers()
+    {
+        foreach (var name in _services.Data.List("replay/"))
+            yield return (name, _services.Data.Read(name));
     }
 
     // Same, for per-run history files: drop any history/ file with no live entry (left by a crash mid-evict).

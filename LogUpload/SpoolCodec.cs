@@ -10,6 +10,17 @@ internal static class SpoolCodec
 {
     internal const string Prefix = "spool/";
 
+    /// <summary>Damage + skill rows. Uploaded to <c>/events</c>.</summary>
+    internal const string TrackDmg = "dmg";
+
+    /// <summary>Buff rows <see cref="BuffUploadFilter"/> admits. Uploaded to <c>/buff-events</c>.</summary>
+    internal const string TrackBuff = "buff";
+
+    /// <summary>Buff rows the filter REJECTS. Captured to disk like every other row (capture is
+    /// unconditional — spec § 4.2 / § 9 invariant 2) but never posted to any endpoint: the filter is a
+    /// SEND gate, so these live only in the local blobs the retention container owns.</summary>
+    internal const string TrackBuffRejected = "buffx";
+
     internal static string BlobName(string segmentId, string track, int index)
         => Prefix + segmentId + "-" + track + "-" + index.ToString("D3", CultureInfo.InvariantCulture) + ".gz";
 

@@ -77,6 +77,27 @@ public class ReUploadContainerTests
         Assert.Empty(ReUploadContainer.ReferencedBlobs(v1));
     }
 
+    // The other side of the head read: a ref list that does NOT fit the bounded head. The head parse
+    // then dies mid-array, and the ONLY safe answer is the full read — a PARTIAL list would make the
+    // startup sweep delete blobs a live container still references (permanent event loss).
+    [Fact]
+    public void ReferencedBlobs_falls_back_to_the_full_read_when_the_refs_exceed_the_head()
+    {
+        const int n = 700;
+        var refs = new SpoolChunkRef[n];
+        var expected = new string[n];
+        for (var i = 0; i < n; i++)
+        {
+            // Long names on purpose: n × ~140 B of ref JSON is comfortably past RefsHeadBytes (64 KB).
+            expected[i] = $"spool/1757030000000-000000000000000000000042-dmg-{i:D4}.gz";
+            refs[i] = new SpoolChunkRef("dmg", i, 1000 + i, 2000 + i, 4000, expected[i]);
+        }
+        var bytes = ReUploadContainer.Serialize(new ReUploadPayload(
+            ReUploadContainer.Version, "sea", 7, "log-1", "{\"s\":1}", new string[0], null, refs));
+
+        Assert.Equal(expected, ReUploadContainer.ReferencedBlobs(bytes));
+    }
+
     [Fact]
     public void ReferencedBlobs_of_garbage_is_empty_never_throws()
     {

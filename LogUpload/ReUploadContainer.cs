@@ -166,12 +166,21 @@ internal static class ReUploadContainer
     /// (<c>Plugin.HistoryStore.SweepOrphanReUploads</c>). Cheap BY CONSTRUCTION: <see cref="Serialize"/> writes
     /// <c>chunkRefs</c> first, so this normally decompresses only a bounded head and stops. A container whose
     /// head does not yield a COMPLETE ref array (V1, a huge list, a future format that moved the key) falls
-    /// back to the full read — never to a PARTIAL list, which would make the sweep delete LIVE blobs.</summary>
-    internal static IReadOnlyList<string> ReferencedBlobs(byte[] gz)
+    /// back to the full read — never to a PARTIAL list, which would make the sweep delete LIVE blobs.
+    /// <c>false</c> = the container could not be read AT ALL (not gzip, not our format, corrupt): the answer is
+    /// UNKNOWN, not "references nothing", and a caller that deletes on this must stop rather than guess.</summary>
+    internal static bool TryReferencedBlobs(byte[] gz, out IReadOnlyList<string> blobs)
     {
-        if (TryReadRefsFromHead(gz, out var head)) return head;
-        return TryDeserialize(gz, out var p) ? BlobNames(p.ChunkRefs) : System.Array.Empty<string>();
+        if (TryReadRefsFromHead(gz, out var head)) { blobs = head; return true; }
+        if (TryDeserialize(gz, out var p)) { blobs = BlobNames(p.ChunkRefs); return true; }
+        blobs = System.Array.Empty<string>();
+        return false;
     }
+
+    /// <summary>Same, for callers that only DELETE this container's own blobs (an orphan sweep): an unreadable
+    /// container yields an empty list, which deletes nothing extra.</summary>
+    internal static IReadOnlyList<string> ReferencedBlobs(byte[] gz)
+        => TryReferencedBlobs(gz, out var blobs) ? blobs : System.Array.Empty<string>();
 
     private static string[] BlobNames(IReadOnlyList<SpoolChunkRef> refs)
     {

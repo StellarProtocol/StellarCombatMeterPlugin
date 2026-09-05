@@ -310,7 +310,7 @@ public sealed partial class Plugin
         {
             var url = UploadVerdict.SiteBase + "/run/" + payload.Region + "/" + payload.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
-            _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count + payload.ChunkRefs.Count} chunk(s), positions={(payload.Positions is not null)}).");
+            _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count + payload.ChunkRefs.Count} stored chunk(s), positions={(payload.Positions is not null)}).");
             LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err, verdict) =>
             {
                 // Prefer the server's SHORT run URL, same as the first-send path. Storing the constructed
@@ -459,7 +459,7 @@ public sealed partial class Plugin
             // Any unhandled exception here must NOT propagate into the main-thread caller.
             _uploadStatus.Set(entry, UploadPhase.Failed, null);
             MarkUploadStateDirty(entry);
-            Spool.Discard();
+            if (flushBuffer) Spool.Discard();   // a manual re-push must not wipe the LIVE encounter's spool
             _services.Log.Warning($"[CombatMeter.SP1] Log assembly/upload threw: {ex.Message}");
             return fired;
         }
@@ -520,11 +520,11 @@ public sealed partial class Plugin
     /// <summary>Assembles the retained re-upload payload from the exact artifacts the auto path uploads.
     /// Pure — summary/positions ride the SAME writers the uploaders use, so they are byte-identical to what
     /// the first send transmitted. The event stream is stored as chunk REFS (container V2): the events
-    /// already live in this segment's <c>spool/*</c> blobs, so re-inlining them would double the bytes on
-    /// disk. BODIES only — whether/how a replay resends them is ReplayReUpload's decision.</summary>
+    /// already live in this segment's blobs. ALL THREE tracks ride here (AllChunkRefs) — the never-uploaded
+    /// <c>buffx</c> too, or the sweep frees it. BODIES only; resend policy is ReplayReUpload's.</summary>
     internal static ReUploadPayload BuildReUploadPayload(CombatLog log, SpoolSegment seg, PositionUploadDoc? replayDoc)
     {
-        var refs = new List<SpoolChunkRef>(seg.ChunkCount); refs.AddRange(seg.Dmg); refs.AddRange(seg.Buff);
+        var refs = seg.AllChunkRefs();
         return new ReUploadPayload(
             ReUploadContainer.Version,
             log.Header.Region,
