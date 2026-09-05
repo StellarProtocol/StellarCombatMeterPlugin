@@ -26,7 +26,7 @@ public sealed partial class Plugin
     // Disk-backed replacement for the two event rings (rDPS spool). Lazy: _services is not available at
     // field-initialiser time — every call site below goes through the Spool property.
     private EventSpool? _spool;
-    private EventSpool Spool => _spool ??= new EventSpool(_services.Data, _summonOwners);
+    private EventSpool Spool => _spool ??= new EventSpool(_services.Data, _summonOwners, () => _services.EntityDetail.GetAttributes(_services.CombatSnapshot.LocalEntityId));
     private CombatLogAssembler? _logAssembler;
 
     // -----------------------------------------------------------------------
@@ -418,7 +418,7 @@ public sealed partial class Plugin
             // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
             // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
             // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, seg.TruncatedSheet);
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
@@ -584,7 +584,7 @@ public sealed partial class Plugin
     {
         try
         {
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, seg.TruncatedSheet);
             PersistReUpload(entry, log, seg, replayDoc);
             LogSegmentOutcome("Retained (not uploaded)", log, seg);
         }

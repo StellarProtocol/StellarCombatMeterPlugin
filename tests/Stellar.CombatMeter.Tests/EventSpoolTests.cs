@@ -56,9 +56,10 @@ public sealed class EventSpoolTests
             new SpoolChunkRef("buff",  0, 1, 2, 1, "spool/s-buff-000.gz"),
             new SpoolChunkRef("buffx", 1, 3, 4, 7, "spool/s-buffx-001.gz"),
         };
-        var (dmg, buff) = ChunkUploader.SplitUploadable(refs);
+        var (dmg, buff, sheet) = ChunkUploader.SplitUploadable(refs);
         Assert.Equal(new[] { "spool/s-dmg-000.gz" }, dmg.Select(r => r.BlobName));
         Assert.Equal(new[] { "spool/s-buff-000.gz" }, buff.Select(r => r.BlobName));
+        Assert.Empty(sheet);
     }
 
     // Truncation is PER TRACK: a buff flood fills (and flags) only the buff track. If buff volume could

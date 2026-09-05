@@ -21,7 +21,7 @@ public sealed partial class Plugin
     {
         _services.Log.Info(
             $"[CombatMeter.SP1] {what} log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-            $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s)).");
+            $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), {seg.Sheet.Count} sheet chunk(s)).");
         if (seg.WriteFaults > 0)
             _services.Log.Warning($"[CombatMeter.SP1] {seg.WriteFaults} spool blob write(s) failed for segment {seg.SegmentId} — those chunks will be skipped at upload (blob missing).");
     }

@@ -52,6 +52,7 @@ public sealed partial class Plugin
         TickLoadoutRunBoundary();
         TickBuildRecapture();
         TickAttrRangeSample();
+        TickSheetKeyframe();
         TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
     }
 

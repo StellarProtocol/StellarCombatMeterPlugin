@@ -42,7 +42,10 @@ internal sealed record Derived(
     // track's own truncation flag (SpoolSegment.TruncatedBuff), not the disk-only rejected track. The
     // buff table itself is fitted server-side from the `sheet` track (the inert BuffEffectSampler and
     // its derived.buffEffects writer were retired — spec § 6.0/§ 6.1).
-    bool TruncatedBuffEvents = false);
+    bool TruncatedBuffEvents = false,
+    // Mirrors SpoolSegment.TruncatedSheet (spec § 6.1) — same shape/purpose as TruncatedBuffEvents above,
+    // for the fourth spool track.
+    bool TruncatedSheetEvents = false);
 
 /// <summary>Damage one player dealt to one target bucket: total + the per-skill breakdown in the
 /// whole-fight <see cref="SkillAgg"/> shape (luckys/critLuckys/top/min are 0 — the bucket store keeps

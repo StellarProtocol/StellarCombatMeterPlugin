@@ -8,6 +8,7 @@ internal static partial class CombatLogWriter
     private static void WriteTrackFlags(JsonWriter w, Derived d)
     {
         w.Name("truncatedBuffEvents").Bool(d.TruncatedBuffEvents);
+        w.Name("truncatedSheetEvents").Bool(d.TruncatedSheetEvents);
     }
 
     /// <summary>Test-only seam: runs the `derived` writer alone into a fresh <see cref="JsonWriter"/>

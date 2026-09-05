@@ -75,6 +75,11 @@ internal static class ChunkUploader
     internal static string BuildBuffUrl(string baseUrl, string region, long levelUuid)
         => $"{baseUrl}/run/{region}/{levelUuid.ToString(CultureInfo.InvariantCulture)}/buff-events";
 
+    /// <summary>The sheet track's own endpoint (spec § 6.1). Like /buff-events, a 404 here is an old worker:
+    /// terminal for the segment's sheet track, blobs kept for re-upload.</summary>
+    internal static string BuildSheetUrl(string baseUrl, string region, long levelUuid)
+        => $"{baseUrl}/run/{region}/{levelUuid.ToString(CultureInfo.InvariantCulture)}/sheet-events";
+
     /// <summary>One track's upload destination: where its chunks POST, how a 404 reads there, and the noun
     /// its warnings use. Grouped into one value so <see cref="PostRefsAsync"/> keeps a 5-parameter
     /// signature — the three fields always vary together, per endpoint.</summary>
@@ -97,9 +102,12 @@ internal static class ChunkUploader
     private static TrackEndpoint BuffEndpoint(string baseUrl, string region, long levelUuid, string label)
         => new(BuildBuffUrl(baseUrl, region, levelUuid), true, label);
 
-    /// <summary>Uploads a rotated segment: dmg refs to /events, buff refs to /buff-events. The segment's
-    /// THIRD track (<c>buffx</c>, the rows the send filter rejected) is deliberately absent — it is captured
-    /// to disk and never posted anywhere. Blobs are NOT deleted here — they belong to the retention container
+    private static TrackEndpoint SheetEndpoint(string baseUrl, string region, long levelUuid, string label)
+        => new(BuildSheetUrl(baseUrl, region, levelUuid), true, label);
+
+    /// <summary>Uploads a rotated segment: dmg → /events, buff → /buff-events, sheet → /sheet-events; buffx
+    /// absent. The segment's disk-only track (<c>buffx</c>, the rows the send filter rejected) is deliberately
+    /// never posted anywhere. Blobs are NOT deleted here — they belong to the retention container
     /// (Plugin.LogUpload's PersistReUpload) and die with it, so a re-upload can still replay them verbatim.</summary>
     internal static void UploadSegmentFireAndForget(
         string baseUrl, string region, long levelUuid, string logId, SpoolSegment seg,
@@ -112,6 +120,7 @@ internal static class ChunkUploader
             await seg.Completion.ConfigureAwait(false);
             await PostRefsAsync(DmgEndpoint(baseUrl, region, levelUuid, "chunk"), logId, seg.Dmg, store, logWarn).ConfigureAwait(false);
             await PostRefsAsync(BuffEndpoint(baseUrl, region, levelUuid, "buff chunk"), logId, seg.Buff, store, logWarn).ConfigureAwait(false);
+            await PostRefsAsync(SheetEndpoint(baseUrl, region, levelUuid, "sheet chunk"), logId, seg.Sheet, store, logWarn).ConfigureAwait(false);
         });
     }
 
@@ -126,27 +135,27 @@ internal static class ChunkUploader
         if (refs.Count == 0) return;
         _ = Task.Run(async () =>
         {
-            var (dmg, buff) = SplitUploadable(refs);
+            var (dmg, buff, sheet) = SplitUploadable(refs);
             await PostRefsAsync(DmgEndpoint(baseUrl, region, levelUuid, "re-upload chunk"), logId, dmg, store, logWarn).ConfigureAwait(false);
             await PostRefsAsync(BuffEndpoint(baseUrl, region, levelUuid, "re-upload buff chunk"), logId, buff, store, logWarn).ConfigureAwait(false);
+            await PostRefsAsync(SheetEndpoint(baseUrl, region, levelUuid, "re-upload sheet chunk"), logId, sheet, store, logWarn).ConfigureAwait(false);
         });
     }
 
-    /// <summary>Splits stored refs into the two UPLOADABLE tracks. Refs of the disk-only
+    /// <summary>Splits stored refs into the three UPLOADABLE tracks. Refs of the disk-only
     /// <see cref="SpoolCodec.TrackBuffRejected"/> track are DROPPED — the send filter rejected those rows, and
     /// a re-upload must not smuggle them to a server the first send withheld them from. Pure, so the "never
     /// uploaded" rule pins without an HTTP fake (EventSpoolTests.Rejected_buff_rows_are_never_uploaded).</summary>
-    internal static (IReadOnlyList<SpoolChunkRef> Dmg, IReadOnlyList<SpoolChunkRef> Buff) SplitUploadable(
+    internal static (IReadOnlyList<SpoolChunkRef> Dmg, IReadOnlyList<SpoolChunkRef> Buff, IReadOnlyList<SpoolChunkRef> Sheet) SplitUploadable(
         IReadOnlyList<SpoolChunkRef> refs)
     {
-        var dmg = new List<SpoolChunkRef>(refs.Count);
-        var buff = new List<SpoolChunkRef>();
+        var dmg = new List<SpoolChunkRef>(refs.Count); var buff = new List<SpoolChunkRef>(); var sheet = new List<SpoolChunkRef>();
         foreach (var r in refs)
         {
             if (r.Track == SpoolCodec.TrackBuffRejected) continue;
-            (r.Track == SpoolCodec.TrackBuff ? buff : dmg).Add(r);
+            (r.Track == SpoolCodec.TrackBuff ? buff : r.Track == SpoolCodec.TrackSheet ? sheet : dmg).Add(r);
         }
-        return (dmg, buff);
+        return (dmg, buff, sheet);
     }
 
     /// <summary>Posts one track's chunk refs: read the blob, gunzip it, wrap it in the envelope, POST. A
