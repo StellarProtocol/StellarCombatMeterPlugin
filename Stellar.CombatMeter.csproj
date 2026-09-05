@@ -9,9 +9,11 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.CombatMeter</RootNamespace>
     <AssemblyName>Stellar.CombatMeter</AssemblyName>
-    <!-- 2.6.0: rDPS capture (event spool + buff track + buff-effect sampler); requires framework 2.7.0
-         (Abstractions 2.7.0). Released lock-step with fw 2.7.0. -->
-    <Version>2.6.0</Version>
+    <!-- 2.7.0: rDPS P2 — the `sheet` track (the local player's damage-relevant attributes, spec § 6.1) on
+         top of P1's event spool + buff track. Requires framework 2.7.0 (Abstractions 2.7.0); released
+         lock-step with it. MUST NOT stay 2.6.0: the owner's MAIN client already runs a P1 build stamped
+         2.6.0 and header.pluginVer is what tells the two apart server-side. -->
+    <Version>2.7.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>

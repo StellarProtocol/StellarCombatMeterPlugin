@@ -39,10 +39,19 @@ internal sealed record SpoolSegment(
     internal static readonly SpoolSegment EmptyTruncated = new("", None, None, None, None, true, false, false, false, Task.CompletedTask);
 
     /// <summary>Uploadable chunks: dmg + buff + sheet. The disk-only buffx track is excluded. Drives the
-    /// zero-event early return and the "n chunk(s)" info lines, so it deliberately excludes the disk-only
-    /// track — a segment carrying nothing but rejected buff rows has nothing to send and must still take the
-    /// retain-and-return path.</summary>
+    /// "is there anything to POST" decision (<see cref="ChunkUploader.UploadSegmentFireAndForget"/>) and the
+    /// "n chunk(s)" info lines, so it deliberately excludes the disk-only track — a segment carrying nothing
+    /// but rejected buff rows has nothing to send. NOT the archive decision: use
+    /// <see cref="GameEventChunkCount"/> for that.</summary>
     internal int ChunkCount => Dmg.Count + Buff.Count + Sheet.Count;
+
+    /// <summary>The ARCHIVE-decision count — GAME EVENTS only (dmg + buff); the sheet track is a capture
+    /// channel and must never decide an archive/upload. Every segment gets a sheet keyframe, so counting it
+    /// here would make the "No events captured — skipping auto-upload" retain-only branch in
+    /// <c>Plugin.LogUpload.AssembleAndUpload</c> unreachable and start UPLOADING the no-damage tail archives
+    /// the owner had purged server-side (kill-board P2 ruling 2026-09-02). Owner-visible behavior change —
+    /// keep this the only count that gates that branch.</summary>
+    internal int GameEventChunkCount => Dmg.Count + Buff.Count;
 
     /// <summary>Every chunk this segment put ON DISK, uploadable or not — what the retention container must
     /// reference so the startup sweep keeps (and eventually deletes) all four tracks with the container.</summary>

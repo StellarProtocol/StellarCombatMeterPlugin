@@ -60,7 +60,11 @@ public sealed partial class Plugin
         // archive must stay "seen", or its next AOI blink after the archive would mint a phantom cast.
         // CAPTURE ONLY — feeds nothing in AutoArchive/BossStatus/verdict paths.
         _seenSummons.Clear();
-        _summonOwners.Clear();   // summon→owner map (SummonOwnerMap): run-scoped like the novelty set beside it. CAPTURE ONLY.
+        // NOTE: _summonOwners (the summon→owner map) is deliberately NOT cleared here — it is cleared in
+        // BankRunBoundary below, the seam that runs only at a TRUE run/scene boundary. This reset also runs
+        // on RunSegmentCut (~7×/raid), and a Battle Imagine that outlives a boss cut would lose its owner
+        // mapping until its next EntitySummonAppeared — an rDPS external-buff credit gap. The novelty set
+        // above STAYS here: its per-cut clear is the deliberate, pre-existing semantics and is not touched.
         // Sticky bucket-routing memory (Plugin.BucketRouting.cs, owner-approved fix 2026-08-15): the
         // last routing input, run-scoped exactly like the two live sets it backs up — a new run's
         // entities are new entities, and holding a previous run's ids would let a recycled entity id
@@ -79,6 +83,17 @@ public sealed partial class Plugin
     private void BankRunBoundary(AutoArchive.ArchiveReason reason)
     {
         var outgoingRunId = _lastRunId;   // captured BEFORE the archive zeroes the latch below
+        // Summon→owner map (SummonOwnerMap, Plugin.CaptureAlwaysOn.cs): cleared HERE — the seam that runs
+        // only at a TRUE run/scene boundary (RunBoundaryCore's poll/belt commit + OnSceneChanged's post-guard
+        // call) and NEVER on RunSegmentCut's mid-run stage cut — rather than in ResetRunScopedTrackers, which
+        // RunSegmentCut also runs (~7×/raid on a multi-stage raid). A Battle Imagine alive ACROSS a boss cut
+        // must keep its owner mapping, or the buffs it fires after the cut lose their owner(src) resolution
+        // and stop crediting the summoner (spec § 5.2/§ 6.8) until the pet re-appears. Ordering is unchanged
+        // for both boundary paths: they already ran ResetRunScopedTrackers immediately before entering here,
+        // and nothing between the two records a summon. On the very first scene observation OnSceneChanged
+        // returns before this method — harmless, the map is empty at construction. CAPTURE ONLY — feeds
+        // nothing in archive/verdict paths, so this clear cannot move an archive decision.
+        _summonOwners.Clear();
         ManualArchive(reason);
         // The outgoing run is now archived under its OWN latched id (LevelUuid = _lastRunId) — clear the
         // latch so a later archive (an empty scene hop, or the next floor before its own combat

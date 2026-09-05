@@ -26,4 +26,18 @@ public sealed class ChunkUploaderSheetTests
         Assert.Single(dmg); Assert.Single(buff); Assert.Single(sheet);
         Assert.Equal("spool/a-sheet-000.gz", sheet[0].BlobName);
     }
+
+    // A 404 means different things per endpoint, and getting it wrong loses data. /events has existed all
+    // along, so a 404 there is an ordinary per-chunk failure that must keep retrying. /buff-events and
+    // /sheet-events ship with this release, so a 404 there is an OLD WORKER: terminal for the whole track,
+    // never retried, blobs kept on disk for a later re-upload.
+    [Fact]
+    public void Each_tracks_404_semantics_match_its_endpoints_age()
+    {
+        Assert.False(ChunkUploader.DmgEndpoint("https://x", "sea", 42, "chunk").TerminalOn404);
+        Assert.True(ChunkUploader.BuffEndpoint("https://x", "sea", 42, "buff chunk").TerminalOn404);
+        var sheetEp = ChunkUploader.SheetEndpoint("https://x", "sea", 42, "sheet chunk");
+        Assert.True(sheetEp.TerminalOn404);
+        Assert.Equal("https://x/run/sea/42/sheet-events", sheetEp.Url);
+    }
 }

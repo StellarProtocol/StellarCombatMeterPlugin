@@ -396,7 +396,7 @@ public sealed partial class Plugin
                 segment = Spool.Rotate();
                 if (skipped > 0)
                     _services.Log.Warning($"[CombatMeter.SP1] Skipped {skipped} unrecognized combat event(s) during this segment.");
-                if (segment.ChunkCount == 0)
+                if (segment.GameEventChunkCount == 0)   // GAME events only: a sheet keyframe must not force an upload
                 {
                     _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
                     // Fix 2026-08-14: this early return used to skip PersistReUpload below, so a banked

@@ -41,14 +41,26 @@ internal sealed class EventSpool
         _buffx = new SpoolTrack(SpoolCodec.TrackBuffRejected, _segmentId, store, chunkEvents);
     }
 
-    /// <summary>Events whose CombatEvent case has no wire mapping since the last Rotate (forward-compat net). Read it BEFORE <see cref="Rotate"/> — rotating starts a fresh segment and zeroes the counter. EntityAttributesChanged is handled before the converter and never counts here.</summary>
+    /// <summary>Events whose CombatEvent case has no wire mapping since the last Rotate (forward-compat
+    /// net). Read it BEFORE <see cref="Rotate"/> — rotating starts a fresh segment and zeroes the counter.
+    /// EntityAttributesChanged is handled before the converter and never counts here.</summary>
     internal int SkippedUnknownEvents { get; private set; }
 
-    /// <summary>True until this segment has its keyframe. Plugin.SheetCapture's tick asks this once per tick.</summary>
+    /// <summary>True until this segment has its keyframe. Plugin.SheetCapture's tick asks this once per
+    /// tick.</summary>
     internal bool NeedsSheetKeyframe => !_sheetKeyframeWritten;
 
-    /// <summary>Writes the segment's ONE keyframe from the live sheet (no-op after the first, or without a reader,
-    /// or when the sheet carries no tracked attr yet). <paramref name="ms"/> is in the wire-receive clock domain.</summary>
+    /// <summary>Writes the segment's ONE keyframe from the live sheet (no-op after the first, or without a
+    /// reader, or when the sheet carries no tracked attr yet — in that last case <see cref="NeedsSheetKeyframe"/>
+    /// stays true and a later call retries). <paramref name="ms"/> is in the wire-receive clock domain.
+    /// <para>ENVELOPE-WINDOW CONTRACT (do not "fix" by sorting): within a sheet chunk the keyframe is first by
+    /// ARRAY order, but <c>ms</c> is NOT guaranteed monotonic across it. A tick-written keyframe is stamped with
+    /// <c>UtcNow</c> on the update thread while delta rows carry the earlier network-thread receive stamp, so the
+    /// first row's <c>ms</c> can exceed the second's. The VALUES stay consistent either way: the attribute sink is
+    /// written at packet receive and the keyframe reads that live sink, so a consumer that sorts by <c>ms</c>
+    /// (the worker's <c>sheetSteps</c>) reconstructs the same step function as array order would. The chunk ref's
+    /// window is therefore built as min/max over the batch, not first/last — see
+    /// <see cref="SpoolTrack"/>.<c>SealOpen</c> and <see cref="SheetEvent"/>.</para></summary>
     internal void AddSheetKeyframe(long ms)
     {
         if (_sheetKeyframeWritten || _readSelfSheet is null) return;
@@ -62,7 +74,7 @@ internal sealed class EventSpool
     {
         if (evt is CombatEvent.EntityAttributesChanged ac)
         {
-            if (ac.EntityId != self) return;                    // teammates' AOI attrs: not this track
+            if (ac.TargetId != self) return;                    // teammates' AOI attrs: not this track
             var row = SheetRowBuilder.Project(ac);
             if (row is null) return;                            // no tracked attr in this packet
             AddSheetKeyframe(ac.TimestampMs);                   // keyframe precedes the first delta row
@@ -82,7 +94,9 @@ internal sealed class EventSpool
         _dmg.Add(wire);
     }
 
-    /// <summary>Seal all four tracks into a segment and start a fresh one. Main thread; O(1) apart from the last batch hand-off (its serialize+gzip+write runs on the thread pool, awaited via the segment's <see cref="SpoolSegment.Completion"/> — the main thread NEVER awaits it).</summary>
+    /// <summary>Seal all four tracks into a segment and start a fresh one. Main thread; O(1) apart from the
+    /// last batch hand-off (its serialize+gzip+write runs on the thread pool, awaited via the segment's
+    /// <see cref="SpoolSegment.Completion"/> — the main thread NEVER awaits it).</summary>
     internal SpoolSegment Rotate()
     {
         var (dmg, tDmg, cDmg, fDmg) = _dmg.Seal();
@@ -95,7 +109,9 @@ internal sealed class EventSpool
         return seg;
     }
 
-    /// <summary>Drop the current segment: its blobs are deleted after their writes finish. Replaces the ring's Clear(). Fire-and-forget — the deletion task is rooted by its own continuation, so nothing is retained here (a per-call list would grow for the life of the process).</summary>
+    /// <summary>Drop the current segment: its blobs are deleted after their writes finish. Replaces the
+    /// ring's Clear(). Fire-and-forget — the deletion task is rooted by its own continuation, so nothing is
+    /// retained here (a per-call list would grow for the life of the process).</summary>
     internal void Discard() => _ = DiscardAsync();
 
     /// <summary>Awaitable form of <see cref="Discard"/> — tests await it to observe the blobs gone.</summary>

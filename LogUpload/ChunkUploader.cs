@@ -96,13 +96,15 @@ internal static class ChunkUploader
         internal string Label { get; }
     }
 
-    private static TrackEndpoint DmgEndpoint(string baseUrl, string region, long levelUuid, string label)
+    // internal (not private) so the per-track 404 semantics above are PINNED by a test rather than only
+    // described — ChunkUploaderSheetTests.Each_tracks_404_semantics_match_its_endpoints_age.
+    internal static TrackEndpoint DmgEndpoint(string baseUrl, string region, long levelUuid, string label)
         => new(BuildUrl(baseUrl, region, levelUuid), false, label);
 
-    private static TrackEndpoint BuffEndpoint(string baseUrl, string region, long levelUuid, string label)
+    internal static TrackEndpoint BuffEndpoint(string baseUrl, string region, long levelUuid, string label)
         => new(BuildBuffUrl(baseUrl, region, levelUuid), true, label);
 
-    private static TrackEndpoint SheetEndpoint(string baseUrl, string region, long levelUuid, string label)
+    internal static TrackEndpoint SheetEndpoint(string baseUrl, string region, long levelUuid, string label)
         => new(BuildSheetUrl(baseUrl, region, levelUuid), true, label);
 
     /// <summary>Uploads a rotated segment: dmg → /events, buff → /buff-events, sheet → /sheet-events; buffx

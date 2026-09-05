@@ -194,4 +194,45 @@ public sealed class EventSpoolTests
         await seg.Completion;
         Assert.Equal(1, seg.Sheet.Single().Count);
     }
+
+    // The ARCHIVE decision counts GAME events only (final review, I1). Every segment gets a sheet keyframe,
+    // so gating Plugin.LogUpload's "No events captured — skipping auto-upload" retain-only branch on
+    // ChunkCount would make that branch UNREACHABLE and start uploading the no-damage tail archives the owner
+    // had purged server-side (kill-board P2 ruling 2026-09-02). GameEventChunkCount is what that branch reads;
+    // ChunkCount still answers "is there anything to POST", and the keyframe chunk does still upload.
+    [Fact]
+    public async Task A_sheet_only_segment_has_no_game_event_chunks_but_still_uploads_its_keyframe()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.AddSheetKeyframe(5);                               // the per-segment tick keyframe, nothing else
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(0, seg.GameEventChunkCount);                // archive decision: nothing captured
+        Assert.Equal(1, seg.ChunkCount);                         // upload decision: one sheet chunk to POST
+        Assert.Empty(seg.Dmg);
+        Assert.Empty(seg.Buff);
+        Assert.Single(seg.Sheet);
+    }
+
+    // A keyframe read that finds NO tracked attr writes nothing and leaves the request PENDING — the tick
+    // asks again on its next pass, as the live sheet fills in. Deferred, never silently skipped, and still
+    // exactly once per segment when it finally lands.
+    [Fact]
+    public async Task A_keyframe_with_no_tracked_attr_is_deferred_then_written_once()
+    {
+        var store = new FakeDataStore();
+        var sheet = new System.Collections.Generic.Dictionary<int, long> { [11320] = 99 };   // untracked only
+        var spool = new EventSpool(store, null, () => sheet);
+        spool.AddSheetKeyframe(5);
+        Assert.True(spool.NeedsSheetKeyframe);                   // nothing written — still wanted
+        sheet[11710] = 3000;                                     // a tracked attr reaches the live sheet
+        spool.AddSheetKeyframe(6);
+        Assert.False(spool.NeedsSheetKeyframe);
+        spool.AddSheetKeyframe(7);                               // … and never a second time
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(1, seg.Sheet.Single().Count);
+        Assert.Equal(0, seg.GameEventChunkCount);
+    }
 }

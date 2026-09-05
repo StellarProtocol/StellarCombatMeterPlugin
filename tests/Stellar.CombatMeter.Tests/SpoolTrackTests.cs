@@ -100,6 +100,27 @@ public sealed class SpoolTrackTests
         Assert.Equal(1, t.WriteFaults);
     }
 
+    // The chunk ref's envelope window is MIN/MAX over the batch, not first/last (final review, I3). On the
+    // `sheet` track array order is NOT ms order: a tick-written keyframe is stamped with UtcNow on the update
+    // thread while the delta rows behind it carry the earlier network-thread receive stamp, so the FIRST row
+    // can be the latest one. first/last would then emit an inverted (StartMs > EndMs) window and mis-place the
+    // chunk in the run's timeline. Row order on disk is deliberately left alone — see SheetEvent's doc.
+    [Fact]
+    public async Task Envelope_window_is_min_max_even_when_the_first_row_is_the_latest()
+    {
+        var store = new FakeDataStore();
+        var t = new SpoolTrack("sheet", "seg1", store, chunkEvents: 3);
+        t.Add(new SheetEvent(900L, true,  new[] { new[] { 11710L, 3000L } }));   // keyframe: later stamp, first row
+        t.Add(new SheetEvent(100L, false, new[] { new[] { 11710L, 3350L } }));
+        t.Add(new SheetEvent(500L, false, new[] { new[] { 12670L, 1200L } }));
+        var (refs, _, done, _) = t.Seal();
+        await done;
+        var r = Assert.Single(refs);
+        Assert.Equal(100L, r.StartMs);
+        Assert.Equal(900L, r.EndMs);
+        Assert.Equal(3, r.Count);
+    }
+
     [Fact]
     public void Codec_round_trips()
     {
