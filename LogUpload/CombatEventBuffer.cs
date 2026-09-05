@@ -118,7 +118,9 @@ internal sealed class CombatEventBuffer
                 },
                 b.Stacks,
                 b.Layer,
-                b.DurationMs),
+                b.DurationMs,
+                // TODO(Task 5): fill Src/SrcKind/SrcId from b.FirerId/b.SourceKind/b.SourceId.
+                "0", 0, 0),
 
             _ => null,   // unrecognized CombatEvent case — skip (never crash the game); caller logs the count
         };

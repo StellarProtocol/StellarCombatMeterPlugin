@@ -607,7 +607,7 @@ public sealed class LogUploadTests
         {
             new SkillEvent(100L, "1", 10, 101),
             new DamageEvent(200L, "1", "2", 10, 500, 490, 0, true, false, false, false, 1, 0, 0),
-            new BuffEvent(300L, "2", 999, 5, "applied", 1, 0, 5000),
+            new BuffEvent(300L, "2", 999, 5, "applied", 1, 0, 5000, "0", 0, 0),
         };
 
         var eventsJson = EventsJsonWriter.Write(events);
