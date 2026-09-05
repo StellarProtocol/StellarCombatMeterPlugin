@@ -9,26 +9,24 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.CombatMeter</RootNamespace>
     <AssemblyName>Stellar.CombatMeter</AssemblyName>
-    <!-- 2.5.1, not 2.5.0: the registry already publishes 2.5.0, and published versions are immutable.
-         Uploads stamp pluginVer from THIS assembly version (LogUpload/CombatLogAssembler.cs:105), so
-         the owner's raid-test build of the run-split fix must be distinguishable from the published
-         2.5.0 in upload headers. -->
-    <Version>2.5.1</Version>
+    <!-- 2.6.0: rDPS capture (event spool + buff track + buff-effect sampler); requires framework 2.7.0
+         (Abstractions 2.7.0). Released lock-step with fw 2.7.0. -->
+    <Version>2.6.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Requires framework 2.5.0: IPluginServices.RunTimer / IRunTimer.Epoch (run-identity latch
-         epoch — raid run-split fix, spec 2026-08-26). 2.5.0 is NOT yet published: this repo's
+    <!-- Requires framework 2.7.0: CombatEvent.BuffChanged.FirerId/SourceKind/SourceId (rDPS capture,
+         spec 2026-09-05). 2.7.0 is NOT yet published: this repo's
          committed NuGet.config <clear/>s sources down to nuget.org only, so local builds actually
-         resolve 2.5.0 from the global NuGet package cache (~/.nuget/packages/stellar.abstractions/
-         2.5.0), seeded there by an earlier `dotnet restore -s nuget.org -s .localfeed` against the
+         resolve 2.7.0 from the global NuGet package cache (~/.nuget/packages/stellar.abstractions/
+         2.7.0), seeded there by an earlier `dotnet restore -s nuget.org -s .localfeed` against the
          devkit's local pack (dotnet pack of Stellar.Abstractions) — NOT from a committed local-feed
-         source. Purge that cached unpublished 2.5.0 before any post-publish verification build, or
+         source. Purge that cached unpublished 2.7.0 before any post-publish verification build, or
          a stale local pack will silently shadow the real published package. Plugin CI stays red
-         until the framework 2.5.0 release publishes. The registry manifest's minModSystemVersion
+         until the framework 2.7.0 release publishes. The registry manifest's minModSystemVersion
          must be raised to match at release. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.5.0" />
+    <PackageReference Include="Stellar.Abstractions" Version="2.7.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws

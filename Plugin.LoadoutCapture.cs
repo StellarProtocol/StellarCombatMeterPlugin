@@ -52,6 +52,7 @@ public sealed partial class Plugin
         TickLoadoutRunBoundary();
         TickBuildRecapture();
         TickAttrRangeSample();
+        TickBuffEffectSampler();
         TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
     }
 
@@ -163,6 +164,7 @@ public sealed partial class Plugin
             _loadoutCapture.ResetForRun();
             _attrRange.ResetForRun();
             _classSpans.ResetForRun();
+            _buffEffects.Reset();
             // The accumulator is now empty, and entering a dungeon changes nothing about the player's
             // build — so no container merge will fire on its own. ARM the capture instead of polling
             // for it: TickBuildRecapture runs immediately after this on the SAME tick (see

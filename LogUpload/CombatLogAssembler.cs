@@ -30,10 +30,10 @@ internal sealed class CombatLogAssembler
     /// </summary>
     /// <param name="entry">The archived encounter history entry (stats + entity snapshots).</param>
     /// <param name="events">
-    /// Raw combat events flushed from <see cref="CombatEventBuffer"/>. Task 8: no longer embedded
-    /// in the summary blob (which always ships <c>events: []</c>) — retained here only so callers
-    /// keep a single call site; the caller uploads the same list separately via
-    /// <see cref="EventChunker"/> + chunk uploads once this summary has landed.
+    /// Raw combat events. Task 8: no longer embedded in the summary blob (which always ships
+    /// <c>events: []</c>) — retained here only so callers keep a single call site. Since the rDPS
+    /// spool (2026-09-05) every caller passes an EMPTY list: the stream is already chunked into the
+    /// segment's <see cref="EventSpool"/> blobs and uploaded from there once this summary has landed.
     /// </param>
     /// <param name="signerKey">
     /// Base64-PKCS#8 private key, or null/empty to produce an empty placeholder signature
@@ -55,7 +55,9 @@ internal sealed class CombatLogAssembler
         string? signerKey,
         bool truncatedEvents,
         int eventChunks = 0,
-        InstallKey? installKey = null)
+        InstallKey? installKey = null,
+        bool truncatedBuffEvents = false,
+        IReadOnlyList<BuffEffectAgg>? buffEffects = null)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
@@ -122,7 +124,7 @@ internal sealed class CombatLogAssembler
             EventChunks:  eventChunks);
 
         // Plugin-authoritative aggregates (uncapped) ride alongside the (capped) raw event detail track.
-        var derived = DerivedBuilder.Build(entry, truncatedEvents);
+        var derived = DerivedBuilder.Build(entry, truncatedEvents, truncatedBuffEvents, buffEffects);
         // Task 8: the summary blob always ships events: [] — the raw stream (if any) uploads
         // separately via sequential chunk POSTs once this summary lands (see ChunkUploader).
         var logUnsigned = new CombatLog(1, header, actors, Array.Empty<CombatLogEvent>(), derived);

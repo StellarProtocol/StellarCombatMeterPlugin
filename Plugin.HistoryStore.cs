@@ -107,17 +107,70 @@ public sealed partial class Plugin
         return true;
     }
 
-    // Delete a run's retained re-upload payload (mirrors _uploadStatus.Forget). No-op when absent.
+    // Delete a run's retained re-upload payload AND the spool blobs it referenced (mirrors _uploadStatus.Forget).
+    // No-op when absent. Blob lifetime = CONTAINER lifetime (see the comment in SweepOrphanReUploads below) —
+    // this is the SECOND of the two sites that ever delete a container, so it must free the container's blobs
+    // itself rather than leaving them for a sweep that may not run again until the next launch.
     private void ForgetReUpload(EncounterHistoryEntry e)
-        => _services.Data.Delete(ReUploadContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
+    {
+        var name = ReUploadContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs);
+        var bytes = _services.Data.Read(name);
+        if (bytes is not null)
+            foreach (var blob in ReUploadContainer.ReferencedBlobs(bytes)) _services.Data.Delete(blob);
+        _services.Data.Delete(name);
+    }
 
-    // Belt-and-braces: drop any replay container with no matching live entry (e.g. left by a crash mid-evict).
+    // Belt-and-braces: drop any replay container with no matching live entry (e.g. left by a crash mid-evict),
+    // and with it the spool blobs it referenced. STARTUP ONLY (LoadHistory) — see SweepUnreferencedSpoolBlobs.
     private void SweepOrphanReUploads()
     {
         var live = new List<(long, long)>(_history.Count);
         foreach (var e in _history) live.Add((e.LevelUuid, e.ArchivedAtMs));
         foreach (var name in ReUploadContainer.OrphanContainerNames(_services.Data.List("replay/"), live))
+        {
+            // Blob lifetime = CONTAINER lifetime: a segment's blobs back its re-upload, so they are never
+            // deleted on upload success — only at the TWO sites that ever delete a container: here (the
+            // startup orphan sweep, for a container whose in-memory entry is already gone) and ForgetReUpload
+            // above (an in-memory-tracked entry's container being deleted directly — eviction, DeleteSession,
+            // ClearAllHistory). Whichever site reaches a container first frees its blobs with it.
+            var bytes = _services.Data.Read(name);
+            if (bytes is not null)
+                foreach (var blob in ReUploadContainer.ReferencedBlobs(bytes)) _services.Data.Delete(blob);
             _services.Data.Delete(name);
+        }
+        SweepUnreferencedSpoolBlobs();
+    }
+
+    // A crash between a spool blob's write and the archive that would have referenced it leaves a blob no
+    // container owns. STARTUP ONLY (reached from LoadHistory, before OnCombatEvent is ever wired) — mid-run
+    // this would delete the LIVE segment's blobs, which no container references YET.
+    //
+    // The delete decision itself is SpoolSweep.Plan (pure, pinned): an incomplete reference set must never
+    // authorize a delete, so one unreadable live container skips the sweep entirely for this launch.
+    private void SweepUnreferencedSpoolBlobs()
+    {
+        var blobs = _services.Data.List(SpoolCodec.Prefix);
+        if (blobs.Count == 0) return;
+
+        var (toDelete, skip) = SpoolSweep.Plan(blobs, LiveReUploadContainers());
+        if (skip is not null)
+        {
+            _services.Log.Warning(
+                $"[CombatMeter.SP1] spool sweep skipped this launch: container {skip} unreadable — leftovers cost disk only");
+            return;
+        }
+
+        foreach (var blob in toDelete) _services.Data.Delete(blob);
+        if (toDelete.Count > 0)
+            _services.Log.Info($"[CombatMeter.SP1] Deleted {toDelete.Count} unreferenced spool blob(s) (run never archived).");
+    }
+
+    // Lazy so only ONE container's bytes are live at a time (94 containers × ~190 KB on the owner's client).
+    // Orphans were already deleted by the caller, so every name here belongs to a live history entry.
+    private IEnumerable<(string Name, byte[]? Bytes)> LiveReUploadContainers()
+    {
+        foreach (var name in _services.Data.List("replay/"))
+            yield return (name, _services.Data.Read(name));
     }
 
     // Same, for per-run history files: drop any history/ file with no live entry (left by a crash mid-evict).

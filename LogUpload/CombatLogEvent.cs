@@ -15,4 +15,5 @@ internal sealed record DamageEvent(
 
 internal sealed record BuffEvent(
     long Ms, string Tgt, int Uuid, int Base,
-    string Kind, int Stacks, int Layer, int DurMs) : CombatLogEvent(Ms);
+    string Kind, int Stacks, int Layer, int DurMs,
+    string Src, int SrcKind, int SrcId) : CombatLogEvent(Ms);

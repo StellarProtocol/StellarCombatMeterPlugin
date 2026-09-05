@@ -29,6 +29,7 @@ public sealed partial class Plugin
     {
         // SP1: capture every event into the log buffer (runs even when the meter display is paused).
         MaybeCaptureForLog(evt);
+        FeedBuffEffectSampler(evt);
 
         // PAUSE = numbers stop, TRACKING CONTINUES (owner ruling 2026-08-14). The always-on capture
         // channels live past the DamageDealt narrowing below, in ObserveAlwaysOnCapture
