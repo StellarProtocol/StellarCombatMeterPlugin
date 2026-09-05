@@ -24,15 +24,6 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
         return w.ToString();
     }
 
-    /// <summary>Test-only seam: runs the `derived` writer alone into a fresh <see cref="JsonWriter"/>
-    /// (no full <see cref="CombatLog"/> needed) — see <c>CombatLogWriterTrackFlagsTests</c>.</summary>
-    internal static string WriteDerivedForTest(Derived d)
-    {
-        var w = new JsonWriter();
-        WriteDerived(w, d);
-        return w.ToString();
-    }
-
     private static void WriteDerived(JsonWriter w, Derived d)
     {
         w.BeginObject();

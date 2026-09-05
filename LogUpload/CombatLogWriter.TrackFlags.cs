@@ -9,4 +9,13 @@ internal static partial class CombatLogWriter
     {
         w.Name("truncatedBuffEvents").Bool(d.TruncatedBuffEvents);
     }
+
+    /// <summary>Test-only seam: runs the `derived` writer alone into a fresh <see cref="JsonWriter"/>
+    /// (no full <see cref="CombatLog"/> needed) — see <c>CombatLogWriterTrackFlagsTests</c>.</summary>
+    internal static string WriteDerivedForTest(Derived d)
+    {
+        var w = new JsonWriter();
+        WriteDerived(w, d);
+        return w.ToString();
+    }
 }
