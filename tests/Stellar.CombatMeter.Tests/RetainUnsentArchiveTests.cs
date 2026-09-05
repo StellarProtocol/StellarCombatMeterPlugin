@@ -8,7 +8,7 @@ namespace Stellar.CombatMeter.Tests;
 /// Container-custody pins (fix 2026-08-14). Two auto-path branches used to bank an archive WITHOUT
 /// writing its .replaydoc container: the zero-events early return (AssembleAndUpload returned
 /// before PersistReUpload) and the region-unknown refusal (which even destroyed the buffered
-/// events via <c>_logBuffer.Clear()</c>). In both, the prepared replay doc's only custody was the
+/// events by clearing the capture buffer). In both, the prepared replay doc's only custody was the
 /// one-shot positions POST in FinalizeAndMaybeUploadReplay — a failure there was permanent loss of
 /// a banked replay window (P0: replay covers dungeon entry → run end). Both branches now retain via
 /// the RetainWithoutUpload shape, gated on the pure <c>ShouldRetainUnsentArchive</c> seam below.
@@ -31,7 +31,7 @@ public class RetainUnsentArchiveTests
         // a container round-trips with its positions custody intact, so a later manual push
         // (TryLoadReUpload → ReplayReUpload) can re-send the replay verbatim.
         var payload = new ReUploadPayload(ReUploadContainer.Version, "sea", 88, "cm-z",
-            "{\"s\":1}", Array.Empty<string>(), "{\"p\":1}");
+            "{\"s\":1}", Array.Empty<string>(), "{\"p\":1}", Array.Empty<SpoolChunkRef>());
         var bytes = ReUploadContainer.Serialize(payload);
 
         Assert.True(ReUploadContainer.TryDeserialize(bytes, out var back));

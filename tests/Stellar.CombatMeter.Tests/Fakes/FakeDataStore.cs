@@ -13,10 +13,15 @@ public sealed class FakeDataStore : IPluginDataStore
 
     public int Writes;
 
+    /// <summary>Makes every <see cref="Write"/> throw — the real store never does (it swallows + logs),
+    /// so this stands in for a serialization/gzip fault on the spool's background write task.</summary>
+    public bool ThrowOnWrite;
+
     public void Write(string name, byte[] data)
     {
-        _files[name] = data;
         System.Threading.Interlocked.Increment(ref Writes);
+        if (ThrowOnWrite) throw new System.IO.IOException("fake write fault");
+        _files[name] = data;
     }
 
     public byte[]? Read(string name) => _files.TryGetValue(name, out var data) ? data : null;

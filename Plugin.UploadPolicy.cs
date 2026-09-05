@@ -116,9 +116,10 @@ public sealed partial class Plugin
     /// could withhold events the upload gate then wants. Upload policy still refuses the SEND at archive
     /// time — unchanged, in <c>MaybeUploadLog</c>/<c>TierAllowsUpload</c> (Plugin.LogUpload.cs), which is
     /// the ONLY place it belongs.
-    /// <para>The cost is bounded by construction: <c>CombatEventBuffer</c> is a fixed-size RING —
-    /// 128,000 damage/skill events (32 × 4,000-event chunks) + 2,000 buff events, oldest overwritten,
-    /// never grown — so always-on capture cannot leak memory however long the client runs.</para>
+    /// <para>The cost is bounded by construction: the spool is uncapped on disk (<c>EventSpool</c> — each
+    /// sealed batch leaves memory immediately as a gzipped blob); the only cap is the server's 128
+    /// chunks/track, flagged per track — so always-on capture cannot leak memory however long the client
+    /// runs.</para>
     /// <para>The parameters are kept deliberately: they are exactly the inputs a re-gate would reach
     /// for, so the pin (<c>PauseCaptureTests.Raw_event_capture_ignores_the_stats_cell_entirely</c>) can
     /// hand this an all-<c>off</c> table and assert capture still runs — while the same test asserts the
@@ -308,8 +309,8 @@ public sealed partial class Plugin
         // decide only). This used to be `_contentKinds.IsEmpty || <live kind>.stats == Auto`, i.e. the
         // live content's stats cell decided whether raw events were even BUFFERED — the same
         // destroy-instead-of-withhold bug the replay line below already fixed, on the other artifact.
-        // The ring is bounded (CombatEventBuffer: 128,000 dmg/skill + 2,000 buff, oldest overwritten),
-        // so always-on capture is memory-safe; the SEND stays gated at archive time by MaybeUploadLog /
+        // The spool is uncapped on disk (EventSpool); the only cap is the server's 128 chunks/track,
+        // flagged per track — so always-on capture is memory-safe; the SEND stays gated at archive time by MaybeUploadLog /
         // TierAllowsUpload (Plugin.LogUpload.cs). See EventCaptureEnabled's doc for the full rationale.
         _captureForLogEnabled = EventCaptureEnabled(_uploadPolicy, _currentKind);
         // REPLAY CAPTURE IS UNCONDITIONAL. Owner ruling, restated repeatedly and finally 2026-07-29:

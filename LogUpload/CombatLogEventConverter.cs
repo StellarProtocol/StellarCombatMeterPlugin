@@ -4,9 +4,9 @@ namespace Stellar.CombatMeter.LogUpload;
 
 /// <summary>
 /// Pure mapping from a captured <see cref="CombatEvent"/> to its StellarLogs wire DTO
-/// (<see cref="CombatLogEvent"/>). Extracted from <see cref="CombatEventBuffer"/> so the mapping can
-/// be unit-tested independent of the ring-buffer machinery. Entity ids are formatted as their raw
-/// long value (same convention as the rest of the plugin).
+/// (<see cref="CombatLogEvent"/>). Extracted from the capture buffer so the mapping can be unit-tested
+/// independent of the buffering machinery (now <see cref="EventSpool"/>). Entity ids are formatted as
+/// their raw long value (same convention as the rest of the plugin).
 /// </summary>
 internal static class CombatLogEventConverter
 {

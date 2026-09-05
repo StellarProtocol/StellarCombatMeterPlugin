@@ -18,5 +18,9 @@ internal sealed record SpoolSegment(
     Task Completion)
 {
     internal static readonly SpoolSegment Empty = new("", new SpoolChunkRef[0], new SpoolChunkRef[0], false, false, Task.CompletedTask);
+
+    /// <summary>No chunks, but flagged truncated: the manual re-upload of a PRE-spool archive, which has no
+    /// retained event stream at all — the summary must say so rather than claim a complete (empty) one.</summary>
+    internal static readonly SpoolSegment EmptyTruncated = new("", new SpoolChunkRef[0], new SpoolChunkRef[0], true, false, Task.CompletedTask);
     internal int ChunkCount => Dmg.Count + Buff.Count;
 }

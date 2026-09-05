@@ -69,6 +69,76 @@ internal static class ChunkUploader
     internal static string BuildUrl(string baseUrl, string region, long levelUuid)
         => $"{baseUrl}/run/{region}/{levelUuid.ToString(CultureInfo.InvariantCulture)}/events";
 
+    /// <summary>The buff track's own endpoint. A server that predates it answers 404 — terminal, never
+    /// retried, and the blobs stay on disk for a later re-upload (see <see cref="PostRefsAsync"/>).</summary>
+    internal static string BuildBuffUrl(string baseUrl, string region, long levelUuid)
+        => $"{baseUrl}/run/{region}/{levelUuid.ToString(CultureInfo.InvariantCulture)}/buff-events";
+
+    /// <summary>Uploads a rotated segment: dmg refs to /events, buff refs to /buff-events. Blobs are NOT
+    /// deleted here — they belong to the retention container (Plugin.LogUpload's PersistReUpload) and die
+    /// with it, so a re-upload can still replay them verbatim.</summary>
+    internal static void UploadSegmentFireAndForget(
+        string baseUrl, string region, long levelUuid, string logId, SpoolSegment seg,
+        Stellar.Abstractions.Services.IPluginDataStore store, Action<string> logWarn)
+    {
+        if (seg.ChunkCount == 0) return;
+        _ = Task.Run(async () =>
+        {
+            // Thread-pool only: the main thread never blocks on a segment's write completion.
+            await seg.Completion.ConfigureAwait(false);
+            await PostRefsAsync(BuildUrl(baseUrl, region, levelUuid), logId, seg.Dmg, store, logWarn, "chunk").ConfigureAwait(false);
+            await PostRefsAsync(BuildBuffUrl(baseUrl, region, levelUuid), logId, seg.Buff, store, logWarn, "buff chunk").ConfigureAwait(false);
+        });
+    }
+
+    /// <summary>Re-upload leg for a retention container's stored chunk REFS (container V2). Splits by track
+    /// so each posts to its own endpoint with its own per-track <c>total</c>.</summary>
+    internal static void ReuploadRefsFireAndForget(
+        string baseUrl, string region, long levelUuid, string logId,
+        IReadOnlyList<SpoolChunkRef> refs, Stellar.Abstractions.Services.IPluginDataStore store, Action<string> logWarn)
+    {
+        if (refs.Count == 0) return;
+        _ = Task.Run(async () =>
+        {
+            var dmg = new List<SpoolChunkRef>(refs.Count);
+            var buff = new List<SpoolChunkRef>();
+            foreach (var r in refs) (r.Track == "buff" ? buff : dmg).Add(r);
+            await PostRefsAsync(BuildUrl(baseUrl, region, levelUuid), logId, dmg, store, logWarn, "re-upload chunk").ConfigureAwait(false);
+            await PostRefsAsync(BuildBuffUrl(baseUrl, region, levelUuid), logId, buff, store, logWarn, "re-upload buff chunk").ConfigureAwait(false);
+        });
+    }
+
+    /// <summary>Posts one track's chunk refs: read the blob, gunzip it, wrap it in the envelope, POST. A
+    /// missing blob or a failed POST skips that chunk only — later chunks continue. A <b>404</b> is the
+    /// endpoint not existing on that server: terminal for the whole track, logged ONCE, blobs kept.</summary>
+    internal static async Task PostRefsAsync(
+        string url, string logId, IReadOnlyList<SpoolChunkRef> refs,
+        Stellar.Abstractions.Services.IPluginDataStore store, Action<string> logWarn, string label)
+    {
+        for (var i = 0; i < refs.Count; i++)
+        {
+            var r = refs[i];
+            try
+            {
+                var gz = store.Read(r.BlobName);
+                if (gz is null) { logWarn($"[CombatMeter.SP1] {label} {r.Index}/{refs.Count} for {logId}: blob {r.BlobName} missing — skipping."); continue; }
+                var json = BuildEnvelope(logId, r, refs.Count, SpoolCodec.Gunzip(gz));
+                var res = await PostAsync(url, json).ConfigureAwait(false);
+                if (res.NotFound)
+                {
+                    logWarn($"[CombatMeter.SP1] {r.Track} track not accepted by server (404) — blobs retained for re-upload.");
+                    return;   // one line per segment, not per chunk; the rest of this track is pointless
+                }
+                if (!res.Ok)
+                    logWarn($"[CombatMeter.SP1] {label} upload FAILED after retries (index {r.Index}/{refs.Count}) for {logId} — skipping; later chunks continue.");
+            }
+            catch (Exception ex)
+            {
+                logWarn($"[CombatMeter.SP1] {label} upload threw (index {r.Index}/{refs.Count}) for {logId}: {ex.Message} — skipping; later chunks continue.");
+            }
+        }
+    }
+
     private static async Task UploadSequentialAsync(
         string baseUrl, string region, long levelUuid, string logId, List<EventChunk> chunks, Action<string> logWarn)
     {
@@ -90,7 +160,20 @@ internal static class ChunkUploader
         }
     }
 
+    /// <summary>Outcome of a POST-with-retries. <c>NotFound</c> is carried separately from a plain failure
+    /// because a 404 means the ROUTE does not exist on that server (a worker predating /buff-events) — that
+    /// is terminal, not transient, so the caller stops the track instead of retrying it chunk by chunk.</summary>
+    internal readonly struct PostOutcome
+    {
+        internal PostOutcome(bool ok, bool notFound) { Ok = ok; NotFound = notFound; }
+        internal bool Ok { get; }
+        internal bool NotFound { get; }
+    }
+
     private static async Task<bool> PostWithRetryAsync(string url, string json)
+        => (await PostAsync(url, json).ConfigureAwait(false)).Ok;
+
+    private static async Task<PostOutcome> PostAsync(string url, string json)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -98,14 +181,17 @@ internal static class ChunkUploader
             {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
                 using var response = await HttpClient.PostAsync(url, content, CancellationToken.None).ConfigureAwait(false);
-                if (response.IsSuccessStatusCode) return true;
+                if (response.IsSuccessStatusCode) return new PostOutcome(true, false);
+                // 404 = the endpoint itself is absent. Retrying cannot conjure a route; the caller keeps the
+                // blobs so a later re-upload against an updated server still lands them.
+                if ((int)response.StatusCode == 404) return new PostOutcome(false, true);
             }
             catch
             {
                 // Network/transport error — fall through to the retry/backoff below.
             }
 
-            if (attempt >= RetryDelays.Length) return false;
+            if (attempt >= RetryDelays.Length) return new PostOutcome(false, false);
             await Task.Delay(RetryDelays[attempt]).ConfigureAwait(false);
         }
     }
@@ -127,6 +213,24 @@ internal static class ChunkUploader
         w.Name("endMs").Number(chunk.EndMs);
         w.Name("count").Number(chunk.Events.Count);
         w.Name("events").Raw(EventsJsonWriter.Write(chunk.Events));
+        w.EndObject();
+        return w.ToString();
+    }
+
+    /// <summary>Same envelope, built from a spool chunk REF plus the blob's already-serialized events JSON —
+    /// the chunk's events never re-enter memory as <see cref="CombatLogEvent"/> objects. <paramref name="total"/>
+    /// is the ref's own TRACK count (dmg and buff are numbered independently).</summary>
+    internal static string BuildEnvelope(string logId, SpoolChunkRef r, int total, string eventsJson)
+    {
+        var w = new JsonWriter();
+        w.BeginObject();
+        w.Name("logId").Str(logId);
+        w.Name("index").Number(r.Index);
+        w.Name("total").Number(total);
+        w.Name("startMs").Number(r.StartMs);
+        w.Name("endMs").Number(r.EndMs);
+        w.Name("count").Number(r.Count);
+        w.Name("events").Raw(eventsJson);
         w.EndObject();
         return w.ToString();
     }

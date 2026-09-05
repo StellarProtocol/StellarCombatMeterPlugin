@@ -1,7 +1,7 @@
 // SP1: Full combat-event capture + StellarLogs upload integration.
 //
 // Feature boundary:
-//   - Capture: OnCombatEvent feeds _logBuffer during an encounter.
+//   - Capture: OnCombatEvent feeds the EventSpool (disk-backed, two tracks) during an encounter.
 //   - Serialize: ManualArchive triggers SerializeAndUpload() after the encounter is archived.
 //   - Upload: auto path gated on the CURRENT content's `<kind>.stats` policy cell (default auto —
 //     see Plugin.UploadPolicy.cs); fire-and-forget; never blocks or crashes the game.
@@ -23,7 +23,10 @@ public sealed partial class Plugin
     // SP1 fields (all private to this file; other partials are unaffected)
     // -----------------------------------------------------------------------
 
-    private readonly CombatEventBuffer _logBuffer = new();
+    // Disk-backed replacement for the two event rings (rDPS spool). Lazy: _services is not available at
+    // field-initialiser time — every call site below goes through the Spool property.
+    private EventSpool? _spool;
+    private EventSpool Spool => _spool ??= new EventSpool(_services.Data);
     private CombatLogAssembler? _logAssembler;
 
     // -----------------------------------------------------------------------
@@ -130,16 +133,16 @@ public sealed partial class Plugin
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Feeds the raw event into the log buffer — on every combat event, BEFORE the existing processing
+    /// Feeds the raw event into the spool — on every combat event, BEFORE the existing processing
     /// path, while the meter is PAUSED, and whatever the upload policy says (owner ruling 2026-08-14:
-    /// capture is always-on; policy gates the SEND, at archive time). O(1) ring append, no allocation.
-    /// </summary>
+    /// capture is always-on; policy gates the SEND, at archive time). O(1) append to the open batch; a full
+    /// batch hands its serialize+gzip+write to the thread pool, so no frame blocks on it.</summary>
     internal void MaybeCaptureForLog(CombatEvent evt)
     {
         // One cached bool (RecomputeUploadPolicyCache) — never prefs, never a kind resolution. TRUE
         // unconditionally since the ruling; see Plugin.UploadPolicy.cs's EventCaptureEnabled for why.
         if (!_captureForLogEnabled) return;
-        _logBuffer.Add(evt);
+        Spool.Add(evt, _services.CombatSnapshot.LocalEntityId);
     }
 
     // -----------------------------------------------------------------------
@@ -187,7 +190,7 @@ public sealed partial class Plugin
             LogUploadRefusal(kind, UploadArtifact.Stats, UploadTrigger.Auto, state);
             // Owner ruling 2026-07-29: "off = just don't upload it but game still keep record into chunk
             // always" / "it suppose to store all replay even flag mark off". `off` withholds the SEND; it
-            // must never destroy the record. This used to `_logBuffer.Clear()` and drop everything, which
+            // must never destroy the record. This used to CLEAR the capture buffer and drop everything, which
             // is why the owner's Giant Golem Crusade could never be recovered: raw events are NOT stored
             // with an archive (history keeps aggregates only), and the retained first-send copy — the one
             // thing a later manual push can replay verbatim — was written ONLY when a send fired. No send
@@ -209,7 +212,7 @@ public sealed partial class Plugin
         }
         if (!RegionKnownOrWarn())
         {
-            // Fix 2026-08-14: this branch used to `_logBuffer.Clear()` — destroying the captured events
+            // Fix 2026-08-14: this branch used to CLEAR the capture buffer — destroying the captured events
             // and writing NO container, so the prepared replay doc's only custody was the one-shot
             // positions POST in FinalizeAndMaybeUploadReplay (a failure there = permanent loss). Retain
             // exactly like the policy-off / tier paths above so the run's true bodies survive locally
@@ -221,14 +224,14 @@ public sealed partial class Plugin
         }
         if (entry.LevelUuid == 0)   // non-instanced (field) fight — same refusal as the manual
         {                           // path; uploading would collide every field fight on run:0
-            _logBuffer.Clear();
+            Spool.Discard();
             _services.Log.Info("[CombatMeter.SP1] Field fight (no run id) — not uploaded.");
             return false;
         }
 
         // Pure overload: the logging one would double-log the refusal (PrepareReplayDoc already logged it).
         var replaySendAllowed = ReplayAutoUploadAllowed(_contentKinds, _uploadPolicy, entry);
-        return AssembleAndUpload(entry, events: null, truncatedEvents: false, flushBuffer: true, replayDoc, replaySendAllowed);
+        return AssembleAndUpload(entry, segment: null, flushBuffer: true, replayDoc, replaySendAllowed);
     }
 
     /// <summary>Manual per-run upload from history. Uses the entry's stored aggregates; no raw events
@@ -281,7 +284,8 @@ public sealed partial class Plugin
         if (TryLoadReUpload(entry, out var payload)) { ReplayReUpload(entry, payload); return; }
 
         // Pre-feature entry (no retained payload): today's fallback — assemble from the entry, no chunks/positions.
-        AssembleAndUpload(entry, Array.Empty<CombatLogEvent>(), truncatedEvents: true, flushBuffer: false, replayDoc: null);
+        // EMPTY-BUT-TRUNCATED: no event stream to send, and `truncatedEvents` is how the summary says so
+        AssembleAndUpload(entry, SpoolSegment.EmptyTruncated, flushBuffer: false, replayDoc: null);
     }
 
     /// <summary>Loads the retained first-send payload for <paramref name="entry"/>, if one exists. The
@@ -306,7 +310,7 @@ public sealed partial class Plugin
         {
             var url = UploadVerdict.SiteBase + "/run/" + payload.Region + "/" + payload.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
-            _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count} chunk(s), positions={(payload.Positions is not null)}).");
+            _services.Log.Info($"[CombatMeter.SP1] Re-uploading run {payload.LevelUuid} verbatim (logId={payload.LogId}, {payload.Chunks.Count + payload.ChunkRefs.Count} chunk(s), positions={(payload.Positions is not null)}).");
             LogUploader.PostRawFireAndForget(payload.Summary, (ok, status, err, verdict) =>
             {
                 // Prefer the server's SHORT run URL, same as the first-send path. Storing the constructed
@@ -317,8 +321,10 @@ public sealed partial class Plugin
                     UploadVerdict.PreferredUrl(verdict, url));
                 MarkUploadStateDirty(entry);
                 if (!ok) { _services.Log.Warning($"[CombatMeter.SP1] Re-upload summary FAILED (HTTP {status}): {err}"); return; }
-                if (payload.Chunks.Count > 0)
+                if (payload.Chunks.Count > 0)   // V1 inlined envelopes; V2 points at spool blobs (below)
                     ChunkUploader.PostRawEnvelopesFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.Chunks, m => _services.Log.Warning(m));
+                if (payload.ChunkRefs.Count > 0)
+                    ChunkUploader.ReuploadRefsFireAndForget(LogUploader.ApiBase, payload.Region, payload.LevelUuid, payload.LogId, payload.ChunkRefs, _services.Data, m => _services.Log.Warning(m));
                 if (payload.Positions is not null) MaybeReUploadPositions(entry, payload);
             });
         }
@@ -368,17 +374,15 @@ public sealed partial class Plugin
             ? $"[CombatMeter.SP1] Re-upload positions OK (HTTP {status}) levelUuid={levelUuid}"
             : $"[CombatMeter.SP1] Re-upload positions FAILED (HTTP {status}) levelUuid={levelUuid}: {err}";
 
-    // Shared assemble+upload core for both paths. Differs only in the event source (buffer flush for
-    // auto, empty for manual) and the truncation flag. Never throws into the (main-thread) caller.
-    // flushBuffer=true (auto path) flushes _logBuffer INSIDE this try so a throw from the conversion
-    // step can never escape uncaught; flushBuffer=false (manual path) uses the events/truncatedEvents
-    // passed in as-is.
+    // Shared assemble+upload core for both paths. Differs only in the event source: flushBuffer=true (auto)
+    // ROTATES the spool INSIDE the try so a seal/hand-off throw can never escape uncaught; flushBuffer=false
+    // (manual) uses the segment passed in as-is. Never throws into the (main-thread) caller.
     //
     // Returns true iff a summary upload was fired (the code reached LogUploader.UploadFireAndForget)
     // — from that point the callback OWNS replayDoc (P2 single-shot positions handoff). Returns false
     // on the zero-events early-return, or when the catch below runs BEFORE the upload was fired —
     // in either false case the CALLER is responsible for uploading replayDoc itself.
-    private bool AssembleAndUpload(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent>? events, bool truncatedEvents,
+    private bool AssembleAndUpload(EncounterHistoryEntry entry, SpoolSegment? segment,
                                    bool flushBuffer, PositionUploadDoc? replayDoc, bool replaySendAllowed = true)
     {
         if (!flushBuffer && !RegionKnownOrWarn()) return false;
@@ -388,11 +392,11 @@ public sealed partial class Plugin
         {
             if (flushBuffer)
             {
-                truncatedEvents = _logBuffer.Truncated;   // capture before Flush() clears it
-                events = _logBuffer.Flush();               // also clears the buffer
-                if (_logBuffer.SkippedUnknownEvents > 0)
-                    _services.Log.Warning($"[CombatMeter.SP1] Skipped {_logBuffer.SkippedUnknownEvents} unrecognized combat event(s) during log flush.");
-                if (events.Count == 0)
+                var skipped = Spool.SkippedUnknownEvents;   // read BEFORE Rotate — it zeroes the counter
+                segment = Spool.Rotate();
+                if (skipped > 0)
+                    _services.Log.Warning($"[CombatMeter.SP1] Skipped {skipped} unrecognized combat event(s) during log flush.");
+                if (segment.ChunkCount == 0)
                 {
                     _services.Log.Info("[CombatMeter.SP1] No events captured — skipping auto-upload.");
                     // Fix 2026-08-14: this early return used to skip PersistReUpload below, so a banked
@@ -403,32 +407,31 @@ public sealed partial class Plugin
                     // value stays false — the caller still owns the direct positions hand-off
                     // (FinalizeUploadDecoupleTests' semantics are unchanged).
                     if (ShouldRetainUnsentArchive(entry.LevelUuid))
-                        RetainAssembled(entry, events, truncatedEvents, replayDoc);
+                        RetainAssembled(entry, segment, replayDoc);
                     return false;
                 }
             }
 
-            // Chunk the raw stream up front (auto path only — flushBuffer=false/manual passes
-            // an empty list, so Chunk() naturally yields zero chunks and eventChunks: 0).
-            var chunks = EventChunker.Chunk(events!);
+            // Already chunked: the events live in this segment's blobs, one blob per upload chunk.
+            var seg = segment ?? SpoolSegment.Empty;
 
             // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
             // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
             // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
-            var log = LogAssembler.Assemble(entry, events!, SignerKey, truncatedEvents, chunks.Count, InstallKeyInstance);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance);
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Uploading log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-                $"({events!.Count} events in {chunks.Count} chunk(s), {entry.Entities.Count} actors).");
+                $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), {entry.Entities.Count} actors).");
 
             // Auto uploads (flushBuffer) get spread across a window so the party's simultaneous
             // archives don't all land on the worker in the same second; manual is user-initiated,
             // so it goes immediately.
             var delayMs = flushBuffer ? Random.Shared.Next(0, UploadJitterMaxMs) : 0;
             fired = true;
-            if (flushBuffer) PersistReUpload(entry, log, chunks, replayDoc);
+            if (flushBuffer) PersistReUpload(entry, log, seg, replayDoc);
             LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
             {
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
@@ -440,7 +443,7 @@ public sealed partial class Plugin
                 _uploadStatus.Set(entry, PhaseFromResult(ok, status),
                     UploadVerdict.PreferredUrl(verdict, url));
                 MarkUploadStateDirty(entry);
-                if (ok) OnSummaryUploadOk(log, chunks, replayDoc, status, verdict, replaySendAllowed);
+                if (ok) OnSummaryUploadOk(log, seg, replayDoc, status, verdict, replaySendAllowed);
                 else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
             }, delayMs, skipPrecheck: !flushBuffer);   // manual re-upload (flushBuffer=false) forces full ingest so the server can REPAIR a bad run
 
@@ -456,7 +459,7 @@ public sealed partial class Plugin
             // Any unhandled exception here must NOT propagate into the main-thread caller.
             _uploadStatus.Set(entry, UploadPhase.Failed, null);
             MarkUploadStateDirty(entry);
-            _logBuffer.Clear();
+            Spool.Discard();
             _services.Log.Warning($"[CombatMeter.SP1] Log assembly/upload threw: {ex.Message}");
             return fired;
         }
@@ -464,7 +467,7 @@ public sealed partial class Plugin
 
     // Success leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
     // never touch uGUI). Gates chunk + positions uploads on the server's merge verdict.
-    private void OnSummaryUploadOk(CombatLog log, List<EventChunk> chunks, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict, bool replaySendAllowed)
+    private void OnSummaryUploadOk(CombatLog log, SpoolSegment seg, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict, bool replaySendAllowed)
     {
         var v = verdict ?? new UploadVerdict(true, false);
         _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
@@ -477,11 +480,11 @@ public sealed partial class Plugin
         // `Kept`/`HavePositions` skips are what dropped a non-elected uploader's data — removed.
         // Chunks still upload only AFTER the summary landed (ordering guarantee — the worker cannot
         // associate chunks with a run it never saw).
-        if (chunks.Count > 0)
-            ChunkUploader.UploadChunksFireAndForget(
+        if (seg.ChunkCount > 0)
+            ChunkUploader.UploadSegmentFireAndForget(
                 LogUploader.ApiBase, log.Header.Region,
-                log.Header.Encounter.LevelUuid, log.Header.LogId, chunks,
-                msg => _services.Log.Warning(msg));
+                log.Header.Encounter.LevelUuid, log.Header.LogId, seg,
+                _services.Data, msg => _services.Log.Warning(msg));
         if (replayDoc is not null)
         {
             // The doc is built even when the replay cell is off (it must be RETAINED regardless), so the
@@ -506,42 +509,42 @@ public sealed partial class Plugin
     }
 
     // -----------------------------------------------------------------------
-    // Dispose: clear the buffer
+    // Dispose: drop whatever the live segment has spooled
     // -----------------------------------------------------------------------
 
     private void DisposeLogUpload()
     {
-        _logBuffer.Clear();
+        _spool?.Discard();   // null-conditional: teardown must not build a spool just to throw it away
     }
 
     /// <summary>Assembles the retained re-upload payload from the exact artifacts the auto path uploads.
-    /// Pure — the bodies are serialized with the SAME writers the uploaders use, so the captured
-    /// summary/chunks/positions are byte-identical to what the first send transmitted for each. This
-    /// captures BODIES only — whether/how a later replay resends them (verdict-gated vs. unconditional
-    /// repair) is ReplayReUpload's decision, not this method's.</summary>
-    internal static ReUploadPayload BuildReUploadPayload(CombatLog log, IReadOnlyList<EventChunk> chunks, PositionUploadDoc? replayDoc)
+    /// Pure — summary/positions ride the SAME writers the uploaders use, so they are byte-identical to what
+    /// the first send transmitted. The event stream is stored as chunk REFS (container V2): the events
+    /// already live in this segment's <c>spool/*</c> blobs, so re-inlining them would double the bytes on
+    /// disk. BODIES only — whether/how a replay resends them is ReplayReUpload's decision.</summary>
+    internal static ReUploadPayload BuildReUploadPayload(CombatLog log, SpoolSegment seg, PositionUploadDoc? replayDoc)
     {
-        var envelopes = new List<string>(chunks.Count);
-        foreach (var c in chunks) envelopes.Add(ChunkUploader.BuildEnvelope(log.Header.LogId, c));
+        var refs = new List<SpoolChunkRef>(seg.ChunkCount); refs.AddRange(seg.Dmg); refs.AddRange(seg.Buff);
         return new ReUploadPayload(
             ReUploadContainer.Version,
             log.Header.Region,
             log.Header.Encounter.LevelUuid,
             log.Header.LogId,
             CombatLogWriter.Write(log),
-            envelopes,
-            replayDoc is null ? null : PositionJsonWriter.Write(replayDoc));
+            System.Array.Empty<string>(),
+            replayDoc is null ? null : PositionJsonWriter.Write(replayDoc),
+            refs);
     }
 
     /// <summary>Auto path only: retain the exact bodies this send is about to POST — byte-identical
     /// captures of the summary/chunks/positions — so a later re-upload has the true originals to
     /// repair from (B4; see ReplayReUpload for why replay resends all three UNCONDITIONALLY, not
-    /// mirroring this send's verdict-gated subset). Fire-and-forget — <paramref name="log"/>,
-    /// <paramref name="chunks"/>, and <paramref name="replayDoc"/> are immutable snapshots (records / a
-    /// List&lt;EventChunk&gt; never mutated after assembly), so building the payload (including every
-    /// chunk's <see cref="ChunkUploader.BuildEnvelope"/>) is safe to defer entirely onto the background
-    /// thread alongside the gzip+write — nothing here may run on the archive frame, a chunk-heavy run
-    /// must never hitch it. Keyed by the entry's stable (LevelUuid, ArchivedAtMs) composite.</summary>
+    /// mirroring this send's verdict-gated subset). Fire-and-forget — <c>log</c>, the segment's ref lists
+    /// and <c>replayDoc</c> are immutable snapshots (records / arrays sealed by Rotate), so building the
+    /// payload is safe to defer entirely onto the background thread alongside the gzip+write — nothing here
+    /// may run on the archive frame, a chunk-heavy run must never hitch it. The segment's ref METADATA is
+    /// available synchronously from Rotate, so this never awaits the blob writes.
+    /// Keyed by the entry's stable (LevelUuid, ArchivedAtMs) composite.</summary>
     /// <summary>Assembles the run exactly as an upload would and RETAINS it locally without sending —
     /// the `off` path. Owner ruling 2026-07-29: a withheld upload keeps its record, so a later manual push
     /// replays the true originals instead of the summary-only fallback. Deliberately mirrors the auto
@@ -553,14 +556,13 @@ public sealed partial class Plugin
     {
         try
         {
-            if (!ShouldRetainUnsentArchive(entry.LevelUuid)) { _logBuffer.Clear(); return; }   // field fight: nothing addressable to retain
-            var truncated = _logBuffer.Truncated;   // capture before Flush() clears it
-            var events = _logBuffer.Flush();
-            RetainAssembled(entry, events, truncated, replayDoc);
+            if (!ShouldRetainUnsentArchive(entry.LevelUuid)) { Spool.Discard(); return; }   // field fight: nothing addressable to retain
+            var seg = Spool.Rotate();
+            RetainAssembled(entry, seg, replayDoc);
         }
         catch (Exception ex)
         {
-            _logBuffer.Clear();
+            Spool.Discard();
             _services.Log.Warning($"[CombatMeter.SP1] retain-without-upload failed: {ex.Message}");
         }
     }
@@ -576,21 +578,19 @@ public sealed partial class Plugin
 
     /// <summary>Shared retention core (fix 2026-08-14, extracted from <see cref="RetainWithoutUpload"/>):
     /// assembles the summary exactly as an upload would and persists the .replaydoc container
-    /// (summary + chunk envelopes + positions). Also called directly by the zero-events early return in
-    /// <see cref="AssembleAndUpload"/>, whose events are already flushed (and empty — zero chunks).
+    /// (summary + chunk refs + positions). Also called directly by the zero-events early return in
+    /// <see cref="AssembleAndUpload"/>, whose segment is already rotated (and empty — zero chunks).
     /// Never throws: a retention fault must not surface as <c>UploadPhase.Failed</c> on the entry
     /// (AssembleAndUpload's outer catch does exactly that) — it only warns, like the persist path.</summary>
-    private void RetainAssembled(EncounterHistoryEntry entry, IReadOnlyList<CombatLogEvent> events,
-                                 bool truncated, PositionUploadDoc? replayDoc)
+    private void RetainAssembled(EncounterHistoryEntry entry, SpoolSegment seg, PositionUploadDoc? replayDoc)
     {
         try
         {
-            var chunks = EventChunker.Chunk(events);
-            var log = LogAssembler.Assemble(entry, events, SignerKey, truncated, chunks.Count, InstallKeyInstance);
-            PersistReUpload(entry, log, chunks, replayDoc);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance);
+            PersistReUpload(entry, log, seg, replayDoc);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-                $"({events.Count} events in {chunks.Count} chunk(s), replay={(replayDoc is not null)}).");
+                $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), replay={(replayDoc is not null)}).");
         }
         catch (Exception ex)
         {
@@ -598,12 +598,12 @@ public sealed partial class Plugin
         }
     }
 
-    private void PersistReUpload(EncounterHistoryEntry entry, CombatLog log, IReadOnlyList<EventChunk> chunks, PositionUploadDoc? replayDoc)
+    private void PersistReUpload(EncounterHistoryEntry entry, CombatLog log, SpoolSegment seg, PositionUploadDoc? replayDoc)
     {
         var name = ReUploadContainer.ContainerName(entry.LevelUuid, entry.ArchivedAtMs);
         System.Threading.Tasks.Task.Run(() =>
         {
-            try { _services.Data.Write(name, ReUploadContainer.Serialize(BuildReUploadPayload(log, chunks, replayDoc))); }
+            try { _services.Data.Write(name, ReUploadContainer.Serialize(BuildReUploadPayload(log, seg, replayDoc))); }
             catch (Exception ex) { _services.Log.Warning($"[CombatMeter.SP1] re-upload persist failed: {ex.Message}"); }
         });
     }

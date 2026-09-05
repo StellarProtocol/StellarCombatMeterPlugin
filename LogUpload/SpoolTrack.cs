@@ -55,6 +55,15 @@ internal sealed class SpoolTrack
         var name = SpoolCodec.BlobName(_segmentId, _track, index);
         _refs.Add(new SpoolChunkRef(_track, index, batch[0].Ms, batch[batch.Count - 1].Ms, batch.Count, name));
         var store = _store;
-        _writes.Add(Task.Run(() => store.Write(name, SpoolCodec.Gzip(EventsJsonWriter.Write(batch)))));
+        _writes.Add(Task.Run(() =>
+        {
+            // A serialization/gzip/write fault must NEVER fault this task. The segment's Completion is
+            // Task.WhenAll over these writes and the uploader AWAITS it — a faulted Completion would abort
+            // the whole segment's upload, losing the chunks that DID land. A blob that failed to land is
+            // detected at upload time as store.Read(name) == null (ChunkUploader.PostRefsAsync warns and
+            // skips just that chunk). Pinned by SpoolTrackTests.A_failed_blob_write_never_faults_the_completion.
+            try { store.Write(name, SpoolCodec.Gzip(EventsJsonWriter.Write(batch))); }
+            catch { }
+        }));
     }
 }

@@ -66,6 +66,24 @@ public sealed class SpoolTrackTests
         Assert.False(truncated);
     }
 
+    // A serialization/gzip/write fault must NEVER fault the segment's Completion: the uploader AWAITS it
+    // (ChunkUploader.UploadSegmentFireAndForget), so a faulted task would abort the whole segment's upload
+    // — including the chunks that DID land. A blob that failed to land is detected downstream as
+    // store.Read(name) == null and warned + skipped there, per chunk.
+    [Fact]
+    public async Task A_failed_blob_write_never_faults_the_completion()
+    {
+        var store = new FakeDataStore { ThrowOnWrite = true };
+        var t = new SpoolTrack("dmg", "seg1", store, chunkEvents: 2);
+        t.Add(Ev(0)); t.Add(Ev(1));
+        var (refs, _, done) = t.Seal();
+
+        await done;                                   // must not throw
+        Assert.True(done.IsCompletedSuccessfully);
+        Assert.Single(refs);
+        Assert.Null(store.Read(refs[0].BlobName));    // blob absent — the uploader skips it
+    }
+
     [Fact]
     public void Codec_round_trips()
     {

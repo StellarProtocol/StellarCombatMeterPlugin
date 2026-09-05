@@ -111,13 +111,45 @@ public sealed partial class Plugin
     private void ForgetReUpload(EncounterHistoryEntry e)
         => _services.Data.Delete(ReUploadContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
 
-    // Belt-and-braces: drop any replay container with no matching live entry (e.g. left by a crash mid-evict).
+    // Belt-and-braces: drop any replay container with no matching live entry (e.g. left by a crash mid-evict),
+    // and with it the spool blobs it referenced. STARTUP ONLY (LoadHistory) — see SweepUnreferencedSpoolBlobs.
     private void SweepOrphanReUploads()
     {
         var live = new List<(long, long)>(_history.Count);
         foreach (var e in _history) live.Add((e.LevelUuid, e.ArchivedAtMs));
         foreach (var name in ReUploadContainer.OrphanContainerNames(_services.Data.List("replay/"), live))
+        {
+            // Blob lifetime = CONTAINER lifetime: a segment's blobs back its re-upload, so they are never
+            // deleted on upload success — only here, with the container that owns them.
+            var bytes = _services.Data.Read(name);
+            if (bytes is not null)
+                foreach (var blob in ReUploadContainer.ReferencedBlobs(bytes)) _services.Data.Delete(blob);
             _services.Data.Delete(name);
+        }
+        SweepUnreferencedSpoolBlobs();
+    }
+
+    // A crash between a spool blob's write and the archive that would have referenced it leaves a blob no
+    // container owns. STARTUP ONLY (reached from LoadHistory, before OnCombatEvent is ever wired) — mid-run
+    // this would delete the LIVE segment's blobs, which no container references YET.
+    private void SweepUnreferencedSpoolBlobs()
+    {
+        var blobs = _services.Data.List(SpoolCodec.Prefix);
+        if (blobs.Count == 0) return;
+
+        var referenced = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var name in _services.Data.List("replay/"))   // orphans already deleted above → live only
+        {
+            var bytes = _services.Data.Read(name);
+            if (bytes is null) continue;
+            foreach (var blob in ReUploadContainer.ReferencedBlobs(bytes)) referenced.Add(blob);
+        }
+
+        var deleted = 0;
+        foreach (var blob in blobs)
+            if (!referenced.Contains(blob)) { _services.Data.Delete(blob); deleted++; }
+        if (deleted > 0)
+            _services.Log.Info($"[CombatMeter.SP1] Deleted {deleted} unreferenced spool blob(s) (run never archived).");
     }
 
     // Same, for per-run history files: drop any history/ file with no live entry (left by a crash mid-evict).

@@ -9,7 +9,7 @@ public class ReUploadReplayDecisionTests
     public void Container_present_deserializes_the_stored_bodies()
     {
         var payload = new ReUploadPayload(1, "sea", 88, "cm-r", "{\"s\":1}",
-            new[] { "{\"c\":0}" }, "{\"p\":1}");
+            new[] { "{\"c\":0}" }, "{\"p\":1}", new SpoolChunkRef[0]);
         var bytes = ReUploadContainer.Serialize(payload);
 
         Assert.True(ReUploadContainer.TryDeserialize(bytes, out var back));

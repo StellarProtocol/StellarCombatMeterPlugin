@@ -30,10 +30,10 @@ internal sealed class CombatLogAssembler
     /// </summary>
     /// <param name="entry">The archived encounter history entry (stats + entity snapshots).</param>
     /// <param name="events">
-    /// Raw combat events flushed from <see cref="CombatEventBuffer"/>. Task 8: no longer embedded
-    /// in the summary blob (which always ships <c>events: []</c>) — retained here only so callers
-    /// keep a single call site; the caller uploads the same list separately via
-    /// <see cref="EventChunker"/> + chunk uploads once this summary has landed.
+    /// Raw combat events. Task 8: no longer embedded in the summary blob (which always ships
+    /// <c>events: []</c>) — retained here only so callers keep a single call site. Since the rDPS
+    /// spool (2026-09-05) every caller passes an EMPTY list: the stream is already chunked into the
+    /// segment's <see cref="EventSpool"/> blobs and uploaded from there once this summary has landed.
     /// </param>
     /// <param name="signerKey">
     /// Base64-PKCS#8 private key, or null/empty to produce an empty placeholder signature
