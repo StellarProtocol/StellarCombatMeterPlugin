@@ -64,4 +64,68 @@ public sealed class BuffEffectSamplerTests
         Assert.Equal(32, agg.N);
         Assert.InRange(agg.Deltas.Single(d => d.AttrId == 11710).MedianDelta, 1000, 1200);
     }
+
+    // --- Review round 1 (Task 9 fix-up) ---
+
+    [Fact]
+    public void Reset_drops_pending_and_samples()
+    {
+        var s = new BuffEffectSampler();
+        s.OnSelfBuff(Applied(1_000), Sheet(500, 0), 1_000);
+        s.Tick(() => Sheet(1_500, 800), 1_700);           // window closes, sample recorded
+        s.OnSelfBuff(Applied(5_000), Sheet(500, 0), 5_000); // second window still pending
+        s.Reset();
+        Assert.Empty(s.Drain());
+        s.Tick(() => Sheet(1_500, 800), 5_700);            // the reset pending must not resolve into anything
+        Assert.Empty(s.Drain());
+    }
+
+    [Fact]
+    public void Filtered_self_change_just_before_an_external_buff_dirties_it()
+    {
+        var s = new BuffEffectSampler();
+        // Self-applied at 950 is filtered (never enters _pending) but must still dirty the window below —
+        // the symmetric quiet-window rule counts EVERY self buff change, admitted or not.
+        s.OnSelfBuff(new CombatEvent.BuffChanged(950, Self, 1, 1, BuffChangeKind.Applied, 1, 1, 1, Self, 0, 1), Sheet(500, 0), 950);
+        s.OnSelfBuff(Applied(1_000), Sheet(500, 0), 1_000);   // only 50ms after the filtered change → dirty
+        s.Tick(() => Sheet(1_500, 800), 1_700);
+        Assert.Empty(s.Drain());
+    }
+
+    [Fact]
+    public void Quiet_gap_before_an_external_buff_keeps_it_clean()
+    {
+        var s = new BuffEffectSampler();
+        s.OnSelfBuff(new CombatEvent.BuffChanged(300, Self, 1, 1, BuffChangeKind.Applied, 1, 1, 1, Self, 0, 1), Sheet(500, 0), 300);
+        s.OnSelfBuff(Applied(1_000), Sheet(500, 0), 1_000);   // 700ms after the filtered change → clean
+        s.Tick(() => Sheet(1_500, 800), 1_700);
+        Assert.Single(s.Drain());
+    }
+
+    [Fact]
+    public void Sheet_is_not_read_for_filtered_or_dirty_buffs()
+    {
+        var s = new BuffEffectSampler();
+        var reads = 0;
+        System.Func<System.Collections.Generic.IReadOnlyDictionary<int, long>> readSheet = () => { reads++; return Sheet(500, 0); };
+
+        s.OnSelfBuff(new CombatEvent.BuffChanged(1_200, Self, 10, 777, BuffChangeKind.Refreshed, 1, 1, 1, Mate, 0, 1), readSheet, 1_200);
+        s.OnSelfBuff(new CombatEvent.BuffChanged(1_201, Self, 1, 1, BuffChangeKind.Applied, 1, 1, 1, Self, 0, 1), readSheet, 1_201);
+        s.OnSelfBuff(new CombatEvent.BuffChanged(1_202, Self, 2, 2, BuffChangeKind.Applied, 1, 1, 1, new EntityId(0x9_0000_0040), 0, 1), readSheet, 1_202);
+        // Dirty: another self change (the monster-applied one above) landed just before this external one.
+        s.OnSelfBuff(Applied(1_210), readSheet, 1_210);
+        Assert.Equal(0, reads);
+
+        s.OnSelfBuff(Applied(5_000), readSheet, 5_000);       // clean and admitted → the ONE read
+        Assert.Equal(1, reads);
+    }
+
+    [Fact]
+    public void Empty_post_sheet_records_nothing()
+    {
+        var s = new BuffEffectSampler();
+        s.OnSelfBuff(Applied(1_000), Sheet(500, 0), 1_000);
+        s.Tick(() => new Dictionary<int, long>(), 1_700);      // untracked/reset entity — empty sheet
+        Assert.Empty(s.Drain());
+    }
 }

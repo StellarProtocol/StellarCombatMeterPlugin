@@ -23,6 +23,9 @@ internal sealed class BuffEffectSampler
     };
     internal const int WindowMs = 600;
     internal const int MaxSamplesPerKey = 32;
+    private const int DirtySeq = -1;   // unmatchable sentinel: _selfChangeSeq never goes negative
+
+    private static readonly Dictionary<int, long> EmptyPre = new();
 
     private sealed record Key(int Base, int Stacks, int SrcKind, int SrcId);
     private sealed class Pending { public Key Key = null!; public Dictionary<int, long> Pre = null!; public long Deadline; public int SeqAtSnapshot; public int Sign; }
@@ -30,25 +33,46 @@ internal sealed class BuffEffectSampler
     private readonly List<Pending> _pending = new();
     private readonly Dictionary<Key, Dictionary<int, List<long>>> _samples = new();
     private int _selfChangeSeq;
+    private long _lastSelfChangeMs = long.MinValue;
 
+    internal bool HasPending => _pending.Count > 0;
+
+    /// <summary>Convenience overload for an already-read sheet (tests; and any future eager caller).
+    /// Delegates to the lazy overload so the admission rule lives in exactly one place.</summary>
     internal void OnSelfBuff(CombatEvent.BuffChanged b, IReadOnlyDictionary<int, long> sheetNow, long nowMs)
+        => OnSelfBuff(b, () => sheetNow, nowMs);
+
+    /// <summary>Symmetric quiet-window rule (spec 2026-09-05 § 4.2 rev): a sample is clean only if NO
+    /// self buff change of ANY kind — admitted, refreshed, self-applied, or monster-applied — happened
+    /// within <see cref="WindowMs"/> BEFORE or AFTER it. The BEFORE half is <c>quiet</c> below, checked
+    /// against <see cref="_lastSelfChangeMs"/> which every call stamps unconditionally (so a change this
+    /// method goes on to filter out still dirties its neighbors); the AFTER half is the existing
+    /// <see cref="_selfChangeSeq"/> mismatch check at <see cref="Tick"/> (also bumped unconditionally).
+    /// <paramref name="readSheet"/> is called at most once, and only for a candidate that is both
+    /// admitted (passes the Refreshed/self-firer filters) AND quiet — a dirty admission is discarded at
+    /// Tick regardless of its "pre" sheet, so reading one for it would be pure waste.</summary>
+    internal void OnSelfBuff(CombatEvent.BuffChanged b, Func<IReadOnlyDictionary<int, long>> readSheet, long nowMs)
     {
         _selfChangeSeq++;
+        // Sentinel-safe: on the very first call ever, _lastSelfChangeMs is long.MinValue and
+        // `nowMs - _lastSelfChangeMs` would OVERFLOW (wrapping to a bogus negative, which read as
+        // "not quiet") — special-case the sentinel instead of subtracting through it.
+        var quiet = _lastSelfChangeMs == long.MinValue || nowMs - _lastSelfChangeMs >= WindowMs;
+        _lastSelfChangeMs = nowMs;
         if (b.Kind == BuffChangeKind.Refreshed) return;
         if (!b.FirerId.IsPlayer || b.FirerId == b.TargetId) return;
-        var pre = new Dictionary<int, long>(TrackedAttrs.Length);
-        foreach (var a in TrackedAttrs) if (sheetNow.TryGetValue(a, out var v)) pre[a] = v;
-        // Overlap guard: a self-buff change landing while an EARLIER window is still open taints
-        // BOTH — the earlier one is dropped by the ordinary seq-mismatch check below (this call
-        // already bumped the shared counter past its snapshot), and THIS new one is born dirty: its
-        // own "pre" sheet was read while the earlier buff's effect might still be mid-resolution, so
-        // a sentinel snapshot seq that can never equal a real future counter value guarantees it is
-        // discarded at Tick too, however clean ITS OWN window looks in isolation.
-        var overlapping = _pending.Count > 0;
+
+        Dictionary<int, long> pre = EmptyPre;
+        if (quiet)
+        {
+            var sheetNow = readSheet();
+            pre = new Dictionary<int, long>(TrackedAttrs.Length);
+            foreach (var a in TrackedAttrs) if (sheetNow.TryGetValue(a, out var v)) pre[a] = v;
+        }
         _pending.Add(new Pending
         {
             Key = new Key(b.BaseId, b.Stacks, b.SourceKind, b.SourceId), Pre = pre,
-            Deadline = nowMs + WindowMs, SeqAtSnapshot = overlapping ? -1 : _selfChangeSeq,
+            Deadline = nowMs + WindowMs, SeqAtSnapshot = quiet ? _selfChangeSeq : DirtySeq,
             Sign = b.Kind == BuffChangeKind.Removed ? -1 : 1,
         });
     }
@@ -70,6 +94,7 @@ internal sealed class BuffEffectSampler
 
     private void Record(Pending p, IReadOnlyDictionary<int, long> post)
     {
+        if (post.Count == 0) return;   // untracked/reset entity — an empty sheet is not a real reading
         if (!_samples.TryGetValue(p.Key, out var byAttr)) _samples[p.Key] = byAttr = new Dictionary<int, List<long>>();
         foreach (var a in TrackedAttrs)
         {

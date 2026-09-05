@@ -418,7 +418,7 @@ public sealed partial class Plugin
             // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
             // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
             // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, _buffEffects.Drain());
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, flushBuffer ? _buffEffects.Drain() : null);   // manual re-upload (flushBuffer=false) must not drain the LIVE sampler onto an OLD run — same hazard as the boss-set note above (stale live state mislabeling a different run)
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
