@@ -76,55 +76,7 @@ internal sealed class CombatEventBuffer
         return result;
     }
 
-    private static CombatLogEvent? Convert(CombatEvent ev)
-    {
-        return ev switch
-        {
-            CombatEvent.SkillUsed su => new SkillEvent(
-                su.TimestampMs,
-                su.CasterId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                su.SkillId,
-                (int)su.Phase),
-
-            CombatEvent.DamageDealt d => new DamageEvent(
-                d.TimestampMs,
-                d.SourceId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                d.TargetId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                d.SkillId,
-                d.Amount,
-                d.ActualAmount,
-                d.ShieldAbsorbed,
-                d.IsCrit,
-                d.IsLucky,
-                d.IsHeal,
-                d.IsDead,
-                (int)d.Element,
-                (int)d.SourceKind,
-                // Source: no distinct wire field on DamageDealt beyond SourceKind; zero-fill.
-                // TODO(SP1): if the wire exposes a secondary numeric source field, wire it here.
-                0),
-
-            CombatEvent.BuffChanged b => new BuffEvent(
-                b.TimestampMs,
-                b.TargetId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                b.BuffUuid,
-                b.BaseId,
-                b.Kind switch
-                {
-                    BuffChangeKind.Applied   => "applied",
-                    BuffChangeKind.Refreshed => "refreshed",
-                    BuffChangeKind.Removed   => "removed",
-                    _                        => "applied",
-                },
-                b.Stacks,
-                b.Layer,
-                b.DurationMs,
-                // TODO(Task 5): fill Src/SrcKind/SrcId from b.FirerId/b.SourceKind/b.SourceId.
-                "0", 0, 0),
-
-            _ => null,   // unrecognized CombatEvent case — skip (never crash the game); caller logs the count
-        };
-    }
+    private static CombatLogEvent? Convert(CombatEvent ev) => CombatLogEventConverter.Convert(ev);
 
     // O(1) circular buffer: overwrites oldest when full.
     private sealed class Ring
