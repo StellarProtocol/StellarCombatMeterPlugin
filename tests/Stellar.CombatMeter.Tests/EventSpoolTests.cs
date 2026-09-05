@@ -110,4 +110,22 @@ public sealed class EventSpoolTests
         Assert.Equal(0, seg.ChunkCount);
         Assert.False(seg.TruncatedDmg); Assert.False(seg.TruncatedBuff);
     }
+
+    // Spec § 6.8: a Battle Imagine's buff on a TEAMMATE used to be routed to buffx (firer is a monster-typed
+    // summon); resolving the firer to its owner admits it — that row is a PLAYER's external buff.
+    [Fact]
+    public async Task Summon_fired_buff_on_a_teammate_uploads_when_the_summon_belongs_to_a_player()
+    {
+        var owners = new SummonOwnerMap();
+        var tina = new EntityId(0x0000_0007_0000_0040);
+        owners.Record(tina, Mate);
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, owners);
+        spool.Add(Buff(1, tina, new EntityId(0x0000_0003_0000_0280)), Self);   // Tina → another player
+        spool.Add(Buff(2, Mob, new EntityId(0x0000_0003_0000_0280)), Self);    // unknown monster → still rejected
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(1, seg.Buff.Single().Count);
+        Assert.Equal(1, seg.BuffRejected.Single().Count);
+    }
 }

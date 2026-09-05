@@ -36,6 +36,12 @@ namespace Stellar.CombatMeter;
 // _combatStartMs, so they keep sampling through a pause regardless.
 public sealed partial class Plugin
 {
+    // Summon → summoner map (spec § 6.8, P2): resolves a buff's firer to the player who owns it (a
+    // Battle Imagine casts under its OWN entity id). Fed by ObserveSummonAppeared below, THROUGH pause
+    // (tracking, not a number) — mirrors _seenSummons beside it. CAPTURE ONLY — feeds nothing in
+    // archive/verdict paths. Run-scoped: cleared in Plugin.RunBoundary.cs alongside _seenSummons.
+    private readonly SummonOwnerMap _summonOwners = new();
+
     /// <summary>Pure split of one combat event's work under PAUSE (owner ruling 2026-08-14). Returns
     /// which halves of <c>OnCombatEvent</c> may run: <c>capture</c> — boss admission / elite candidates /
     /// replay entity noting — is <b>unconditionally true</b>, while <c>accrue</c> — the inline boss cut,
@@ -124,6 +130,8 @@ public sealed partial class Plugin
     private void ObserveSummonAppeared(CombatEvent.EntitySummonAppeared sa, bool accrue)
     {
         if (!sa.SummonerId.IsPlayer) return;
+        // TRACKING, not a number: recorded through pause, like the novelty mark below (spec § 6.8).
+        _summonOwners.Record(sa.SummonId, sa.SummonerId);
         var (isSelf, novel) = ObserveSummonNovelty(sa);
         if (!accrue) return;
         _summonAppearMs[sa.SummonerId] = sa.TimestampMs;

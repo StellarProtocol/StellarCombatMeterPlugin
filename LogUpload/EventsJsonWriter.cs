@@ -42,6 +42,7 @@ internal static class EventsJsonWriter
                     w.Name("kind").Str(b.Kind); w.Name("stacks").Number(b.Stacks);
                     w.Name("layer").Number(b.Layer); w.Name("durMs").Number(b.DurMs);
                     w.Name("src").Str(b.Src); w.Name("srcKind").Number(b.SrcKind); w.Name("srcId").Number(b.SrcId);
+                    if (b.SrcOwner is not null) w.Name("srcOwner").Str(b.SrcOwner);
                     w.EndObject();
                     break;
             }

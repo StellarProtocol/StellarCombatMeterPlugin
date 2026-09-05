@@ -22,14 +22,15 @@ namespace Stellar.CombatMeter.LogUpload;
 internal sealed class EventSpool
 {
     private readonly IPluginDataStore _store;
+    private readonly SummonOwnerMap _owners;
     private readonly int _chunkEvents;
     private static int _seq;
     private string _segmentId = NewSegmentId();
     private SpoolTrack _dmg, _buff, _buffx;
 
-    internal EventSpool(IPluginDataStore store, int chunkEvents = EventChunker.ChunkEvents)
+    internal EventSpool(IPluginDataStore store, SummonOwnerMap? owners = null, int chunkEvents = EventChunker.ChunkEvents)
     {
-        _store = store; _chunkEvents = chunkEvents;
+        _store = store; _owners = owners ?? new SummonOwnerMap(); _chunkEvents = chunkEvents;
         _dmg = new SpoolTrack(SpoolCodec.TrackDmg, _segmentId, store, chunkEvents);
         _buff = new SpoolTrack(SpoolCodec.TrackBuff, _segmentId, store, chunkEvents);
         _buffx = new SpoolTrack(SpoolCodec.TrackBuffRejected, _segmentId, store, chunkEvents);
@@ -41,12 +42,13 @@ internal sealed class EventSpool
 
     internal void Add(CombatEvent evt, EntityId self)
     {
-        var wire = CombatLogEventConverter.Convert(evt);
+        var wire = CombatLogEventConverter.Convert(evt, _owners);
         if (wire is null) { SkippedUnknownEvents++; return; }
         if (evt is CombatEvent.BuffChanged b)
         {
-            // ROUTE, never drop: the filter picks the uploaded track or the disk-only one.
-            (BuffUploadFilter.ShouldUpload(b.FirerId, b.TargetId, self) ? _buff : _buffx).Add(wire);
+            // ROUTE, never drop: the filter picks the uploaded track or the disk-only one. The firer is
+            // resolved to its OWNER first (spec § 6.8) so a player's summon counts as that player.
+            (BuffUploadFilter.ShouldUpload(_owners.OwnerOf(b.FirerId), b.TargetId, self) ? _buff : _buffx).Add(wire);
             return;
         }
         _dmg.Add(wire);

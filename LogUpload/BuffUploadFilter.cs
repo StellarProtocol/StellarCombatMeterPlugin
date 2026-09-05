@@ -14,10 +14,14 @@ namespace Stellar.CombatMeter.LogUpload;
 /// </summary>
 internal static class BuffUploadFilter
 {
-    internal static bool ShouldUpload(EntityId firer, EntityId target, EntityId self)
+    /// <summary>Send-side admission (doctrine: capture everything, gate the SEND). <paramref name="firerOwner"/>
+    /// is the firer RESOLVED TO ITS OWNER (<see cref="SummonOwnerMap.OwnerOf"/>) — a Battle Imagine's buff on a
+    /// teammate is a PLAYER's external buff (spec § 6.8); before P2 the bare summon id failed IsPlayer here and
+    /// the row was routed to the disk-only track.</summary>
+    internal static bool ShouldUpload(EntityId firerOwner, EntityId target, EntityId self)
     {
         if (target == self) return true;
-        if (!firer.IsPlayer || firer == target) return false;
+        if (!firerOwner.IsPlayer || firerOwner == target) return false;
         return target.IsPlayer || target.IsMonster;
     }
 }

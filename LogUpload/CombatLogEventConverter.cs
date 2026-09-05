@@ -10,7 +10,7 @@ namespace Stellar.CombatMeter.LogUpload;
 /// </summary>
 internal static class CombatLogEventConverter
 {
-    internal static CombatLogEvent? Convert(CombatEvent ev)
+    internal static CombatLogEvent? Convert(CombatEvent ev, SummonOwnerMap? owners = null)
     {
         return ev switch
         {
@@ -55,9 +55,18 @@ internal static class CombatLogEventConverter
                 b.DurationMs,
                 b.FirerId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 b.SourceKind,
-                b.SourceId),
+                b.SourceId,
+                SrcOwnerOf(b.FirerId, owners)),
 
             _ => null,   // unrecognized CombatEvent case — skip (never crash the game); caller logs the count
         };
+    }
+
+    // Present ONLY when the firer is a known player summon — a bare player/monster firer writes nothing.
+    private static string? SrcOwnerOf(EntityId firer, SummonOwnerMap? owners)
+    {
+        if (owners is null) return null;
+        var owner = owners.OwnerOf(firer);
+        return owner == firer ? null : owner.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 }

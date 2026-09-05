@@ -26,7 +26,7 @@ public sealed partial class Plugin
     // Disk-backed replacement for the two event rings (rDPS spool). Lazy: _services is not available at
     // field-initialiser time — every call site below goes through the Spool property.
     private EventSpool? _spool;
-    private EventSpool Spool => _spool ??= new EventSpool(_services.Data);
+    private EventSpool Spool => _spool ??= new EventSpool(_services.Data, _summonOwners);
     private CombatLogAssembler? _logAssembler;
 
     // -----------------------------------------------------------------------

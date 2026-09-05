@@ -60,6 +60,7 @@ public sealed partial class Plugin
         // archive must stay "seen", or its next AOI blink after the archive would mint a phantom cast.
         // CAPTURE ONLY — feeds nothing in AutoArchive/BossStatus/verdict paths.
         _seenSummons.Clear();
+        _summonOwners.Clear();   // summon→owner map (SummonOwnerMap): run-scoped like the novelty set beside it. CAPTURE ONLY.
         // Sticky bucket-routing memory (Plugin.BucketRouting.cs, owner-approved fix 2026-08-15): the
         // last routing input, run-scoped exactly like the two live sets it backs up — a new run's
         // entities are new entities, and holding a previous run's ids would let a recycled entity id

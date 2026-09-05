@@ -96,4 +96,24 @@ public sealed class CombatLogEventConverterTests
             new CombatEvent.BuffChanged(8000L, new EntityId(2), 2, 2, BuffChangeKind.Refreshed, 1, 0, 10000)));
         Assert.Equal("refreshed", be.Kind);
     }
+
+    [Fact]
+    public void BuffChanged_fired_by_a_known_summon_carries_srcOwner()
+    {
+        var owners = new SummonOwnerMap();
+        var tina = new EntityId(0x0000_0009_0000_0040); var mate = new EntityId(0x0000_0002_0000_0280);
+        owners.Record(tina, mate);
+        var ev = new CombatEvent.BuffChanged(1_000, new EntityId(640), 1, 2110034, BuffChangeKind.Applied, 1, 1, 15000, FirerId: tina, SourceKind: 0, SourceId: 2900340);
+        var b = Assert.IsType<BuffEvent>(CombatLogEventConverter.Convert(ev, owners));
+        Assert.Equal(tina.Value.ToString(), b.Src);
+        Assert.Equal("8589935232", b.SrcOwner);
+    }
+
+    [Fact]
+    public void BuffChanged_fired_by_a_player_has_no_srcOwner()
+    {
+        var ev = new CombatEvent.BuffChanged(1_000, new EntityId(640), 1, 1, BuffChangeKind.Applied, 1, 1, 1, FirerId: new EntityId(0x0000_0002_0000_0280));
+        var b = Assert.IsType<BuffEvent>(CombatLogEventConverter.Convert(ev, new SummonOwnerMap()));
+        Assert.Null(b.SrcOwner);
+    }
 }

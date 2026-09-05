@@ -16,4 +16,5 @@ internal sealed record DamageEvent(
 internal sealed record BuffEvent(
     long Ms, string Tgt, int Uuid, int Base,
     string Kind, int Stacks, int Layer, int DurMs,
-    string Src, int SrcKind, int SrcId) : CombatLogEvent(Ms);
+    string Src, int SrcKind, int SrcId,
+    string? SrcOwner = null) : CombatLogEvent(Ms);   // owner(src) when src is a known player summon (spec § 6.8)

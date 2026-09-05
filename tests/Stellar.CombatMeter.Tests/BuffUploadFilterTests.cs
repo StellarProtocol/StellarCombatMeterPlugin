@@ -6,6 +6,7 @@ namespace Stellar.CombatMeter.Tests;
 
 public sealed class BuffUploadFilterTests
 {
+    // The first parameter is the firer's OWNER (SummonOwnerMap.OwnerOf) since 2.6.0 P2 — callers resolve summons first.
     static readonly EntityId Self    = new(0x0000_0001_0000_0280);   // low16 = 640 → player
     static readonly EntityId Mate    = new(0x0000_0002_0000_0280);
     static readonly EntityId Mate2   = new(0x0000_0003_0000_0280);
