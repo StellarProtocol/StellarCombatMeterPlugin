@@ -418,7 +418,7 @@ public sealed partial class Plugin
             // Boss config id(s) ride on the entry itself (entry.StageBosses, snapshotted at archive
             // time) so the assembler never has to re-resolve from wiped entity caches (ResetEntities
             // fires before archive on scene change) — see CombatLogAssembler.ResolveStageBosses.
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, _buffEffects.Drain());
             var url = UploadVerdict.SiteBase + "/run/" + log.Header.Region + "/" +
                       log.Header.Encounter.LevelUuid.ToString(CultureInfo.InvariantCulture);
             _uploadStatus.Set(entry, UploadPhase.InFlight, url);
@@ -586,7 +586,7 @@ public sealed partial class Plugin
     {
         try
         {
-            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance);
+            var log = LogAssembler.Assemble(entry, Array.Empty<CombatLogEvent>(), SignerKey, seg.TruncatedDmg, seg.Dmg.Count, InstallKeyInstance, seg.TruncatedBuff, _buffEffects.Drain());
             PersistReUpload(entry, log, seg, replayDoc);
             _services.Log.Info(
                 $"[CombatMeter.SP1] Retained (not uploaded) log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +

@@ -29,6 +29,7 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
         w.BeginObject();
         w.Name("combatDurationMs").Number(d.CombatDurationMs);
         w.Name("truncatedEvents").Bool(d.TruncatedEvents);
+        WriteBuffEffects(w, d);
         w.Name("perActor"); WriteActorAggs(w, d.PerActor);
         w.Name("perActorSkills"); WriteSkillMap(w, d.PerActorSkills);
         w.Name("perActorHealSkills"); WriteSkillMap(w, d.PerActorHealSkills);

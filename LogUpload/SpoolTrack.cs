@@ -5,7 +5,8 @@ using Stellar.Abstractions.Services;
 namespace Stellar.CombatMeter.LogUpload;
 
 /// <summary>
-/// One spool track (<c>dmg</c> = skill+damage, <c>buff</c>). Main thread appends to an open batch; at
+/// One spool track (<c>dmg</c> = skill+damage; <c>buff</c> = uploaded buff rows; <c>buffx</c> = filter-rejected
+/// buff rows, disk only). Main thread appends to an open batch; at
 /// <paramref name="chunkEvents"/> the batch is handed to the thread pool to be serialized (EventsJsonWriter),
 /// gzipped and written as ONE blob = one future upload chunk. Beyond <paramref name="maxChunks"/> (the
 /// server's per-track chunk cap) batches are dropped and the track is flagged truncated — the only cap
