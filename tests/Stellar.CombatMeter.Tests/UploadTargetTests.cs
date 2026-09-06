@@ -186,6 +186,19 @@ public class UploadTargetTests
         Assert.False(writeDefault);
     }
 
+    // The 5th truth-table cell (CM-273 review, Minor #1): a tester who already picked a custom/staging
+    // base AND had previously made an explicit choice — the same "unchanged, no write" outcome as the
+    // unchosen+custom cell above, but never previously asserted by name under chosen=true.
+    [Fact]
+    public void ResolveInitialUploadTarget_TestingChosenCustomBase_KeepsCustom_NoWrite()
+    {
+        const string custom = "https://custom";
+        var (configured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+            isTestingBuild: true, chosen: true, configured: custom);
+        Assert.Equal(custom, configured);
+        Assert.False(writeDefault);
+    }
+
     // -------------------------------------------------------------------------
     // 3. BuildUploadTargetSection — the settings-column section, gated on an injectable Func<bool>.
     // -------------------------------------------------------------------------

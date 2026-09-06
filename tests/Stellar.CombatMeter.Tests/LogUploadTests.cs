@@ -246,27 +246,30 @@ public sealed class LogUploadTests
     [Fact]
     public void ClampEncounterWindow_NormalCase_PassesThroughUnchanged()
     {
-        var (endMs, durationMs) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 349535);
+        var (endMs, durationMs, clamped) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 349535);
         Assert.Equal(349535, endMs);
         Assert.Equal(348535, durationMs);
+        Assert.False(clamped);
     }
 
     [Fact]
     public void ClampEncounterWindow_EnterAfterArchive_ClampsToZeroDurationPoint()
     {
         // The exact observed shape: ArchivedAtMs (rawEndMs) precedes EnteredAtMs (startMs).
-        var (endMs, durationMs) = CombatLogAssembler.ClampEncounterWindow(startMs: 500_087, rawEndMs: 500_000);
+        var (endMs, durationMs, clamped) = CombatLogAssembler.ClampEncounterWindow(startMs: 500_087, rawEndMs: 500_000);
         Assert.Equal(500_087, endMs);       // pulled UP to start — a point, never inverted
         Assert.Equal(0, durationMs);
+        Assert.True(clamped);
     }
 
     [Fact]
     public void ClampEncounterWindow_EqualBounds_ZeroDuration_NotClamped()
     {
         // Boundary case: start == end is already a valid (zero-length) window — not the defect shape.
-        var (endMs, durationMs) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 1000);
+        var (endMs, durationMs, clamped) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 1000);
         Assert.Equal(1000, endMs);
         Assert.Equal(0, durationMs);
+        Assert.False(clamped);
     }
 
     [Fact]
