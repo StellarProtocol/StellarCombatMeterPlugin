@@ -87,9 +87,8 @@ internal sealed partial class CombatLogAssembler
         var localEntityId = _services.CombatSnapshot.LocalEntityId;
         var localUid = localEntityId.Value;
         var nonce    = GenerateNonce();
-        // Attach the uploader's CURRENT account master score (from the social snapshot the ID card /
-        // portraits feed populates for self) so the char page updates promptly after a dungeon clear.
-        // 0 when no snapshot yet — the server's >0 guard then leaves the last-known value untouched.
+        // Attach the uploader's CURRENT account master score (from the self social snapshot the ID card / portraits feed
+        // populates) so the char page updates promptly after a clear; 0 when no snapshot yet (server's >0 guard keeps the last value).
         var masterScore = _services.EntityDetail.GetSocialSnapshot(localEntityId)?.Identity.MasterScore ?? 0;
 
         // Build a temporary uploader with empty sig, then compute the real sig over the assembled log.
@@ -251,9 +250,8 @@ internal sealed partial class CombatLogAssembler
         return bossInfo.HasValue ? bossInfo.Value.Id : 0;
     }
 
-    /// <summary>Second signature over the SAME canonical payload as <see cref="ComputeSig"/>, using
-    /// the per-install key. Returns (pubkey SPKI base64, install sig base64); ("","") when no install
-    /// key. Kept separate from ComputeSig so the existing shared-key path is byte-for-byte unchanged.</summary>
+    /// <summary>Second signature over the SAME canonical payload as <see cref="ComputeSig"/>, using the per-install key.
+    /// Returns (pubkey SPKI base64, install sig base64); ("","") when no install key. Separate from ComputeSig so the shared-key path is byte-for-byte unchanged.</summary>
     private static (string PubKey, string InstallSig) ComputeInstallSig(CombatLog log, InstallKey? installKey)
     {
         if (installKey == null) return ("", "");
