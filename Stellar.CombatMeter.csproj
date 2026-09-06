@@ -16,7 +16,7 @@
          2.7.1: testing-channel-only "upload target" setting (owner 2026-09-06) — a build stamped with
          StellarChannel=testing (below) exposes a settings toggle pointing this install's uploads at the
          dev/testing server; a plain build (StellarChannel unset → "stable") renders nothing for it. -->
-    <Version>2.7.1</Version>
+    <Version>2.7.2</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-

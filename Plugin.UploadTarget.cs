@@ -82,8 +82,8 @@ public sealed partial class Plugin
             : "[CombatMeter] upload target set to PRODUCTION — takes effect after relaunch");
     }
 
-    // The settings-column section (Plugin.Settings.cs's ToggleGroup appends this after the existing
-    // "settings.appearance.autoStyled" text). Pure builder over explicit Func delegates — no `_loc`/
+    // The Settings-window section (Plugin.SettingsArchive.cs's BuildAutoArchiveSettingsRoot places it
+    // between the Uploads section and the Discord webhook). Pure builder over explicit Func delegates — no `_loc`/
     // `_prefs`/`_services` reads inside it — so BuildUploadTargetSection is testable standalone with
     // the gate, labels and toggle state all supplied by the caller.
     private HudElement UploadTargetSection()
@@ -96,8 +96,9 @@ public sealed partial class Plugin
             () => _loc.T(_uploadTargetPendingRelaunch ? "settings.uploadTarget.relaunch" : "settings.uploadTarget.hint"));
 
     /// <summary>Builds the ConditionalElement gating the whole upload-target section on
-    /// <paramref name="isTestingBuild"/>. <c>Then</c> = section label + toggle row + hint/relaunch
-    /// text; <c>Else</c> = a zero-height spacer, so a stable build renders nothing here.</summary>
+    /// <paramref name="isTestingBuild"/>. <c>Then</c> = separator + emphasised section header (the
+    /// Settings window's section idiom) + toggle row + hint/relaunch text; <c>Else</c> = a zero-height
+    /// spacer, so a stable build renders nothing here (not even the separator).</summary>
     internal static HudElement BuildUploadTargetSection(
         Func<bool> isTestingBuild, Func<string> sectionLabel, Func<string> toggleLabel,
         Func<bool> getToggle, Action<bool> setToggle, Func<string> hintText)
@@ -105,7 +106,8 @@ public sealed partial class Plugin
             isTestingBuild,
             new ColumnElement(new HudElement[]
             {
-                new TextElement(sectionLabel, MutedColStatic),
+                new SeparatorElement(),
+                new TextElement(sectionLabel, Emphasis: true),
                 new RowElement(new HudElement[]
                 {
                     new ToggleElement(() => "", getToggle, setToggle),

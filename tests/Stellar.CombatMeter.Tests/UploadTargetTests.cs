@@ -158,12 +158,14 @@ public class UploadTargetTests
             () => toggleState, v => toggleState = v, () => "hint text");
 
         var column = Assert.IsType<ColumnElement>(el.Then);
-        Assert.Equal(3, column.Children.Count);
+        Assert.Equal(4, column.Children.Count);
+        Assert.IsType<SeparatorElement>(column.Children[0]);
 
-        var label = Assert.IsType<TextElement>(column.Children[0]);
+        var label = Assert.IsType<TextElement>(column.Children[1]);
+        Assert.True(label.Emphasis);
         Assert.Equal("Upload target", label.Text());
 
-        var row = Assert.IsType<RowElement>(column.Children[1]);
+        var row = Assert.IsType<RowElement>(column.Children[2]);
         var toggle = Assert.IsType<ToggleElement>(row.Children[0]);
         var toggleLabel = Assert.IsType<TextElement>(row.Children[1]);
         Assert.Equal("Upload to testing", toggleLabel.Text());
@@ -173,7 +175,7 @@ public class UploadTargetTests
         Assert.True(toggleState);   // Set delegate reached the caller-supplied state
         Assert.True(toggle.Get());  // Get delegate reflects it back live
 
-        var hint = Assert.IsType<TextElement>(column.Children[2]);
+        var hint = Assert.IsType<TextElement>(column.Children[3]);
         Assert.Equal("hint text", hint.Text());
     }
 
@@ -190,7 +192,7 @@ public class UploadTargetTests
             () => pending ? "relaunch copy" : "hint copy");
 
         var column = Assert.IsType<ColumnElement>(el.Then);
-        var hint = Assert.IsType<TextElement>(column.Children[2]);
+        var hint = Assert.IsType<TextElement>(column.Children[3]);
         Assert.Equal("hint copy", hint.Text());
 
         pending = true;
