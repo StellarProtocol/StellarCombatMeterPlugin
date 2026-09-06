@@ -12,11 +12,22 @@
     <!-- 2.7.0: rDPS P2 — the `sheet` track (the local player's damage-relevant attributes, spec § 6.1) on
          top of P1's event spool + buff track. Requires framework 2.7.0 (Abstractions 2.7.0); released
          lock-step with it. MUST NOT stay 2.6.0: the owner's MAIN client already runs a P1 build stamped
-         2.6.0 and header.pluginVer is what tells the two apart server-side. -->
-    <Version>2.7.0</Version>
+         2.6.0 and header.pluginVer is what tells the two apart server-side.
+         2.7.1: testing-channel-only "upload target" setting (owner 2026-09-06) — a build stamped with
+         StellarChannel=testing (below) exposes a settings toggle pointing this install's uploads at the
+         dev/testing server; a plain build (StellarChannel unset → "stable") renders nothing for it. -->
+    <Version>2.7.1</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
+         channel target). Unset (plain `dotnet build` — CI's default lane, local builds) = "stable".
+         Read at runtime via AssemblyMetadataAttribute (Plugin.UploadTarget.cs); gates a settings-only
+         UI surface, never upload/capture behaviour itself. -->
+    <StellarChannel Condition="'$(StellarChannel)' == ''">stable</StellarChannel>
   </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="StellarChannel" Value="$(StellarChannel)" />
+  </ItemGroup>
   <ItemGroup>
     <!-- Requires framework 2.7.0: CombatEvent.BuffChanged.FirerId/SourceKind/SourceId (rDPS capture,
          spec 2026-09-05). 2.7.0 is NOT yet published: this repo's

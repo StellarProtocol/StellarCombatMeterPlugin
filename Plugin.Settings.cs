@@ -97,6 +97,10 @@ public sealed partial class Plugin
 
             new SpacerElement(Height: 10f),
             new TextElement(() => _loc.T("settings.appearance.autoStyled"), MutedCol),
+
+            // Testing-channel-only "upload target" toggle (Plugin.UploadTarget.cs) — renders nothing
+            // on a stable build (the ConditionalElement's Else is a zero-height spacer).
+            UploadTargetSection(),
         }, Gap: 3f);
 
     // text is a catalog key (resolved live so the section header switches language in place).
