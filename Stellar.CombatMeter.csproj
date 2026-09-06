@@ -15,8 +15,15 @@
          2.6.0 and header.pluginVer is what tells the two apart server-side.
          2.7.1: testing-channel-only "upload target" setting (owner 2026-09-06) — a build stamped with
          StellarChannel=testing (below) exposes a settings toggle pointing this install's uploads at the
-         dev/testing server; a plain build (StellarChannel unset → "stable") renders nothing for it. -->
-    <Version>2.7.2</Version>
+         dev/testing server; a plain build (StellarChannel unset → "stable") renders nothing for it.
+         2.7.3: (a) a TESTING build now DEFAULTS its upload target to the testing server the first time
+         it runs (until the user explicitly chooses otherwise via the settings toggle — owner "yes"
+         2026-09-06); production rejects every 2.7.x upload outright, so an un-redirected testing build
+         was silently uploading nothing. (b) the upload header's encounter window is clamped to a
+         non-negative duration (LogUpload/CombatLogAssembler.cs's ClampEncounterWindow) — a
+         `durMs=0` archive whose EnteredAtMs landed after its own ArchivedAtMs produced a NEGATIVE
+         header.encounter.durationMs that the server rejected outright, failing the whole upload. -->
+    <Version>2.7.3</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-

@@ -82,6 +82,20 @@ internal sealed class CombatLogAssembler
         var bossConfigId = stageBossId != 0 ? stageBossId : ResolveBossConfigId(entry);
         var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), stageBossKilled, bosses, elites);
 
+        // Header window clamp (owner "do 1", 2026-09-06 — the zero-duration double-bank tail):
+        // a `reason=boss durMs=0` archive whose EnteredAtMs was backdated from the NEXT segment's
+        // first hit can land AFTER this segment's own ArchivedAtMs, producing a negative
+        // header.encounter.durationMs — the server rejects the WHOLE upload outright
+        // (`400 /header/encounter/durationMs must be >= 0`) with no retry path. BuildEncounter/
+        // ClampEncounterWindow already clamp the window itself; this only makes a clamp firing
+        // VISIBLE in logs for the root-cause ticket — it changes nothing about how archives are
+        // decided or banked, and nothing the history UI reads (EncounterHistoryEntry is untouched).
+        if (entry.ArchivedAtMs < entry.EnteredAtMs)
+        {
+            _services.Log.Warning(
+                $"[CombatMeter.SP1] header window clamped: enter={entry.EnteredAtMs} arch={entry.ArchivedAtMs} → durationMs 0");
+        }
+
         // --- Uploader ---
         var localEntityId = _services.CombatSnapshot.LocalEntityId;
         var localUid = localEntityId.Value;
@@ -155,6 +169,23 @@ internal sealed class CombatLogAssembler
         return string.IsNullOrWhiteSpace(name) ? null : name;
     }
 
+    /// <summary>
+    /// Clamps the upload header's encounter window to a non-negative duration (owner "do 1",
+    /// 2026-09-06 — the zero-duration double-bank tail). Observed: a `reason=boss durMs=0` archive
+    /// banked shortly after a `boundary` archive whose OWN <paramref name="startMs"/> (EnteredAtMs)
+    /// came from the NEXT segment's first hit — later than that same archive's
+    /// <paramref name="rawEndMs"/> (ArchivedAtMs) — producing a NEGATIVE
+    /// <c>header.encounter.durationMs</c> that the server rejects outright
+    /// (<c>400 /header/encounter/durationMs must be &gt;= 0</c>), failing the WHOLE upload with no
+    /// retry path. Fixed at the envelope only: <c>durationMs = max(0, end - start)</c>, and when
+    /// <paramref name="rawEndMs"/> is before <paramref name="startMs"/> the end is pulled UP to
+    /// start so the window becomes a POINT rather than staying inverted. Pure — does not change how
+    /// archives are decided/banked, and does not touch <c>EncounterHistoryEntry</c>
+    /// (<c>CombatDurationMs</c>, real elapsed) the history UI reads; only this header's own numbers.
+    /// </summary>
+    internal static (long endMs, long durationMs) ClampEncounterWindow(long startMs, long rawEndMs)
+        => rawEndMs < startMs ? (startMs, 0L) : (rawEndMs, rawEndMs - startMs);
+
     /// <param name="bossConfigId">
     /// Monster-table config id of the identified boss entity, or 0 when no boss was found.
     /// Resolved from <c>IGameDataWorld.GetMonsterByEntity</c> at assemble time via
@@ -192,6 +223,8 @@ internal sealed class CombatLogAssembler
             _                => "dungeon",
         };
 
+        var (windowEndMs, windowDurationMs) = ClampEncounterWindow(entry.EnteredAtMs, entry.ArchivedAtMs);
+
         return new Encounter(
             Kind:            encounterKind,
             LevelUuid:       entry.LevelUuid,
@@ -208,8 +241,8 @@ internal sealed class CombatLogAssembler
             TotalScore:      entry.TotalScore,
             Result:          entry.Result,
             StartMs:         entry.EnteredAtMs,
-            EndMs:           entry.ArchivedAtMs,
-            DurationMs:      entry.ArchivedAtMs - entry.EnteredAtMs,
+            EndMs:           windowEndMs,
+            DurationMs:      windowDurationMs,
             PassTime:        entry.PassTime,
             DifficultyLevel: entry.DifficultyLevel,
             DungeonStartMs:  entry.DungeonStartMs,

@@ -147,7 +147,7 @@
   "settings.toggle.total": "Total",
   "settings.toggle.uploadTesting": "Upload runs to the TESTING server (dev) instead of production",
   "settings.toggle.voiceIcon": "Voice icon",
-  "settings.uploadTarget.hint": "Testing-channel build. Runs you upload to the testing server appear on logs.dev.stellarresonance.app.",
+  "settings.uploadTarget.hint": "Testing-channel build. By default your runs upload to the testing server (logs.dev.stellarresonance.app) — turn this off to upload to production instead.",
   "settings.uploadTarget.relaunch": "Saved — takes effect after you relaunch the game.",
   "settings.width.normal": "Normal",
   "settings.width.thin": "Thin",

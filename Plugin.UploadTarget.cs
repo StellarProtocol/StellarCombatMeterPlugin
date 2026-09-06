@@ -53,13 +53,46 @@ public sealed partial class Plugin
     internal static bool ResolveUploadTargetIsTesting(IConfigSection prefs)
         => prefs.Get(PrefUploadApiBase, "") == TestingUploadApiBase;
 
+    /// <summary>Whether the user has EVER made an explicit choice via the settings toggle (either
+    /// direction). Read by <see cref="ResolveInitialUploadTarget"/> so a testing-channel build only
+    /// ever auto-defaults the upload target ONCE — after that, even an explicit OFF (production)
+    /// sticks across relaunches instead of being silently re-defaulted back to dev.</summary>
+    internal const string PrefUploadTargetChosen = "uploadTargetChosen";
+
     /// <summary>Writes <paramref name="on"/> to <paramref name="prefs"/>' "uploadApiBase" pref —
     /// <see cref="TestingUploadApiBase"/> when true, empty string (production, the default) when
-    /// false. Does NOT flush to disk (caller calls <see cref="IConfigSection.Save"/>) and does NOT
-    /// touch <see cref="LogUploader.SetApiBase"/> — see the file header for why the change is
-    /// next-launch-only by design.</summary>
+    /// false — and marks <see cref="PrefUploadTargetChosen"/> true in BOTH directions, so an explicit
+    /// choice (including an explicit OFF) is never re-defaulted by
+    /// <see cref="ResolveInitialUploadTarget"/> on a later launch. Does NOT flush to disk (caller
+    /// calls <see cref="IConfigSection.Save"/>) and does NOT touch <see cref="LogUploader.SetApiBase"/>
+    /// — see the file header for why the change is next-launch-only by design.</summary>
     internal static void ApplyUploadTargetPreference(IConfigSection prefs, bool on)
-        => prefs.Set(PrefUploadApiBase, on ? TestingUploadApiBase : "");
+    {
+        prefs.Set(PrefUploadApiBase, on ? TestingUploadApiBase : "");
+        prefs.Set(PrefUploadTargetChosen, true);
+    }
+
+    /// <summary>Pure decision <see cref="Plugin.InitUploadApiBase"/> (Plugin.UploadApiBase.cs) wires at
+    /// construction, BEFORE <c>LogUploader.SetApiBase</c> — owner "yes" 2026-09-06: a TESTING build
+    /// whose user has never chosen an upload target (<paramref name="chosen"/> false) and has no
+    /// custom base configured defaults to <see cref="TestingUploadApiBase"/> and asks the caller to
+    /// PERSIST that choice (<c>writeDefault</c> true) so it survives the next launch too. Production
+    /// rejects every 2.7.x upload (schema predates the buff/sheet flags), so an un-redirected testing
+    /// build silently uploads nothing (measured 2026-09-06).
+    /// <list type="bullet">
+    /// <item>testing + unchosen + empty configured → dev base, write</item>
+    /// <item>testing + chosen + empty configured → unchanged (stays empty = production), no write —
+    /// an explicit prior OFF sticks</item>
+    /// <item>testing + unchosen + non-empty (custom/staging) configured → unchanged, no write — a
+    /// hand-edited base is never clobbered by the default</item>
+    /// <item>stable build, any inputs → unchanged, no write — byte-identical to pre-2.7.3 behaviour</item>
+    /// </list>
+    /// Pure and services-free so it is unit-testable without constructing a <see cref="Plugin"/>.</summary>
+    internal static (string configured, bool writeDefault) ResolveInitialUploadTarget(
+        bool isTestingBuild, bool chosen, string configured)
+        => isTestingBuild && !chosen && string.IsNullOrWhiteSpace(configured)
+            ? (TestingUploadApiBase, true)
+            : (configured, false);
 
     // Injectable so a test can force the gate without depending on THIS test assembly's own build
     // stamp; defaults to the real build-time gate for production use.

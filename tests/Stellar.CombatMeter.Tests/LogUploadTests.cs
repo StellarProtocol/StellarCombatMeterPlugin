@@ -236,6 +236,97 @@ public sealed class LogUploadTests
         Assert.Equal(348535, enc.DurationMs);     // EndMs - StartMs
     }
 
+    // -------------------------------------------------------------------------
+    // Header window clamp (owner "do 1", 2026-09-06) — the zero-duration double-bank tail: a
+    // `reason=boss durMs=0` archive whose EnteredAtMs came from the NEXT segment's first hit can
+    // land AFTER its own ArchivedAtMs. Uncapped that produces header.encounter.durationMs < 0, which
+    // the server rejects outright (400 must be >= 0), failing the WHOLE upload with no retry path.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ClampEncounterWindow_NormalCase_PassesThroughUnchanged()
+    {
+        var (endMs, durationMs) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 349535);
+        Assert.Equal(349535, endMs);
+        Assert.Equal(348535, durationMs);
+    }
+
+    [Fact]
+    public void ClampEncounterWindow_EnterAfterArchive_ClampsToZeroDurationPoint()
+    {
+        // The exact observed shape: ArchivedAtMs (rawEndMs) precedes EnteredAtMs (startMs).
+        var (endMs, durationMs) = CombatLogAssembler.ClampEncounterWindow(startMs: 500_087, rawEndMs: 500_000);
+        Assert.Equal(500_087, endMs);       // pulled UP to start — a point, never inverted
+        Assert.Equal(0, durationMs);
+    }
+
+    [Fact]
+    public void ClampEncounterWindow_EqualBounds_ZeroDuration_NotClamped()
+    {
+        // Boundary case: start == end is already a valid (zero-length) window — not the defect shape.
+        var (endMs, durationMs) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 1000);
+        Assert.Equal(1000, endMs);
+        Assert.Equal(0, durationMs);
+    }
+
+    [Fact]
+    public void BuildEncounter_EnterAfterArchive_ClampsDurationToZero_EndPulledUpToStart()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 500_087, ArchivedAtMs = 500_000,   // enter > arch (the defect shape)
+            LevelUuid = 42, Result = "kill",
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(500_087, enc.StartMs);
+        Assert.Equal(500_087, enc.EndMs);      // == StartMs — a point, never inverted
+        Assert.Equal(0, enc.DurationMs);        // never negative
+    }
+
+    // The assembled header must actually VALIDATE (never a negative durationMs, never endMs < startMs)
+    // once it round-trips through the writer, in both shapes.
+    [Fact]
+    public void Writer_EnterAfterArchive_EmitsNonNegativeDurationAndEndEqualsStart()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 500_087, ArchivedAtMs = 500_000,
+            LevelUuid = 42, Result = "kill",
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        var hdr = new LogHeader("cm-clamp", 500_100L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains("\"startMs\":500087", json);
+        Assert.Contains("\"endMs\":500087", json);
+        Assert.Contains("\"durationMs\":0", json);
+        Assert.DoesNotContain("\"durationMs\":-", json);
+    }
+
+    // The normal (non-defect) case is unchanged by the clamp — pinned separately from
+    // BuildEncounter_uses_entry_identity_not_live_state so a future regression in ClampEncounterWindow
+    // shows up at the writer boundary too.
+    [Fact]
+    public void Writer_NormalCase_DurationMsUnchangedByClamp()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 349535,
+            LevelUuid = 42, Result = "kill",
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        var hdr = new LogHeader("cm-noclamp", 349_600L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains("\"startMs\":1000", json);
+        Assert.Contains("\"endMs\":349535", json);
+        Assert.Contains("\"durationMs\":348535", json);
+    }
+
     // The archived entry's DungeonStartMs (snapshotted from IDungeonState.RunTimerStartMs at
     // ManualArchive, same lifecycle point as DifficultyLevel) flows through BuildEncounter and
     // is emitted as header.encounter.dungeonStartMs when set.

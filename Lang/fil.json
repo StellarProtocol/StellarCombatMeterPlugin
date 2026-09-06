@@ -147,7 +147,7 @@
   "settings.toggle.total": "Total",
   "settings.toggle.uploadTesting": "I-upload ang mga run sa TESTING server (dev) sa halip na production",
   "settings.toggle.voiceIcon": "Icon ng boses",
-  "settings.uploadTarget.hint": "Testing-channel na build ito. Ang mga run na ina-upload mo sa testing server ay lalabas sa logs.dev.stellarresonance.app.",
+  "settings.uploadTarget.hint": "Testing-channel na build ito. Bilang default, ina-upload ang mga run mo sa testing server (logs.dev.stellarresonance.app). I-off ito para mag-upload sa production sa halip.",
   "settings.uploadTarget.relaunch": "Na-save na — magkakabisa pagkatapos mong i-relaunch ang laro.",
   "settings.width.normal": "Normal",
   "settings.width.thin": "Manipis",

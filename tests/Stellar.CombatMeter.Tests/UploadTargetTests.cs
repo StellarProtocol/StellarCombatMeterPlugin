@@ -1,6 +1,6 @@
 // Tests for the testing-channel-only "upload target" setting (owner 2026-09-06, rDPS P2 follow-up):
 // "release on the test channel that make user i ask can use it and upload to dev" + "make sure that
-// settings only appear when release in testing channel". Three independent pieces, all pure /
+// settings only appear when release in testing channel". Four independent pieces, all pure /
 // services-free so none of them need a full Plugin instance (mirrors LogUploadTests/
 // MeterElementTogglesTests' own FakeConfigSection double):
 //   1. Plugin.ChannelOf — the build-time StellarChannel assembly-metadata reader.
@@ -9,6 +9,10 @@
 //   3. Plugin.BuildUploadTargetSection — the settings-column section builder, gated on an injectable
 //      Func<bool> (pinned directly here rather than via a live Plugin instance — no test in this
 //      suite constructs one; see Plugin.UploadTarget.cs's own doc comment).
+//   4. Plugin.ResolveInitialUploadTarget — the pure decision `InitUploadApiBase` (Plugin.UploadApiBase.cs)
+//      wires at construction: on a TESTING build, when the user has NEVER chosen an upload target
+//      (`uploadTargetChosen` unset) and no custom base is configured, default to the dev server and
+//      write the pref so an explicit OFF sticks across relaunches (owner "yes", 2026-09-06).
 
 using System;
 using System.Collections.Generic;
@@ -109,9 +113,78 @@ public class UploadTargetTests
         Assert.False(Plugin.ResolveUploadTargetIsTesting(prefs));
     }
 
+    // Both directions of the settings toggle mark the target as explicitly CHOSEN (owner: an explicit
+    // OFF must stick across relaunches, never get silently re-defaulted back to dev) — this is what
+    // SetUploadTargetTesting(true/false) actually drives, exercised here without a full Plugin
+    // instance since ApplyUploadTargetPreference is the pure function it calls.
+    [Fact]
+    public void ApplyUploadTargetPreference_true_marks_chosen()
+    {
+        var prefs = new FakeConfigSection();
+        Plugin.ApplyUploadTargetPreference(prefs, true);
+        Assert.True(prefs.Get("uploadTargetChosen", false));
+    }
+
+    [Fact]
+    public void ApplyUploadTargetPreference_false_also_marks_chosen()
+    {
+        var prefs = new FakeConfigSection();
+        Plugin.ApplyUploadTargetPreference(prefs, false);
+        Assert.True(prefs.Get("uploadTargetChosen", false));
+    }
+
     [Fact]
     public void TestingUploadApiBase_is_the_dev_host()
         => Assert.Equal("https://api.dev.stellarresonance.app", Plugin.TestingUploadApiBase);
+
+    // -------------------------------------------------------------------------
+    // 4. ResolveInitialUploadTarget — the pure decision InitUploadApiBase wires at construction.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ResolveInitialUploadTarget_TestingUnchosenEmpty_DefaultsToDevAndWrites()
+    {
+        var (configured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+            isTestingBuild: true, chosen: false, configured: "");
+        Assert.Equal(Plugin.TestingUploadApiBase, configured);
+        Assert.True(writeDefault);
+    }
+
+    [Fact]
+    public void ResolveInitialUploadTarget_TestingChosenEmpty_StaysEmpty_NoWrite()
+    {
+        // The user previously turned the toggle OFF (or on-then-off) — an explicit choice of
+        // production must stick; it is NOT re-defaulted back to dev on the next launch.
+        var (configured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+            isTestingBuild: true, chosen: true, configured: "");
+        Assert.Equal("", configured);
+        Assert.False(writeDefault);
+    }
+
+    [Fact]
+    public void ResolveInitialUploadTarget_TestingUnchosenCustomBase_KeepsCustom_NoWrite()
+    {
+        // A hand-edited "uploadApiBase" (e.g. pointed at staging) is left alone — never overwritten
+        // by the default, and `chosen` is untouched (not written at all).
+        const string custom = "https://staging.example.com";
+        var (configured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+            isTestingBuild: true, chosen: false, configured: custom);
+        Assert.Equal(custom, configured);
+        Assert.False(writeDefault);
+    }
+
+    [Theory]
+    [InlineData(false, "")]
+    [InlineData(true, "")]
+    [InlineData(false, "https://staging.example.com")]
+    [InlineData(true, "https://staging.example.com")]
+    public void ResolveInitialUploadTarget_StableBuild_AlwaysByteIdentical_NoWrite(bool chosen, string configured)
+    {
+        var (resolvedConfigured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+            isTestingBuild: false, chosen: chosen, configured: configured);
+        Assert.Equal(configured, resolvedConfigured);
+        Assert.False(writeDefault);
+    }
 
     // -------------------------------------------------------------------------
     // 3. BuildUploadTargetSection — the settings-column section, gated on an injectable Func<bool>.

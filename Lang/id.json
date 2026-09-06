@@ -147,7 +147,7 @@
   "settings.toggle.total": "Total",
   "settings.toggle.uploadTesting": "Unggah run ke server PENGUJIAN (dev), bukan produksi",
   "settings.toggle.voiceIcon": "Ikon suara",
-  "settings.uploadTarget.hint": "Build channel pengujian. Run yang Anda unggah ke server pengujian akan muncul di logs.dev.stellarresonance.app.",
+  "settings.uploadTarget.hint": "Build channel pengujian. Secara default, run Anda diunggah ke server pengujian (logs.dev.stellarresonance.app). Matikan ini untuk mengunggah ke produksi.",
   "settings.uploadTarget.relaunch": "Tersimpan — berlaku setelah Anda me-restart game.",
   "settings.width.normal": "Normal",
   "settings.width.thin": "Tipis",
