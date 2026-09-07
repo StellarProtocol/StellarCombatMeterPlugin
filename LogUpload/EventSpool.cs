@@ -50,6 +50,14 @@ internal sealed class EventSpool
 
     internal int CastRows { get; private set; }
 
+    /// <summary>Real <c>CombatEvent</c> rows captured since the last Rotate — the archive-decision signal that
+    /// rides the rotated segment as <see cref="SpoolSegment.HasGameEvents"/> (via <see cref="SpoolCounts.GameEventRows"/>).
+    /// Incremented ONLY for a converted dmg/skill row (<see cref="Add"/>'s final <c>_dmg.Add(wire)</c> fallthrough)
+    /// or a LIVE <see cref="CombatEvent.BuffChanged"/> row — NEVER for a cast row (<see cref="CastRows"/>) or a
+    /// buff/sheet KEYFRAME row (<see cref="AddBuffKeyframe"/>/<see cref="AddSheetKeyframe"/>), both of which are
+    /// capture-channel rows that must never force an archive/upload (final review C1).</summary>
+    internal int GameEventRows { get; private set; }
+
     /// <summary>True until this segment has its keyframe. Plugin.SheetCapture's tick asks this once per
     /// tick.</summary>
     internal bool NeedsSheetKeyframe => !_sheetKeyframeWritten;
@@ -79,7 +87,10 @@ internal sealed class EventSpool
     }
 
     /// <summary>Once per segment: re-states every live buff as a `kf` applied row through the send filter. Set the flag
-    /// FIRST — an empty live set is still "keyframe done" for this segment.</summary>
+    /// FIRST — an empty live set is still "keyframe done" for this segment.
+    /// <para>Same envelope-window contract as <see cref="AddSheetKeyframe"/>: a tick-written keyframe (Plugin.BuffKeyframe's
+    /// <c>TickBuffKeyframe</c>) carries an update-thread <c>UtcNow</c> stamp, so its <c>ms</c> is not guaranteed to be ≤ a
+    /// subsequent live row's network-thread receive stamp — see <see cref="SpoolTrack"/>.<c>SealOpen</c>'s MIN/MAX note.</para></summary>
     internal void AddBuffKeyframe(long ms, EntityId self)
     {
         if (_buffKeyframeWritten) return;
@@ -116,9 +127,11 @@ internal sealed class EventSpool
             var live = new LiveBuff((BuffEvent)wire, b.FirerId, b.TargetId);
             _liveBuffs.Apply(live);
             RouteBuff(live, self);                           // ROUTE, never drop (spec § 6.8 owner resolution inside)
+            GameEventRows++;                                 // a REAL live buff change — archive-decision gate
             return;
         }
         _dmg.Add(wire);
+        GameEventRows++;                                     // a REAL converted dmg/skill row — archive-decision gate
     }
 
     /// <summary>Seal all four tracks into a segment and start a fresh one. Main thread; O(1) apart from the
@@ -130,9 +143,11 @@ internal sealed class EventSpool
         var (buff, tBuff, cBuff, fBuff) = _buff.Seal();
         var (sheet, tSheet, cSheet, fSheet) = _sheet.Seal();
         var (buffx, tBuffx, cBuffx, fBuffx) = _buffx.Seal();
-        var castRows = CastRows;   // read BEFORE StartFresh — it zeroes the counter
+        var castRows = CastRows;             // read BEFORE StartFresh — it zeroes the counter
+        var gameEventRows = GameEventRows;    // ditto
+        var counts = new SpoolCounts(fDmg + fBuff + fSheet + fBuffx, castRows, gameEventRows);
         var seg = new SpoolSegment(_segmentId, dmg, buff, sheet, buffx, tDmg, tBuff, tSheet, tBuffx,
-                                   Task.WhenAll(cDmg, cBuff, cSheet, cBuffx), fDmg + fBuff + fSheet + fBuffx, castRows);
+                                   Task.WhenAll(cDmg, cBuff, cSheet, cBuffx), counts);
         StartFresh();
         return seg;
     }
@@ -171,6 +186,7 @@ internal sealed class EventSpool
         _buffKeyframeWritten = false;   // the live buff set itself persists across segments — that is the point
         SkippedUnknownEvents = 0;
         CastRows = 0;
+        GameEventRows = 0;
     }
 
     private static string NewSegmentId()

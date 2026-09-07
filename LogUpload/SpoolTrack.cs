@@ -65,10 +65,11 @@ internal sealed class SpoolTrack
         var index = _refs.Count;
         var name = SpoolCodec.BlobName(_segmentId, _track, index);
         // The envelope window is MIN/MAX over the batch, not first/last: array order is not ms order on the
-        // `sheet` track. A tick-written keyframe carries an update-thread UtcNow stamp while the delta rows
-        // behind it carry the earlier network-thread receive stamp, so batch[0].Ms can EXCEED batch[1].Ms and
-        // first/last would emit an inverted (StartMs > EndMs) window. O(n) over ≤ 4,000 rows, once per chunk.
-        // The row ORDER on disk is deliberately left alone — see EventSpool.AddSheetKeyframe's contract note.
+        // `sheet` OR `buff` tracks. A tick-written keyframe (sheet: TickSheetKeyframe; buff: TickBuffKeyframe)
+        // carries an update-thread UtcNow stamp while the delta rows behind it carry the earlier network-thread
+        // receive stamp, so batch[0].Ms can EXCEED batch[1].Ms and first/last would emit an inverted
+        // (StartMs > EndMs) window. O(n) over ≤ 4,000 rows, once per chunk. The row ORDER on disk is
+        // deliberately left alone — see EventSpool.AddSheetKeyframe's and AddBuffKeyframe's contract notes.
         long startMs = batch[0].Ms, endMs = batch[0].Ms;
         for (var i = 1; i < batch.Count; i++)
         {

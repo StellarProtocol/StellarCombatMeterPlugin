@@ -45,10 +45,17 @@ public sealed class LiveBuffSetTests
     {
         var set = new LiveBuffSet();
         set.Apply(Row(1, "applied", 7, 0, "1"));
-        set.Apply(Row(1, "applied", 7, 0, "2"));           // same uuid on another target = another buff
+        set.Apply(Row(2, "applied", 7, 0, "2"));           // same uuid on another target = another buff
         Assert.Equal(2, set.Count);
-        for (var i = 0; i < LiveBuffSet.MaxEntries + 10; i++) set.Apply(Row(1, "applied", 100 + i, 0, "3"));
+        // Strictly increasing Ms per insertion (100, 101, …) so the eviction order is unambiguous: once full,
+        // a NEW key evicts the OLDEST entry by Row.Ms rather than being refused outright.
+        for (var i = 0; i < LiveBuffSet.MaxEntries + 10; i++) set.Apply(Row(100 + i, "applied", 100 + i, 0, "3"));
         Assert.Equal(LiveBuffSet.MaxEntries, set.Count);
+
+        var kf = set.Keyframe(long.MaxValue);
+        Assert.DoesNotContain(kf, l => l.Row.Tgt == "1" && l.Row.Uuid == 7);        // the very oldest key — evicted
+        Assert.Contains(kf, l => l.Row.Tgt == "3" && l.Row.Uuid == 100 + LiveBuffSet.MaxEntries + 9); // the newest — present
+
         set.Clear();
         Assert.Equal(0, set.Count);
     }
@@ -66,7 +73,8 @@ public sealed class LiveBuffSetTests
 
     // A FULL set (MaxEntries reached) must still let an EXISTING key be updated (a refreshed/applied row
     // replaces it — the new Ms/DurMs show in the next Keyframe) and removed (a removed row for a present
-    // key drops it, Count decreases) — only NEW keys are refused while full (see Keys_are_per_target_...).
+    // key drops it, Count decreases) WITHOUT evicting anything — an existing key is never treated as "new"
+    // (only a genuinely new key while full evicts the oldest entry — see Keys_are_per_target_...).
     [Fact]
     public void A_full_set_still_lets_an_existing_key_be_updated_and_removed()
     {

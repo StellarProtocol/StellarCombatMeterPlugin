@@ -27,7 +27,8 @@
          (attr 100), (b) the sheet track grows 26→33 attrs (cooldown, versatility, haste, mastery,
          resource), (c) a buff keyframe (kf rows) opens every spool segment. Still testing channel
          only; requires framework 2.7.0 (no new framework API). Uploads only fully consumed by logs
-         worker rdpsVersion ≥ 3. -->
+         worker rdpsVersion ≥ 3. The archive decision now gates on real game events
+         (SpoolSegment.HasGameEvents), never on cast or keyframe rows (final review C1). -->
     <Version>2.8.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

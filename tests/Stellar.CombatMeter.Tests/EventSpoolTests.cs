@@ -195,11 +195,11 @@ public sealed class EventSpoolTests
         Assert.Equal(1, seg.Sheet.Single().Count);
     }
 
-    // The ARCHIVE decision counts GAME events only (final review, I1). Every segment gets a sheet keyframe,
-    // so gating Plugin.LogUpload's "No events captured — skipping auto-upload" retain-only branch on
-    // ChunkCount would make that branch UNREACHABLE and start uploading the no-damage tail archives the owner
-    // had purged server-side (kill-board P2 ruling 2026-09-02). GameEventChunkCount is what that branch reads;
-    // ChunkCount still answers "is there anything to POST", and the keyframe chunk does still upload.
+    // The ARCHIVE decision counts GAME events only (final review, I1 / C1). Every segment gets a sheet
+    // keyframe, so gating Plugin.LogUpload's "No events captured — skipping auto-upload" retain-only branch
+    // on ChunkCount would make that branch UNREACHABLE and start uploading the no-damage tail archives the
+    // owner had purged server-side (kill-board P2 ruling 2026-09-02). HasGameEvents is what that branch
+    // reads; ChunkCount still answers "is there anything to POST", and the keyframe chunk does still upload.
     [Fact]
     public async Task A_sheet_only_segment_has_no_game_event_chunks_but_still_uploads_its_keyframe()
     {
@@ -208,7 +208,7 @@ public sealed class EventSpoolTests
         spool.AddSheetKeyframe(5);                               // the per-segment tick keyframe, nothing else
         var seg = spool.Rotate();
         await seg.Completion;
-        Assert.Equal(0, seg.GameEventChunkCount);                // archive decision: nothing captured
+        Assert.False(seg.HasGameEvents);                         // archive decision: nothing captured
         Assert.Equal(1, seg.ChunkCount);                         // upload decision: one sheet chunk to POST
         Assert.Empty(seg.Dmg);
         Assert.Empty(seg.Buff);
@@ -233,7 +233,7 @@ public sealed class EventSpoolTests
         var seg = spool.Rotate();
         await seg.Completion;
         Assert.Equal(1, seg.Sheet.Single().Count);
-        Assert.Equal(0, seg.GameEventChunkCount);
+        Assert.False(seg.HasGameEvents);
     }
 
     // rDPS phase 2 (decision D1): EVERY player's AttrSkillId write is a cast row in the dmg track — self AND
@@ -270,7 +270,7 @@ public sealed class EventSpoolTests
 
     // Review fix (Task 9): the cast count must ride the ROTATED SEGMENT (not just the live spool
     // property) so both archive paths' one per-archive outcome line can print it via
-    // Plugin.LogUpload.Outcome.cs's LogSegmentOutcome — see SpoolSegment.CastRows.
+    // Plugin.LogUpload.Outcome.cs's LogSegmentOutcome — see SpoolSegment.Counts.CastRows.
     [Fact]
     public async Task Rotated_segment_carries_the_cast_count()
     {
@@ -279,7 +279,7 @@ public sealed class EventSpoolTests
         spool.Add(Attrs(20, Mate, (100, 2313)), Self);
         var seg = spool.Rotate();
         await seg.Completion;
-        Assert.Equal(2, seg.CastRows);
+        Assert.Equal(2, seg.Counts.CastRows);
         Assert.Equal(0, spool.CastRows);
     }
 
@@ -331,5 +331,58 @@ public sealed class EventSpoolTests
         spool.AddBuffKeyframe(3000, Self);
         var seg2 = spool.Rotate(); await seg2.Completion;
         Assert.Empty(seg2.Buff); Assert.Empty(seg2.BuffRejected);
+    }
+
+    // Final review C1: the archive decision (SpoolSegment.HasGameEvents) must gate on REAL game events only.
+    // Phase 2 added two capture-only channels into the very tracks GameEventChunkCount used to count (cast
+    // rows into Dmg, buff keyframes into Buff) — from the 2nd segment of any dungeon onward the live buff set
+    // persists across segments, so a chunk-count gate would make the no-damage-tail retain-only branch
+    // unreachable and re-upload the tails the owner had purged server-side (2026-09-02).
+
+    [Fact]
+    public async Task A_cast_only_segment_has_no_game_events()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Attrs(10, Mate, (100, 2313)), Self);           // teammate cast — a dmg-track row, not a game event
+        spool.Add(Attrs(20, Self, (100, 2310)), Self);           // self cast too
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Single(seg.Dmg);                                  // the chunk exists — it still uploads
+        Assert.False(seg.HasGameEvents);                         // but casts alone never gate the archive
+        Assert.Equal(2, seg.Counts.CastRows);
+        Assert.Equal(0, seg.Counts.GameEventRows);
+    }
+
+    [Fact]
+    public async Task A_keyframe_only_segment_has_no_game_events()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Buff(1000, Mate, Self), Self);                 // segment 1: a real live buff change
+        var seg1 = spool.Rotate(); await seg1.Completion;
+        Assert.True(seg1.HasGameEvents);                         // sanity: the live change DID count
+
+        spool.AddBuffKeyframe(3000, Self);                       // segment 2: keyframe only, no new live change
+        var seg2 = spool.Rotate(); await seg2.Completion;
+        Assert.Single(seg2.Buff);                                // the keyframe chunk exists — it still uploads
+        Assert.False(seg2.HasGameEvents);                        // but a keyframe alone never gates the archive
+        Assert.Equal(0, seg2.Counts.GameEventRows);
+    }
+
+    [Fact]
+    public async Task A_mixed_segment_has_game_events_and_counts_each_kind_separately()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Dmg(1), Self);                                 // one real game event
+        spool.Add(Attrs(10, Mate, (100, 2313)), Self);           // cast row (capture-only)
+        spool.Add(Attrs(20, Self, (100, 2310)), Self);           // cast row (capture-only)
+        spool.AddSheetKeyframe(5);                               // sheet keyframe (capture-only)
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.True(seg.HasGameEvents);
+        Assert.Equal(1, seg.Counts.GameEventRows);
+        Assert.Equal(2, seg.Counts.CastRows);
     }
 }
