@@ -23,7 +23,7 @@ public sealed class SheetRowBuilderTests
         foreach (var id in new[] { 11720, 11760, 11840, 11930, 11940, 11960, 11980 }) Assert.Contains(id, SheetRowBuilder.TrackedAttrs);
         Assert.DoesNotContain(100, SheetRowBuilder.TrackedAttrs);   // AttrSkillId is a CAST, not a self-sheet fact (CastRowBuilder)
         Assert.Contains(9011960, SheetRowBuilder.TrackedAttrs);     // phase 2b (2.9.0): plugin-derived local cooldown ratio (D10)
-        Assert.Equal(CdRatioTracker.AttrId, 9011960);
+        Assert.Equal(9011960, CdRatioTracker.AttrId);
     }
 
     [Fact]

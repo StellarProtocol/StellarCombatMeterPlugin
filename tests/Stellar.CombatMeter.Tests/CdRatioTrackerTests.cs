@@ -9,7 +9,10 @@ namespace Stellar.CombatMeter.Tests;
 public sealed class CdRatioTrackerTests
 {
     private static SkillCooldown Row(int skillId, long beginMs, int accel) =>
-        new(skillId, beginMs, 5000, SkillCooldownKind.Normal, 0, 5000, 0, 0, accel);
+        Row(skillId, beginMs, 5000, 5000, accel);
+
+    private static SkillCooldown Row(int skillId, long beginMs, int durationMs, int validCdMs, int accel) =>
+        new(skillId, beginMs, durationMs, SkillCooldownKind.Normal, 0, validCdMs, 0, 0, accel);
 
     [Fact]
     public void First_observation_emits_the_fresh_rows_ratio()
@@ -71,6 +74,66 @@ public sealed class CdRatioTrackerTests
         var result = tracker.Observe(Array.Empty<SkillCooldown>());
         Assert.Null(result);
         Assert.Equal(1000, tracker.Last);
+    }
+
+    // Task 4 review gap: the freshness key is the FOUR-field tuple (BeginTimeMs, DurationMs, ValidCdTimeMs,
+    // AccelerateCdRatio). Nothing else pinned that DurationMs/ValidCdTimeMs are part of it, so a tracker keyed on
+    // (begin, accel) alone would have passed the whole suite — and would then miss a cooldown-buff application
+    // that shortens the remaining cooldown of an ALREADY-running row (begin unchanged, accel new).
+    [Fact]
+    public void Duration_and_valid_cd_time_are_each_part_of_the_freshness_tuple()
+    {
+        var tracker = new CdRatioTracker();
+        var fresh = new List<SkillCooldown>();
+
+        tracker.Observe(new List<SkillCooldown> { Row(1, 100, 5000, 5000, 1000) }, fresh);
+        Assert.Single(fresh);                                                                    // first sight
+
+        Assert.Null(tracker.Observe(new List<SkillCooldown> { Row(1, 100, 5000, 5000, 1000) }, fresh));
+        Assert.Empty(fresh);                                                                     // same tuple → stale
+
+        // DurationMs alone changed (begin AND accel identical) → the row is fresh …
+        Assert.Null(tracker.Observe(new List<SkillCooldown> { Row(1, 100, 6000, 5000, 1000) }, fresh));
+        Assert.Single(fresh);
+        Assert.Equal(6000, fresh[0].DurationMs);
+        // … but its ratio equals Last, so no new scalar is emitted.
+
+        // ValidCdTimeMs alone changed (begin AND accel identical) → fresh too.
+        Assert.Null(tracker.Observe(new List<SkillCooldown> { Row(1, 100, 6000, 4200, 1000) }, fresh));
+        Assert.Single(fresh);
+        Assert.Equal(4200, fresh[0].ValidCdTimeMs);
+
+        // The real shape of a cooldown buff landing on a running cooldown: begin unchanged, the remaining
+        // valid time collapses, and the row carries a NEW accelerate ratio → that ratio IS the new scalar.
+        Assert.Equal(2500, tracker.Observe(new List<SkillCooldown> { Row(1, 100, 6000, 3800, 2500) }, fresh));
+        Assert.Single(fresh);
+        Assert.Equal(2500, tracker.Last);
+
+        // Repeat the identical tuple → nothing fresh, nothing emitted.
+        Assert.Null(tracker.Observe(new List<SkillCooldown> { Row(1, 100, 6000, 3800, 2500) }, fresh));
+        Assert.Empty(fresh);
+        Assert.Equal(2500, tracker.Last);
+    }
+
+    // Task 4 review gap: Disagreements must be computed over the FRESH rows of a tick, never over every row
+    // presented. A stale row is cached at whatever ratio it last carried, so comparing it against a fresh row
+    // would report a disagreement on every single tick after any ratio change — the counter is the signal that
+    // settles the accelerate-vs-reduce formula in the first testing run, so a permanently-hot counter is useless.
+    [Fact]
+    public void A_stale_row_at_a_different_ratio_is_not_a_disagreement()
+    {
+        var tracker = new CdRatioTracker();
+        tracker.Observe(new List<SkillCooldown> { Row(1, 100, 1000), Row(2, 100, 1000) });
+        Assert.Equal(0, tracker.Disagreements);
+
+        // Skill 1 recasts under a cooldown buff (fresh, 3000); skill 2's row is byte-identical to last tick,
+        // i.e. still CACHED at 1000. Exactly ONE row is fresh → there is nothing to disagree with.
+        Assert.Equal(3000, tracker.Observe(new List<SkillCooldown> { Row(1, 200, 3000), Row(2, 100, 1000) }));
+        Assert.Equal(0, tracker.Disagreements);
+
+        // Sanity that the counter is not simply dead: two genuinely fresh rows that disagree DO count once.
+        Assert.Equal(4000, tracker.Observe(new List<SkillCooldown> { Row(1, 300, 4000), Row(2, 300, 2000) }));
+        Assert.Equal(1, tracker.Disagreements);
     }
 
     [Fact]
