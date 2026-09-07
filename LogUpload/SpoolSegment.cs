@@ -15,8 +15,13 @@ internal sealed record SpoolChunkRef(string Track, int Index, long StartMs, long
 /// <paramref name="WriteFaults"/> is the sum of all four tracks' <see cref="SpoolTrack.WriteFaults"/> AT
 /// ROTATE TIME — writes may still be in flight when a track is sealed, so this is "faults so far", not a
 /// final count; a fault landing after Rotate is still safely swallowed (never surfaced here), only unseen
-/// by this particular number. Defaulted so every pre-existing positional construction (<see cref="Empty"/>,
-/// <see cref="EmptyTruncated"/>, and any fixture that builds a SpoolSegment directly) keeps compiling.</summary>
+/// by this particular number. <paramref name="CastRows"/> is the segment's own <see cref="EventSpool.CastRows"/>
+/// count, read by <see cref="EventSpool.Rotate"/> before <c>StartFresh</c> zeroes it — rides the segment so
+/// BOTH archive paths (upload and retain-without-upload) can print it in the ONE per-archive outcome line
+/// (<c>Plugin.LogUpload.Outcome.cs</c>'s <c>LogSegmentOutcome</c>) without either duplicating the read or
+/// gating it on which path fired. Both trailing counters are defaulted so every pre-existing positional
+/// construction (<see cref="Empty"/>, <see cref="EmptyTruncated"/>, and any fixture that builds a
+/// SpoolSegment directly) keeps compiling.</summary>
 internal sealed record SpoolSegment(
     string SegmentId,
     IReadOnlyList<SpoolChunkRef> Dmg,
@@ -28,7 +33,8 @@ internal sealed record SpoolSegment(
     bool TruncatedSheet,
     bool TruncatedBuffRejected,
     Task Completion,
-    int WriteFaults = 0)
+    int WriteFaults = 0,
+    int CastRows = 0)
 {
     private static SpoolChunkRef[] None => new SpoolChunkRef[0];
 

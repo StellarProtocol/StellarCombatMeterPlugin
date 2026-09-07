@@ -27,6 +27,12 @@ public sealed class CastRowBuilderTests
         Assert.Equal(Mate.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), row.Src);
         Assert.Equal(2313, row.Skill);
         Assert.Equal((int)SkillEventPhase.Begin, row.Phase);
+
+        // Boundary (review fix, Task 9): exactly int.MaxValue is still IN range and must produce a row —
+        // the existing No_AttrSkillId… test below covers int.MaxValue + 1, which must not.
+        var boundary = CastRowBuilder.Project(Attrs(1L, Mate, (100, (long)int.MaxValue)))!;
+        Assert.NotNull(boundary);
+        Assert.Equal(int.MaxValue, boundary.Skill);
     }
 
     [Fact]

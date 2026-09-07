@@ -267,4 +267,19 @@ public sealed class EventSpoolTests
         var seg = spool.Rotate(); await seg.Completion;
         Assert.Equal(0, spool.CastRows);
     }
+
+    // Review fix (Task 9): the cast count must ride the ROTATED SEGMENT (not just the live spool
+    // property) so both archive paths' one per-archive outcome line can print it via
+    // Plugin.LogUpload.Outcome.cs's LogSegmentOutcome — see SpoolSegment.CastRows.
+    [Fact]
+    public async Task Rotated_segment_carries_the_cast_count()
+    {
+        var spool = new EventSpool(new FakeDataStore(), null, LiveSheet);
+        spool.Add(Attrs(10, Mate, (100, 2313)), Self);
+        spool.Add(Attrs(20, Mate, (100, 2313)), Self);
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(2, seg.CastRows);
+        Assert.Equal(0, spool.CastRows);
+    }
 }

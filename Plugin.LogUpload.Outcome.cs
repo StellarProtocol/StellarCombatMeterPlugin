@@ -13,15 +13,17 @@ public sealed partial class Plugin
     /// <summary>
     /// Emits the one info line both the upload path (<c>AssembleAndUpload</c>) and the retain path
     /// (<c>RetainAssembled</c>) print for an assembled <paramref name="log"/>/<paramref name="seg"/> —
-    /// dmg/buff/sheet chunk counts — with the verb/outcome wording supplied by <paramref name="what"/> (e.g.
-    /// "Uploading" vs "Retained (not uploaded)"), then, only when <paramref name="seg"/> recorded a
-    /// write fault, the accompanying warning that those chunks will be skipped at upload (blob missing).
+    /// dmg/buff/sheet chunk counts plus the segment's cast-row count (rides the segment via
+    /// <see cref="SpoolSegment.CastRows"/> so BOTH archive paths print it, not just the upload one) —
+    /// with the verb/outcome wording supplied by <paramref name="what"/> (e.g. "Uploading" vs "Retained
+    /// (not uploaded)"), then, only when <paramref name="seg"/> recorded a write fault, the accompanying
+    /// warning that those chunks will be skipped at upload (blob missing).
     /// </summary>
     private void LogSegmentOutcome(string what, CombatLog log, SpoolSegment seg)
     {
         _services.Log.Info(
             $"[CombatMeter.SP1] {what} log {log.Header.LogId} levelUuid={log.Header.Encounter.LevelUuid} " +
-            $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), {seg.Sheet.Count} sheet chunk(s)).");
+            $"({seg.Dmg.Count} dmg chunk(s), {seg.Buff.Count} buff chunk(s), {seg.Sheet.Count} sheet chunk(s)) casts={seg.CastRows}.");
         if (seg.WriteFaults > 0)
             _services.Log.Warning($"[CombatMeter.SP1] {seg.WriteFaults} spool blob write(s) failed for segment {seg.SegmentId} — those chunks will be skipped at upload (blob missing).");
     }

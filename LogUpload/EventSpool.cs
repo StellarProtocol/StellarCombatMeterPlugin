@@ -109,8 +109,9 @@ internal sealed class EventSpool
         var (buff, tBuff, cBuff, fBuff) = _buff.Seal();
         var (sheet, tSheet, cSheet, fSheet) = _sheet.Seal();
         var (buffx, tBuffx, cBuffx, fBuffx) = _buffx.Seal();
+        var castRows = CastRows;   // read BEFORE StartFresh — it zeroes the counter
         var seg = new SpoolSegment(_segmentId, dmg, buff, sheet, buffx, tDmg, tBuff, tSheet, tBuffx,
-                                   Task.WhenAll(cDmg, cBuff, cSheet, cBuffx), fDmg + fBuff + fSheet + fBuffx);
+                                   Task.WhenAll(cDmg, cBuff, cSheet, cBuffx), fDmg + fBuff + fSheet + fBuffx, castRows);
         StartFresh();
         return seg;
     }
