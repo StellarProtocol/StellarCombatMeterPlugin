@@ -8,7 +8,7 @@ namespace Stellar.CombatMeter.LogUpload;
 /// per segment (every tracked attr the live sheet has). Pure.</summary>
 internal static class SheetRowBuilder
 {
-    /// <summary>The 26 `IsSyncMe` attrs the buff fit regresses (FightAttrTable): crit/lucky chance (11710/11780),
+    /// <summary>The 33 `IsSyncMe` attrs the buff fit regresses (FightAttrTable): crit/lucky chance (11710/11780),
     /// crit/lucky damage (12510/12530), generic/boss damage bonus (12670/12630), element damage bonuses
     /// (13100–13180), physical/magic attack (11330/11340), element attacks (11500–11580).</summary>
     internal static readonly int[] TrackedAttrs =
@@ -16,6 +16,7 @@ internal static class SheetRowBuilder
         11710, 11780, 12510, 12530, 12670, 12630,
         13100, 13110, 13120, 13130, 13140, 13150, 13160, 13170, 13180,
         11330, 11340, 11500, 11510, 11520, 11530, 11540, 11550, 11560, 11570, 11580,
+        11720, 11760, 11840, 11930, 11940, 11960, 11980, // phase 2 (2.8.0): attack speed, skill CD reduction, versatility DMG, haste, mastery, CD acceleration, resource CD
     };
 
     private static readonly HashSet<int> Tracked = new(TrackedAttrs);

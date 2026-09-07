@@ -13,11 +13,15 @@ public sealed class SheetRowBuilderTests
     static readonly EntityId Self = new(0x0000_0001_0000_0280);
 
     [Fact]
-    public void Tracked_set_is_the_26_damage_relevant_IsSyncMe_attrs()
+    public void Tracked_set_is_the_33_damage_relevant_IsSyncMe_attrs()
     {
-        Assert.Equal(26, SheetRowBuilder.TrackedAttrs.Length);
+        Assert.Equal(33, SheetRowBuilder.TrackedAttrs.Length);
+        Assert.Equal(33, new HashSet<int>(SheetRowBuilder.TrackedAttrs).Count);
         Assert.Contains(11710, SheetRowBuilder.TrackedAttrs); Assert.Contains(13180, SheetRowBuilder.TrackedAttrs);
         Assert.Contains(11580, SheetRowBuilder.TrackedAttrs); Assert.DoesNotContain(11320, SheetRowBuilder.TrackedAttrs);
+        // Phase 2 (spec § 6.1 as amended 2026-09-07): cooldown, versatility, haste/attack-speed, mastery, resource.
+        foreach (var id in new[] { 11720, 11760, 11840, 11930, 11940, 11960, 11980 }) Assert.Contains(id, SheetRowBuilder.TrackedAttrs);
+        Assert.DoesNotContain(100, SheetRowBuilder.TrackedAttrs);   // AttrSkillId is a CAST, not a self-sheet fact (CastRowBuilder)
     }
 
     [Fact]
