@@ -241,6 +241,40 @@ public sealed class EventSpoolTests
     // AOI teammates (the framework emits attr events for player entities only). The self-only sheet gate
     // below it is untouched: a teammate's other attrs still reach no track.
     [Fact]
+    public async Task AddSheetRow_lands_in_the_sheet_track_after_the_keyframe_and_is_not_a_game_event()
+    {
+        var store = new FakeDataStore();
+        var sheet = new System.Collections.Generic.Dictionary<int, long> { [11710] = 3350 };
+        var spool = new EventSpool(store, null, () => sheet);
+        spool.AddSheetRow(SheetRowBuilder.Synthetic(11, CdRatioTracker.AttrId, 2500));   // D10: the derived cd ratio
+        Assert.Equal(0, spool.GameEventRows);                    // a DERIVED capture row NEVER decides an archive (C1)
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(2, seg.Sheet.Single().Count);               // keyframe first, then the synthetic row
+        var json = SpoolCodec.Gunzip(store.Read(seg.Sheet[0].BlobName)!);
+        Assert.Equal("[{\"t\":\"sheet\",\"ms\":11,\"k\":1,\"a\":[[11710,3350]]}," +
+                      "{\"t\":\"sheet\",\"ms\":11,\"a\":[[9011960,2500]]}]", json);
+        Assert.False(seg.HasGameEvents);
+        Assert.Equal(0, seg.Counts.GameEventRows);
+        Assert.Equal(0, seg.Counts.CastRows);
+    }
+
+    [Fact]
+    public async Task AddSheetRow_without_a_reader_writes_the_row_alone()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store);                       // no readSelfSheet → no keyframe is possible
+        spool.AddSheetRow(SheetRowBuilder.Synthetic(11, CdRatioTracker.AttrId, 2500));
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(1, seg.Sheet.Single().Count);
+        Assert.Equal("[{\"t\":\"sheet\",\"ms\":11,\"a\":[[9011960,2500]]}]",
+                     SpoolCodec.Gunzip(store.Read(seg.Sheet[0].BlobName)!));
+        Assert.False(seg.HasGameEvents);
+        Assert.Equal(0, seg.Counts.GameEventRows);
+    }
+
+    [Fact]
     public async Task Any_players_AttrSkillId_write_lands_as_a_cast_row_in_the_dmg_track()
     {
         var store = new FakeDataStore();

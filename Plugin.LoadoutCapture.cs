@@ -53,6 +53,7 @@ public sealed partial class Plugin
         TickBuildRecapture();
         TickAttrRangeSample();
         TickSheetKeyframe();
+        TickCdRatio();         // D10: derived local cooldown ratio — Plugin.CdRatioCapture.cs (capture-only, never gated)
         TickBuffKeyframe();
         TickClassTimeline();   // per-entity professionId timeline (self + party) — Plugin.ClassTimeline.cs
     }

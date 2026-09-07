@@ -28,8 +28,15 @@
          resource), (c) a buff keyframe (kf rows) opens every spool segment. Still testing channel
          only; requires framework 2.7.0 (no new framework API). Uploads only fully consumed by logs
          worker rdpsVersion ≥ 3. The archive decision now gates on real game events
-         (SpoolSegment.HasGameEvents), never on cast or keyframe rows (final review C1). -->
-    <Version>2.8.0</Version>
+         (SpoolSegment.HasGameEvents), never on cast or keyframe rows (final review C1).
+         2.9.0: rDPS phase 2b (D10) — the local player's per-skill cooldown ratio is captured off the
+         existing ~10 Hz LocalCooldowns snapshot (CdRatioTracker) and spooled as a DERIVED sheet row
+         under the synthetic attribute id 9011960 (sheet track 33→34 attrs); every segment keyframe
+         restates the last known ratio so the worker's step function has a value at segment start.
+         It is a CAPTURE row: never gated by pause or a toggle, and it never counts toward
+         SpoolSegment.HasGameEvents, so it can never decide an archive. No new poll, no framework
+         change. Consumed by logs worker rdpsVersion ≥ 5 (own-baseline bound test, D11). -->
+    <Version>2.9.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-

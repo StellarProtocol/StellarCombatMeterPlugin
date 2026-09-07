@@ -86,6 +86,15 @@ internal sealed class EventSpool
         _sheetKeyframeWritten = true;
     }
 
+    /// <summary>D10: a plugin-DERIVED sheet row (the cooldown ratio, <see cref="CdRatioTracker"/>) — same track and
+    /// same keyframe-first rule as a wire attr row (<see cref="Add"/>). NEVER counts toward <see cref="GameEventRows"/>:
+    /// a capture row must not decide an archive (phase-2 final review C1).</summary>
+    internal void AddSheetRow(SheetEvent row)
+    {
+        AddSheetKeyframe(row.Ms);
+        _sheet.Add(row);
+    }
+
     /// <summary>Once per segment: re-states every live buff as a `kf` applied row through the send filter. Set the flag
     /// FIRST — an empty live set is still "keyframe done" for this segment.
     /// <para>Same envelope-window contract as <see cref="AddSheetKeyframe"/>: a tick-written keyframe (Plugin.BuffKeyframe's
