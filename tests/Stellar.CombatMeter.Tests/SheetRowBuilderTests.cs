@@ -13,15 +13,35 @@ public sealed class SheetRowBuilderTests
     static readonly EntityId Self = new(0x0000_0001_0000_0280);
 
     [Fact]
-    public void Tracked_set_is_the_33_damage_relevant_IsSyncMe_attrs()
+    public void Tracked_set_is_the_34_damage_relevant_IsSyncMe_attrs()
     {
-        Assert.Equal(33, SheetRowBuilder.TrackedAttrs.Length);
-        Assert.Equal(33, new HashSet<int>(SheetRowBuilder.TrackedAttrs).Count);
+        Assert.Equal(34, SheetRowBuilder.TrackedAttrs.Length);
+        Assert.Equal(34, new HashSet<int>(SheetRowBuilder.TrackedAttrs).Count);
         Assert.Contains(11710, SheetRowBuilder.TrackedAttrs); Assert.Contains(13180, SheetRowBuilder.TrackedAttrs);
         Assert.Contains(11580, SheetRowBuilder.TrackedAttrs); Assert.DoesNotContain(11320, SheetRowBuilder.TrackedAttrs);
         // Phase 2 (spec § 6.1 as amended 2026-09-07): cooldown, versatility, haste/attack-speed, mastery, resource.
         foreach (var id in new[] { 11720, 11760, 11840, 11930, 11940, 11960, 11980 }) Assert.Contains(id, SheetRowBuilder.TrackedAttrs);
         Assert.DoesNotContain(100, SheetRowBuilder.TrackedAttrs);   // AttrSkillId is a CAST, not a self-sheet fact (CastRowBuilder)
+        Assert.Contains(9011960, SheetRowBuilder.TrackedAttrs);     // phase 2b (2.9.0): plugin-derived local cooldown ratio (D10)
+        Assert.Equal(CdRatioTracker.AttrId, 9011960);
+    }
+
+    [Fact]
+    public void Synthetic_row_is_one_unflagged_attr()
+    {
+        var row = SheetRowBuilder.Synthetic(123L, CdRatioTracker.AttrId, 2500L);
+        Assert.Equal(123L, row.Ms);
+        Assert.False(row.Keyframe);
+        Assert.Single(row.Attrs);
+        Assert.Equal(new long[] { 9011960, 2500 }, row.Attrs[0]);
+    }
+
+    [Fact]
+    public void Keyframe_carries_the_synthetic_id_when_the_sheet_has_it()
+    {
+        var sheet = new Dictionary<int, long> { [11710] = 3350, [CdRatioTracker.AttrId] = 2500 };
+        var kf = SheetRowBuilder.Keyframe(5L, sheet)!;
+        Assert.Contains(kf.Attrs, a => a[0] == CdRatioTracker.AttrId && a[1] == 2500);
     }
 
     [Fact]
