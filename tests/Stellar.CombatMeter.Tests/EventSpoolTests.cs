@@ -235,4 +235,36 @@ public sealed class EventSpoolTests
         Assert.Equal(1, seg.Sheet.Single().Count);
         Assert.Equal(0, seg.GameEventChunkCount);
     }
+
+    // rDPS phase 2 (decision D1): EVERY player's AttrSkillId write is a cast row in the dmg track — self AND
+    // AOI teammates (the framework emits attr events for player entities only). The self-only sheet gate
+    // below it is untouched: a teammate's other attrs still reach no track.
+    [Fact]
+    public async Task Any_players_AttrSkillId_write_lands_as_a_cast_row_in_the_dmg_track()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Attrs(10, Mate, (100, 2313)), Self);                      // teammate cast
+        spool.Add(Attrs(11, Self, (100, 2310), (11710, 3350)), Self);       // self cast + a sheet delta
+        spool.Add(Attrs(12, Mate, (100, 0)), Self);                         // not a cast
+        spool.Add(Attrs(13, Mate, (101, 2), (11710, 1)), Self);             // stage change / teammate attr: nothing
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(2, seg.Dmg.Single().Count);
+        Assert.Equal(2, seg.Sheet.Single().Count);                          // keyframe + the one self delta
+        var json = SpoolCodec.Gunzip(store.Read(seg.Dmg[0].BlobName)!);
+        Assert.StartsWith("[{\"t\":\"skill\",\"ms\":10,\"src\":\"" + Mate.Value + "\",\"skill\":2313,\"phase\":101}", json);
+        Assert.Equal(0, spool.SkippedUnknownEvents);
+    }
+
+    [Fact]
+    public async Task CastRows_counts_the_segments_casts_and_resets_on_rotate()
+    {
+        var spool = new EventSpool(new FakeDataStore(), null, LiveSheet);
+        spool.Add(Attrs(10, Mate, (100, 2313)), Self);
+        spool.Add(Attrs(20, Mate, (100, 2313)), Self);
+        Assert.Equal(2, spool.CastRows);
+        var seg = spool.Rotate(); await seg.Completion;
+        Assert.Equal(0, spool.CastRows);
+    }
 }

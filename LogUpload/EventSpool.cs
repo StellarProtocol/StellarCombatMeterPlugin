@@ -46,6 +46,8 @@ internal sealed class EventSpool
     /// EntityAttributesChanged is handled before the converter and never counts here.</summary>
     internal int SkippedUnknownEvents { get; private set; }
 
+    internal int CastRows { get; private set; }
+
     /// <summary>True until this segment has its keyframe. Plugin.SheetCapture's tick asks this once per
     /// tick.</summary>
     internal bool NeedsSheetKeyframe => !_sheetKeyframeWritten;
@@ -74,6 +76,10 @@ internal sealed class EventSpool
     {
         if (evt is CombatEvent.EntityAttributesChanged ac)
         {
+            // Phase 2: ANY player's cast (AttrSkillId write) → a `skill` row in the dmg track, self and AOI
+            // teammates alike (decision D1). Before the self-only sheet gate, which is unchanged.
+            var cast = CastRowBuilder.Project(ac);
+            if (cast is not null) { _dmg.Add(cast); CastRows++; }
             if (ac.TargetId != self) return;                    // teammates' AOI attrs: not this track
             var row = SheetRowBuilder.Project(ac);
             if (row is null) return;                            // no tracked attr in this packet
@@ -141,6 +147,7 @@ internal sealed class EventSpool
         _buffx = new SpoolTrack(SpoolCodec.TrackBuffRejected, _segmentId, _store, _chunkEvents);
         _sheetKeyframeWritten = false;
         SkippedUnknownEvents = 0;
+        CastRows = 0;
     }
 
     private static string NewSegmentId()
