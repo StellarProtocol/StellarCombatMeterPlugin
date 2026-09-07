@@ -46,4 +46,32 @@ internal static class SheetRowBuilder
     /// <summary>One synthetic, unflagged (non-keyframe) sheet row carrying a single plugin-derived attr (D10).</summary>
     internal static SheetEvent Synthetic(long ms, int attrId, long value) =>
         new(ms, false, new List<long[]>(1) { new[] { (long)attrId, value } });
+
+    /// <summary>True when <paramref name="sheet"/> holds at least one tracked GAME attr — any <see cref="TrackedAttrs"/>
+    /// entry other than the plugin-derived <see cref="CdRatioTracker.AttrId"/>.</summary>
+    internal static bool HasTrackedGameAttr(IReadOnlyDictionary<int, long> sheet)
+    {
+        foreach (var id in TrackedAttrs)
+            if (id != CdRatioTracker.AttrId && sheet.ContainsKey(id)) return true;
+        return false;
+    }
+
+    /// <summary>What the spool's keyframe reader serves (D10): the live game attribute sheet, plus the last known
+    /// cooldown ratio overlaid under <see cref="CdRatioTracker.AttrId"/> so every segment keyframe restates it (the
+    /// worker's step function needs a value at segment start).
+    /// <para>Returns <paramref name="attrs"/> UNTOUCHED — the same instance, no copy — when there is no ratio yet OR
+    /// when the live sheet carries no tracked GAME attr. That second case is LOAD-BEARING: <c>9011960</c> is itself a
+    /// tracked attr, so overlaying it on an empty sheet would let <see cref="Keyframe"/> build a row out of the
+    /// plugin's own value alone and latch the segment's keyframe flag — defeating
+    /// <see cref="EventSpool.AddSheetKeyframe"/>'s deferral, which exists precisely so a segment opened while the
+    /// framework's attribute map is still empty (e.g. right after <c>CombatEntityTracker.Reset()</c> on a scene
+    /// change) keeps retrying until the REAL sheet arrives.</para></summary>
+    internal static IReadOnlyDictionary<int, long> ComposeSelfSheet(IReadOnlyDictionary<int, long> attrs, int? ratio)
+    {
+        if (ratio is not { } r || !HasTrackedGameAttr(attrs)) return attrs;
+        var copy = new Dictionary<int, long>(attrs.Count + 1);
+        foreach (var (id, v) in attrs) copy[id] = v;
+        copy[CdRatioTracker.AttrId] = r;
+        return copy;
+    }
 }

@@ -5,21 +5,26 @@ using Stellar.Abstractions.Domain;
 
 namespace Stellar.CombatMeter;
 
-/// <summary>
-/// Diagnostic-mode logging for the D10 cooldown-ratio capture (<see cref="TickCdRatio"/>). Gated on
-/// <see cref="StellarDiagnostics.IsEnabled"/> like every other <c>.Diagnostics.cs</c> partial, so the
-/// production partial calls it unconditionally (coding-standards § Diagnostics).
-/// </summary>
 public sealed partial class Plugin
 {
-    /// <summary>Logs the emitted ratio together with the rows that produced it. This line is how the first
-    /// testing run settles the accelerate-vs-reduce formula (xDPS spec § 6.5): the per-row duration/valid-cd
-    /// pair beside the ratio says whether the game shortens the cooldown by the ratio or accelerates its
-    /// countdown. <c>disagreements</c> is the running count of ticks whose fresh rows did not agree.</summary>
-    private void LogCdRatio(int ratio, List<SkillCooldown> fresh)
+    /// <summary>Process rules § 15 hedge — a hook that never fires looks identical to a working one. The first N
+    /// ticks that carried ANY fresh cooldown row are logged whether or not the ratio moved, so the very first run
+    /// proves the tick is live even when every row states the same ratio; after that the line is change-only.</summary>
+    private const int CdRatioDiagFirstTicks = 5;
+
+    // DIAGNOSTICS-ONLY counter (never read unless STELLAR_DIAGNOSTICS is on; nothing in the capture path
+    // consults it) — how many fresh-row ticks have already been logged unconditionally.
+    private int _cdRatioDiagTicks;
+
+    /// <summary>One line per fresh-row tick (see <see cref="CdRatioDiagFirstTicks"/>), then one per ratio CHANGE.
+    /// This line is how the first testing run settles the accelerate-vs-reduce formula (spec § 6.5), so it prints
+    /// the raw per-row fields, not just the derived scalar.</summary>
+    private void LogCdRatio(int? changed, List<SkillCooldown> fresh)
     {
         if (!StellarDiagnostics.IsEnabled) return;
-        var sb = new StringBuilder("[CombatMeter][cd-ratio] ratio=").Append(ratio)
+        if (_cdRatioDiagTicks < CdRatioDiagFirstTicks) _cdRatioDiagTicks++;
+        else if (changed is null) return;
+        var sb = new StringBuilder("[CombatMeter][cd-ratio] ratio=").Append(changed ?? _cdRatio.Last ?? 0)
             .Append(" disagreements=").Append(_cdRatio.Disagreements)
             .Append(" fresh=");
         for (var i = 0; i < fresh.Count; i++)

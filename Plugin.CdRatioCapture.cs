@@ -16,20 +16,17 @@ public sealed partial class Plugin
     {
         if (!_services.CombatSnapshot.LocalEntityId.IsPlayer) return;
         var changed = _cdRatio.Observe(_services.CombatSnapshot.LocalCooldowns, _cdRatioFresh);
-        if (changed is null) return;
-        Spool.AddSheetRow(SheetRowBuilder.Synthetic(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), CdRatioTracker.AttrId, changed.Value));
-        LogCdRatio(changed.Value, _cdRatioFresh);
+        if (changed is { } ratio)
+            Spool.AddSheetRow(SheetRowBuilder.Synthetic(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), CdRatioTracker.AttrId, ratio));
+        // Every tick that SAW a fresh cooldown row is offered to diagnostics, changed or not — the partial decides
+        // what it prints (process rules § 15: a run whose rows never move the ratio must not log silence).
+        if (_cdRatioFresh.Count > 0) LogCdRatio(changed, _cdRatioFresh);
     }
 
-    /// <summary>The spool's keyframe reader: the live attribute sheet plus the last known cooldown ratio under the
-    /// synthetic id, so every segment keyframe restates it (the worker's step function needs a value at segment start).</summary>
-    private IReadOnlyDictionary<int, long> ReadSelfSheetWithCdRatio()
-    {
-        var attrs = _services.EntityDetail.GetAttributes(_services.CombatSnapshot.LocalEntityId);
-        if (_cdRatio.Last is not { } ratio) return attrs;
-        var copy = new Dictionary<int, long>(attrs.Count + 1);
-        foreach (var (id, v) in attrs) copy[id] = v;
-        copy[CdRatioTracker.AttrId] = ratio;
-        return copy;
-    }
+    /// <summary>The spool's keyframe reader: the live attribute sheet composed with the last known cooldown ratio.
+    /// The composition rule (and why it must NOT overlay onto a sheet with no tracked game attr — the keyframe
+    /// deferral) lives in <see cref="SheetRowBuilder.ComposeSelfSheet"/>.</summary>
+    private IReadOnlyDictionary<int, long> ReadSelfSheetWithCdRatio() =>
+        SheetRowBuilder.ComposeSelfSheet(
+            _services.EntityDetail.GetAttributes(_services.CombatSnapshot.LocalEntityId), _cdRatio.Last);
 }

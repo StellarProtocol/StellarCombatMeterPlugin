@@ -25,6 +25,14 @@ public sealed partial class Plugin
     /// applied in that gap reaches <see cref="LogUpload.LiveBuffSet"/> and is then cleared here before it is ever
     /// keyframed, so it is invisible to the worker until its own next applied/refreshed/removed row arrives — no
     /// capture is lost (the live row itself is always written to the spool) and the set self-heals on that row.
-    /// This window is an accepted risk, not a defect to fix.</para></summary>
-    private void OnSceneChangedClearLiveBuffs(string? newScene) => _spool?.ClearLiveBuffs();
+    /// This window is an accepted risk, not a defect to fix.</para>
+    /// <para>The DERIVED cooldown ratio (D10) is scene-scoped for the same reason and is reset on the same signal —
+    /// see <see cref="LogUpload.CdRatioTracker.Reset"/>. Kept here rather than in a second SceneChanged handler so
+    /// the two scene-scoped capture caches cannot drift apart; the method name predates it (renaming would touch
+    /// Plugin.cs's subscribe/unsubscribe lines).</para></summary>
+    private void OnSceneChangedClearLiveBuffs(string? newScene)
+    {
+        _spool?.ClearLiveBuffs();
+        _cdRatio.Reset();
+    }
 }

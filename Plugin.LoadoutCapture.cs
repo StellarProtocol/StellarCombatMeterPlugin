@@ -41,8 +41,12 @@ public sealed partial class Plugin
     internal IReadOnlyList<CapturedLoadout> LoadoutSnapshot() => _loadoutCapture.Snapshot();
 
     // Throttled tick — called from OnUpdate at the existing ~10 Hz snapshot cadence (Plugin.cs's
-    // _snapshotAccum block), not every frame. Nothing here READS the game on a quiet tick: every
-    // capture is driven by an armed flag (an event, or the run-start arm below).
+    // _snapshotAccum block), not every frame. Nothing here CALLS INTO THE GAME on a quiet tick: every
+    // capture is driven by an armed flag (an event, or the run-start arm below) — with ONE exception,
+    // TickCdRatio (D10), which walks the framework's ALREADY-CACHED LocalCooldowns snapshot every tick.
+    // That is a managed list the same 10 Hz block's DetectSelfImagineCasts already iterates (no IL2CPP
+    // read, no new poll) and the walk is allocation-free on a quiet tick — the fresh-row list is reused
+    // and only Clear()ed, and a tick with no fresh row emits nothing.
     //
     // ORDER IS LOAD-BEARING and unchanged: the run boundary runs FIRST, so the accumulator is reset
     // (and the run-start capture armed) before the recapture that fills it on the very same tick —

@@ -241,6 +241,27 @@ public sealed class EventSpoolTests
     // AOI teammates (the framework emits attr events for player entities only). The self-only sheet gate
     // below it is untouched: a teammate's other attrs still reach no track.
     [Fact]
+    public async Task Any_players_AttrSkillId_write_lands_as_a_cast_row_in_the_dmg_track()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Attrs(10, Mate, (100, 2313)), Self);                      // teammate cast
+        spool.Add(Attrs(11, Self, (100, 2310), (11710, 3350)), Self);       // self cast + a sheet delta
+        spool.Add(Attrs(12, Mate, (100, 0)), Self);                         // not a cast
+        spool.Add(Attrs(13, Mate, (101, 2), (11710, 1)), Self);             // stage change / teammate attr: nothing
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Equal(2, seg.Dmg.Single().Count);
+        Assert.Equal(2, seg.Sheet.Single().Count);                          // keyframe + the one self delta
+        var json = SpoolCodec.Gunzip(store.Read(seg.Dmg[0].BlobName)!);
+        Assert.StartsWith("[{\"t\":\"skill\",\"ms\":10,\"src\":\"" + Mate.Value + "\",\"skill\":2313,\"phase\":101}", json);
+        Assert.Equal(0, spool.SkippedUnknownEvents);
+    }
+
+    // rDPS phase 2b (decision D10): the plugin's own cooldown-ratio row rides the SAME sheet track behind the same
+    // keyframe-first rule as a wire attr row — and, being a CAPTURE row, never counts as a game event (final
+    // review C1: a capture row must not decide an archive).
+    [Fact]
     public async Task AddSheetRow_lands_in_the_sheet_track_after_the_keyframe_and_is_not_a_game_event()
     {
         var store = new FakeDataStore();
@@ -274,22 +295,26 @@ public sealed class EventSpoolTests
         Assert.Equal(0, seg.Counts.GameEventRows);
     }
 
+    // Task 5 review finding 1: the REAL reader is Plugin.ReadSelfSheetWithCdRatio = ComposeSelfSheet(live attrs,
+    // ratio). 9011960 is a tracked attr, so a naive overlay would hand AddSheetKeyframe a non-empty sheet even
+    // while the framework's attribute map is empty (a scene reset clears it), latch _sheetKeyframeWritten, and
+    // permanently defeat the deferral pinned by A_keyframe_with_no_tracked_attr_is_deferred_then_written_once.
+    // Wired end-to-end here so a future change to either half is caught by the spool, not only by the pure test.
     [Fact]
-    public async Task Any_players_AttrSkillId_write_lands_as_a_cast_row_in_the_dmg_track()
+    public async Task A_composed_reader_with_only_the_derived_ratio_leaves_the_keyframe_pending()
     {
         var store = new FakeDataStore();
-        var spool = new EventSpool(store, null, LiveSheet);
-        spool.Add(Attrs(10, Mate, (100, 2313)), Self);                      // teammate cast
-        spool.Add(Attrs(11, Self, (100, 2310), (11710, 3350)), Self);       // self cast + a sheet delta
-        spool.Add(Attrs(12, Mate, (100, 0)), Self);                         // not a cast
-        spool.Add(Attrs(13, Mate, (101, 2), (11710, 1)), Self);             // stage change / teammate attr: nothing
+        var attrs = new System.Collections.Generic.Dictionary<int, long>();       // framework map still empty
+        var spool = new EventSpool(store, null, () => SheetRowBuilder.ComposeSelfSheet(attrs, 2500));
+        spool.AddSheetKeyframe(5);
+        Assert.True(spool.NeedsSheetKeyframe);                   // the derived value alone is NOT a keyframe
+        attrs[11710] = 3350;                                     // the real sheet finally arrives
+        spool.AddSheetKeyframe(6);
+        Assert.False(spool.NeedsSheetKeyframe);
         var seg = spool.Rotate();
         await seg.Completion;
-        Assert.Equal(2, seg.Dmg.Single().Count);
-        Assert.Equal(2, seg.Sheet.Single().Count);                          // keyframe + the one self delta
-        var json = SpoolCodec.Gunzip(store.Read(seg.Dmg[0].BlobName)!);
-        Assert.StartsWith("[{\"t\":\"skill\",\"ms\":10,\"src\":\"" + Mate.Value + "\",\"skill\":2313,\"phase\":101}", json);
-        Assert.Equal(0, spool.SkippedUnknownEvents);
+        Assert.Equal("[{\"t\":\"sheet\",\"ms\":6,\"k\":1,\"a\":[[11710,3350],[9011960,2500]]}]",
+                     SpoolCodec.Gunzip(store.Read(seg.Sheet[0].BlobName)!));   // … and it carries the ratio
     }
 
     [Fact]

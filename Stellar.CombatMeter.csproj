@@ -35,7 +35,10 @@
          restates the last known ratio so the worker's step function has a value at segment start.
          It is a CAPTURE row: never gated by pause or a toggle, and it never counts toward
          SpoolSegment.HasGameEvents, so it can never decide an archive. No new poll, no framework
-         change. Consumed by logs worker rdpsVersion ≥ 5 (own-baseline bound test, D11). -->
+         change. The ratio is SCENE-SCOPED: cooldown buffs are DeleteChangeScene, so the tracker is
+         reset on the scene change that clears the live buff set, and the next scene's keyframe
+         restates nothing until a real cooldown row states the new truth.
+         Consumed by logs worker rdpsVersion ≥ 5 (own-baseline bound test, D11). -->
     <Version>2.9.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

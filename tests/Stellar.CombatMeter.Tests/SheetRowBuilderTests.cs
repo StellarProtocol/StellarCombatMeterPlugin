@@ -78,4 +78,53 @@ public sealed class SheetRowBuilderTests
         Assert.Null(SheetRowBuilder.Keyframe(5L, new Dictionary<int, long> { [11320] = 1 }));
         Assert.Null(SheetRowBuilder.Keyframe(5L, new Dictionary<int, long>()));
     }
+
+    // Task 5 review finding 1: the keyframe reader composes the live sheet with the derived cooldown ratio, and
+    // 9011960 is itself a TRACKED attr — so an unconditional overlay would make Keyframe() non-null for a sheet
+    // that holds nothing but the plugin's own number, latching EventSpool's once-per-segment keyframe flag while
+    // the framework's attribute map is still empty. ComposeSelfSheet therefore overlays ONLY onto a sheet that
+    // already carries a tracked GAME attr. The four legs below are the whole contract.
+
+    [Fact]
+    public void ComposeSelfSheet_without_a_ratio_returns_the_very_same_instance()
+    {
+        var attrs = new Dictionary<int, long> { [11710] = 3350 };
+        Assert.Same(attrs, SheetRowBuilder.ComposeSelfSheet(attrs, null));
+    }
+
+    [Fact]
+    public void ComposeSelfSheet_overlays_the_ratio_on_a_real_sheet_without_mutating_it()
+    {
+        var attrs = new Dictionary<int, long> { [11710] = 3350, [11320] = 5000 };
+        var composed = SheetRowBuilder.ComposeSelfSheet(attrs, 2500);
+        Assert.NotSame(attrs, composed);
+        Assert.Equal(3, composed.Count);
+        Assert.Equal(3350, composed[11710]);
+        Assert.Equal(5000, composed[11320]);                    // every original entry survives, tracked or not
+        Assert.Equal(2500, composed[CdRatioTracker.AttrId]);
+        Assert.Equal(2, attrs.Count);                           // the framework's own dictionary is untouched
+        Assert.DoesNotContain(CdRatioTracker.AttrId, attrs.Keys);
+    }
+
+    [Fact]
+    public void ComposeSelfSheet_leaves_an_empty_sheet_untouched_so_the_keyframe_stays_deferred()
+    {
+        var attrs = new Dictionary<int, long>();                // e.g. straight after CombatEntityTracker.Reset()
+        var composed = SheetRowBuilder.ComposeSelfSheet(attrs, 2500);
+        Assert.Same(attrs, composed);
+        Assert.Null(SheetRowBuilder.Keyframe(5L, composed));    // → EventSpool leaves the request PENDING
+    }
+
+    [Fact]
+    public void ComposeSelfSheet_leaves_an_untracked_only_sheet_untouched()
+    {
+        var attrs = new Dictionary<int, long> { [11320] = 5000 };
+        var composed = SheetRowBuilder.ComposeSelfSheet(attrs, 2500);
+        Assert.Same(attrs, composed);
+        Assert.Null(SheetRowBuilder.Keyframe(5L, composed));
+        Assert.False(SheetRowBuilder.HasTrackedGameAttr(attrs));
+        Assert.True(SheetRowBuilder.HasTrackedGameAttr(new Dictionary<int, long> { [11710] = 1 }));
+        // The derived id alone is NOT a game attr — that is the whole point of the guard.
+        Assert.False(SheetRowBuilder.HasTrackedGameAttr(new Dictionary<int, long> { [CdRatioTracker.AttrId] = 2500 }));
+    }
 }

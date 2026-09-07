@@ -35,4 +35,15 @@ internal sealed class CdRatioTracker
         Last = candidate;
         return candidate;
     }
+
+    /// <summary>Scene change: drop the per-skill cache AND the scalar. Cooldown buffs are <c>DeleteChangeScene</c>
+    /// (`Lower CD` among them), so a ratio they elevated does NOT survive the scene — and nothing guarantees a
+    /// cooldown row arrives in the next scene to correct it, which would leave the next segment's keyframe restating
+    /// an elevated ratio for a buff that is already gone (a biased fit observation). After this the same rows read as
+    /// fresh again, so the first real observation of the new scene re-states the truth.</summary>
+    internal void Reset()
+    {
+        _seen.Clear();
+        Last = null;
+    }
 }

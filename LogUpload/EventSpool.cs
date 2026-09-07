@@ -53,9 +53,10 @@ internal sealed class EventSpool
     /// <summary>Real <c>CombatEvent</c> rows captured since the last Rotate — the archive-decision signal that
     /// rides the rotated segment as <see cref="SpoolSegment.HasGameEvents"/> (via <see cref="SpoolCounts.GameEventRows"/>).
     /// Incremented ONLY for a converted dmg/skill row (<see cref="Add"/>'s final <c>_dmg.Add(wire)</c> fallthrough)
-    /// or a LIVE <see cref="CombatEvent.BuffChanged"/> row — NEVER for a cast row (<see cref="CastRows"/>) or a
-    /// buff/sheet KEYFRAME row (<see cref="AddBuffKeyframe"/>/<see cref="AddSheetKeyframe"/>), both of which are
-    /// capture-channel rows that must never force an archive/upload (final review C1).</summary>
+    /// or a LIVE <see cref="CombatEvent.BuffChanged"/> row — NEVER for a cast row (<see cref="CastRows"/>), a
+    /// buff/sheet KEYFRAME row (<see cref="AddBuffKeyframe"/>/<see cref="AddSheetKeyframe"/>), or a plugin-DERIVED
+    /// sheet row (<see cref="AddSheetRow"/> — D10's cooldown ratio): all of those are capture-channel rows that must
+    /// never force an archive/upload (final review C1).</summary>
     internal int GameEventRows { get; private set; }
 
     /// <summary>True until this segment has its keyframe. Plugin.SheetCapture's tick asks this once per

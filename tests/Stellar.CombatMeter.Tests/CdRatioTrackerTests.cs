@@ -136,6 +136,26 @@ public sealed class CdRatioTrackerTests
         Assert.Equal(1, tracker.Disagreements);
     }
 
+    // Task 5 review finding 7: cooldown buffs are DeleteChangeScene, so an elevated ratio must NOT survive a scene
+    // change — nothing guarantees a cooldown row arrives in the next scene to correct it, and the next segment's
+    // keyframe would then restate a buff that is already gone (a biased fit observation). Reset drops the scalar
+    // AND the per-skill cache, so the same rows are fresh again and the new scene re-states its own truth.
+    [Fact]
+    public void Reset_drops_the_scalar_and_the_cache_so_the_next_scene_re_observes()
+    {
+        var tracker = new CdRatioTracker();
+        var rows = new List<SkillCooldown> { Row(1, 100, 2500), Row(2, 100, 2500) };
+        Assert.Equal(2500, tracker.Observe(rows));
+        Assert.Null(tracker.Observe(rows));                  // cached → stale
+
+        tracker.Reset();
+        Assert.Null(tracker.Last);                           // nothing to restate into the next scene's keyframe
+
+        var fresh = new List<SkillCooldown>();
+        Assert.Equal(2500, tracker.Observe(rows, fresh));    // the SAME rows are fresh again and re-emit
+        Assert.Equal(2, fresh.Count);
+    }
+
     [Fact]
     public void Fresh_list_receives_only_the_fresh_rows()
     {
