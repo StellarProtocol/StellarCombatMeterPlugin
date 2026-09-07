@@ -24,4 +24,15 @@ public sealed class EventsJsonWriterBuffTests
         Assert.Contains("\"srcOwner\":\"1366688384\"", EventsJsonWriter.Write(new[] { with }));
         Assert.DoesNotContain("srcOwner", EventsJsonWriter.Write(new[] { without }));
     }
+
+    // rDPS phase 2 (spec § 6.1.3): a segment-start keyframe row carries `kf` as the LAST field (after
+    // srcOwner when present); a normal live row carries no `kf` at all.
+    [Fact]
+    public void Buff_row_writes_kf_as_the_last_field_only_when_true()
+    {
+        var kf = new BuffEvent(1_000, "1", 80, 2110034, "applied", 1, 1, 15000, "557120", 0, 2900340, "1366688384", true);
+        var live = new BuffEvent(1_000, "1", 80, 2110034, "applied", 1, 1, 15000, "1366688384", 0, 2900340);
+        Assert.EndsWith("\"kf\":1}]", EventsJsonWriter.Write(new[] { kf }));
+        Assert.DoesNotContain("\"kf\"", EventsJsonWriter.Write(new[] { live }));
+    }
 }

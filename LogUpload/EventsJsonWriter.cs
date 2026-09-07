@@ -43,6 +43,7 @@ internal static class EventsJsonWriter
                     w.Name("layer").Number(b.Layer); w.Name("durMs").Number(b.DurMs);
                     w.Name("src").Str(b.Src); w.Name("srcKind").Number(b.SrcKind); w.Name("srcId").Number(b.SrcId);
                     if (b.SrcOwner is not null) w.Name("srcOwner").Str(b.SrcOwner);
+                    if (b.Kf) w.Name("kf").Number(1);
                     w.EndObject();
                     break;
                 case SheetEvent s:

@@ -282,4 +282,54 @@ public sealed class EventSpoolTests
         Assert.Equal(2, seg.CastRows);
         Assert.Equal(0, spool.CastRows);
     }
+
+    // rDPS phase 2 (spec § 6.1.3): the buffs still LIVE when a segment opens are re-stated as `applied` rows with
+    // `kf`, routed through the SAME send filter as live rows (a teammate's self-proc still lands in buffx).
+    [Fact]
+    public async Task Buff_keyframe_opens_the_next_segment_with_the_buffs_still_live()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Buff(1000, Mate, Self), Self);                 // external on self, dur 5000 → live
+        spool.Add(Buff(1000, Mate, Mate), Self);                 // mate's self-proc → live, but filter-rejected
+        var seg1 = spool.Rotate(); await seg1.Completion;
+        spool.AddBuffKeyframe(3000, Self);
+        var seg2 = spool.Rotate(); await seg2.Completion;
+        Assert.Equal(1, seg2.Buff.Single().Count);
+        Assert.Equal(1, seg2.BuffRejected.Single().Count);
+        var json = SpoolCodec.Gunzip(store.Read(seg2.Buff[0].BlobName)!);
+        Assert.Contains("\"ms\":3000,", json); Assert.Contains("\"kind\":\"applied\"", json);
+        Assert.Contains("\"durMs\":3000", json); Assert.EndsWith("\"kf\":1}]", json);
+    }
+
+    [Fact]
+    public async Task Buff_keyframe_is_written_once_per_segment_and_precedes_the_segments_first_live_row()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Buff(1000, Mate, Self), Self);
+        var seg1 = spool.Rotate(); await seg1.Completion;
+        // No tick: the first live buff row of the new segment triggers the keyframe, snapshotted BEFORE that row.
+        spool.Add(new CombatEvent.BuffChanged(4000, Self, 2, 55302, BuffChangeKind.Applied, 1, 1, 9000, Mate, 0, 2327), Self);
+        Assert.False(spool.NeedsBuffKeyframe);
+        spool.AddBuffKeyframe(4500, Self);                       // second request: no-op
+        var seg2 = spool.Rotate(); await seg2.Completion;
+        Assert.Equal(2, seg2.Buff.Single().Count);               // keyframe (uuid 1) + the live row (uuid 2)
+        var json = SpoolCodec.Gunzip(store.Read(seg2.Buff[0].BlobName)!);
+        Assert.StartsWith("[{\"t\":\"buff\",\"ms\":4000,\"tgt\":\"" + Self.Value + "\",\"uuid\":1,", json);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(json, "\"kf\":1"));
+    }
+
+    [Fact]
+    public async Task ClearLiveBuffs_empties_the_next_keyframe()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Buff(1000, Mate, Self), Self);
+        var seg1 = spool.Rotate(); await seg1.Completion;
+        spool.ClearLiveBuffs();
+        spool.AddBuffKeyframe(3000, Self);
+        var seg2 = spool.Rotate(); await seg2.Completion;
+        Assert.Empty(seg2.Buff); Assert.Empty(seg2.BuffRejected);
+    }
 }

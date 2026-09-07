@@ -428,6 +428,7 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
                     w.Name("kind").Str(b.Kind); w.Name("stacks").Number(b.Stacks);
                     w.Name("layer").Number(b.Layer); w.Name("durMs").Number(b.DurMs);
                     w.Name("src").Str(b.Src); w.Name("srcKind").Number(b.SrcKind); w.Name("srcId").Number(b.SrcId);
+                    if (b.Kf) w.Name("kf").Number(1);
                     w.EndObject();
                     break;
             }

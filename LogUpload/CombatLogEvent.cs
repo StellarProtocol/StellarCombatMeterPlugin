@@ -5,6 +5,7 @@
 // made here does NOT reach Stellar.LogFormat and a stale upstream must not be copied back over it.
 
 using System.Collections.Generic;
+using Stellar.Abstractions.Domain;
 
 namespace Stellar.CombatMeter.LogUpload;
 
@@ -22,7 +23,14 @@ internal sealed record BuffEvent(
     long Ms, string Tgt, int Uuid, int Base,
     string Kind, int Stacks, int Layer, int DurMs,
     string Src, int SrcKind, int SrcId,
-    string? SrcOwner = null) : CombatLogEvent(Ms);   // owner(src) when src is a known player summon (spec § 6.8)
+    string? SrcOwner = null, bool Kf = false) : CombatLogEvent(Ms);
+    // SrcOwner: owner(src) when src is a known player summon (spec § 6.8).
+    // Kf: segment-start keyframe (spec § 6.1.3) — a synthetic applied for a buff already live, DurMs = remaining.
+
+/// <summary>A buff row paired with the RESOLVED entity ids that produced it (not just the wire's string forms),
+/// so <see cref="LiveBuffSet"/> can re-route a keyframed restatement through <see cref="BuffUploadFilter"/>
+/// exactly like a live row (rDPS phase 2, spec § 6.1.3).</summary>
+internal sealed record LiveBuff(BuffEvent Row, EntityId Firer, EntityId Target);
 
 /// <summary>A `sheet` track row (spec § 6.1): the local player's damage-relevant attributes as ABSOLUTE
 /// values — <see cref="Attrs"/> holds [attrId, value] pairs. <see cref="Keyframe"/> marks the one row per

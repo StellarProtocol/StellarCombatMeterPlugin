@@ -30,6 +30,8 @@ internal sealed class EventSpool
     private string _segmentId = NewSegmentId();
     private SpoolTrack _dmg, _buff, _sheet, _buffx;
     private bool _sheetKeyframeWritten;
+    private readonly LiveBuffSet _liveBuffs = new();
+    private bool _buffKeyframeWritten;
 
     internal EventSpool(IPluginDataStore store, SummonOwnerMap? owners = null,
                          Func<IReadOnlyDictionary<int, long>>? readSelfSheet = null, int chunkEvents = EventChunker.ChunkEvents)
@@ -52,6 +54,10 @@ internal sealed class EventSpool
     /// tick.</summary>
     internal bool NeedsSheetKeyframe => !_sheetKeyframeWritten;
 
+    /// <summary>True until this segment has its buff keyframe. Plugin.BuffKeyframe's tick asks this once per
+    /// tick; the first live buff row of a segment also satisfies it (see <see cref="Add"/>).</summary>
+    internal bool NeedsBuffKeyframe => !_buffKeyframeWritten;
+
     /// <summary>Writes the segment's ONE keyframe from the live sheet (no-op after the first, or without a
     /// reader, or when the sheet carries no tracked attr yet — in that last case <see cref="NeedsSheetKeyframe"/>
     /// stays true and a later call retries). <paramref name="ms"/> is in the wire-receive clock domain.
@@ -71,6 +77,20 @@ internal sealed class EventSpool
         _sheet.Add(kf);
         _sheetKeyframeWritten = true;
     }
+
+    /// <summary>Once per segment: re-states every live buff as a `kf` applied row through the send filter. Set the flag
+    /// FIRST — an empty live set is still "keyframe done" for this segment.</summary>
+    internal void AddBuffKeyframe(long ms, EntityId self)
+    {
+        if (_buffKeyframeWritten) return;
+        _buffKeyframeWritten = true;
+        foreach (var live in _liveBuffs.Keyframe(ms)) RouteBuff(live, self);
+    }
+
+    internal void ClearLiveBuffs() => _liveBuffs.Clear();
+
+    private void RouteBuff(LiveBuff live, EntityId self)
+        => (BuffUploadFilter.ShouldUpload(_owners.OwnerOf(live.Firer), live.Target, self) ? _buff : _buffx).Add(live.Row);
 
     internal void Add(CombatEvent evt, EntityId self)
     {
@@ -92,9 +112,10 @@ internal sealed class EventSpool
         if (wire is null) { SkippedUnknownEvents++; return; }
         if (evt is CombatEvent.BuffChanged b)
         {
-            // ROUTE, never drop: the filter picks the uploaded track or the disk-only one. The firer is
-            // resolved to its OWNER first (spec § 6.8) so a player's summon counts as that player.
-            (BuffUploadFilter.ShouldUpload(_owners.OwnerOf(b.FirerId), b.TargetId, self) ? _buff : _buffx).Add(wire);
+            AddBuffKeyframe(b.TimestampMs, self);            // snapshot of what was live BEFORE this change (phase 2)
+            var live = new LiveBuff((BuffEvent)wire, b.FirerId, b.TargetId);
+            _liveBuffs.Apply(live);
+            RouteBuff(live, self);                           // ROUTE, never drop (spec § 6.8 owner resolution inside)
             return;
         }
         _dmg.Add(wire);
@@ -147,6 +168,7 @@ internal sealed class EventSpool
         _sheet = new SpoolTrack(SpoolCodec.TrackSheet, _segmentId, _store, _chunkEvents);
         _buffx = new SpoolTrack(SpoolCodec.TrackBuffRejected, _segmentId, _store, _chunkEvents);
         _sheetKeyframeWritten = false;
+        _buffKeyframeWritten = false;   // the live buff set itself persists across segments — that is the point
         SkippedUnknownEvents = 0;
         CastRows = 0;
     }
