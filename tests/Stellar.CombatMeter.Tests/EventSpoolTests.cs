@@ -233,6 +233,7 @@ public sealed class EventSpoolTests
         var seg = spool.Rotate();
         await seg.Completion;
         Assert.Equal(1, seg.Sheet.Single().Count);
+        Assert.Empty(seg.Dmg); Assert.Empty(seg.Buff);          // sheet-only: no game-event chunk at all (F4)
         Assert.False(seg.HasGameEvents);
     }
 
@@ -368,6 +369,23 @@ public sealed class EventSpoolTests
         Assert.Single(seg2.Buff);                                // the keyframe chunk exists — it still uploads
         Assert.False(seg2.HasGameEvents);                        // but a keyframe alone never gates the archive
         Assert.Equal(0, seg2.Counts.GameEventRows);
+    }
+
+    // F1 (C1 re-review): a LIVE buff row is a real game event whether the send filter admits it (buff) or rejects
+    // it (buffx) — the archive decision follows observation, not the send filter. Deliberately looser than the
+    // retired Dmg.Count + Buff.Count gate; pinned so a "restore the old semantics" refactor cannot flip it silently.
+    [Fact]
+    public async Task A_buffx_only_segment_still_has_game_events()
+    {
+        var store = new FakeDataStore();
+        var spool = new EventSpool(store, null, LiveSheet);
+        spool.Add(Buff(1000, Mate, Mate), Self);                 // mate's self-proc → filter-rejected → buffx
+        var seg = spool.Rotate();
+        await seg.Completion;
+        Assert.Empty(seg.Buff);
+        Assert.Single(seg.BuffRejected);
+        Assert.True(seg.HasGameEvents);
+        Assert.Equal(1, seg.Counts.GameEventRows);
     }
 
     [Fact]

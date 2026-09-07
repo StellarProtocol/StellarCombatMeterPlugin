@@ -9,7 +9,8 @@ internal sealed record SpoolChunkRef(string Track, int Index, long StartMs, long
 
 /// <summary>Per-segment counters carried alongside a rotated segment's chunk refs — folded into one nested record
 /// (was two trailing positional <c>int</c> params directly on <see cref="SpoolSegment"/>'s constructor) so that
-/// constructor stays under the STELLAR0003 parameter gate. <paramref name="WriteFaults"/> is the sum of all four
+/// two adjacent unnamed trailing <c>int</c>s (transposable at every call site) became one named record — no analyzer runs
+/// in this repo, and the 11-param positional constructor is pre-existing debt. <paramref name="WriteFaults"/> is the sum of all four
 /// tracks' <see cref="SpoolTrack.WriteFaults"/> AT ROTATE TIME — writes may still be in flight when a track is
 /// sealed, so this is "faults so far", not a final count; a fault landing after Rotate is still safely swallowed
 /// (never surfaced here), only unseen by this particular number. <paramref name="CastRows"/> is the segment's own
@@ -74,7 +75,13 @@ internal sealed record SpoolSegment(
     /// buff too), so gating on chunk counts instead would make the "No events captured — skipping auto-upload"
     /// retain-only branch in <c>Plugin.LogUpload.AssembleAndUpload</c> unreachable and start UPLOADING the
     /// no-damage tail archives the owner had purged server-side (kill-board P2 ruling 2026-09-02). Owner-visible
-    /// behavior change — keep this the only gate for that branch.</summary>
+    /// behavior change — keep this the only gate for that branch.
+    /// <para>A LIVE buff row counts WHETHER the send filter routes it to <c>buff</c> or <c>buffx</c>: the decision
+    /// follows OBSERVATION, not the send filter (capture doctrine: "policy gates the SEND, never what the plugin
+    /// observes"). This is deliberately looser than the retired <c>Dmg.Count + Buff.Count</c>, under which a segment
+    /// holding only filter-rejected foreign buff churn was retain-only; such a segment now uploads a no-damage
+    /// summary, which the kill board refuses server-side (P2 (a)). Pinned by
+    /// <c>EventSpoolTests.A_buffx_only_segment_still_has_game_events</c> (final review C1 re-review, F1).</para></summary>
     internal bool HasGameEvents => Counts.GameEventRows > 0;
 
     /// <summary>Every chunk this segment put ON DISK, uploadable or not — what the retention container must
