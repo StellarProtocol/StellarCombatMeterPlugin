@@ -18,7 +18,8 @@ public sealed partial class Plugin
 
     /// <summary>One line per fresh-row tick (see <see cref="CdRatioDiagFirstTicks"/>), then one per ratio CHANGE.
     /// This line is how the first testing run settles the accelerate-vs-reduce formula (spec § 6.5), so it prints
-    /// the raw per-row fields, not just the derived scalar.</summary>
+    /// the raw per-row fields — including the two other reduction candidates (<c>SubCdRatio</c>/<c>SubCdFixedMs</c>),
+    /// not just <c>AccelerateCdRatio</c> and the derived scalar.</summary>
     private void LogCdRatio(int? changed, List<SkillCooldown> fresh)
     {
         if (!StellarDiagnostics.IsEnabled) return;
@@ -33,7 +34,9 @@ public sealed partial class Plugin
             sb.Append(" skill=").Append(r.SkillId)
               .Append(" dur=").Append(r.DurationMs)
               .Append(" valid=").Append(r.ValidCdTimeMs)
-              .Append(" accel=").Append(r.AccelerateCdRatio);
+              .Append(" accel=").Append(r.AccelerateCdRatio)
+              .Append(" sub=").Append(r.SubCdRatio)
+              .Append(" subFixed=").Append(r.SubCdFixedMs);
         }
         _services.Log.Info(sb.ToString());
     }

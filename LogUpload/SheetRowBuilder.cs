@@ -8,10 +8,11 @@ namespace Stellar.CombatMeter.LogUpload;
 /// per segment (every tracked attr the live sheet has). Pure.</summary>
 internal static class SheetRowBuilder
 {
-    /// <summary>The 34 `IsSyncMe` attrs the buff fit regresses (FightAttrTable): crit/lucky chance (11710/11780),
-    /// crit/lucky damage (12510/12530), generic/boss damage bonus (12670/12630), element damage bonuses
-    /// (13100–13180), physical/magic attack (11330/11340), element attacks (11500–11580), plus the phase 2b
-    /// plugin-derived local cooldown ratio (<see cref="CdRatioTracker.AttrId"/>).</summary>
+    /// <summary>34 tracked ids total: 33 are game `IsSyncMe` attrs the buff fit regresses (FightAttrTable):
+    /// crit/lucky chance (11710/11780), crit/lucky damage (12510/12530), generic/boss damage bonus (12670/12630),
+    /// element damage bonuses (13100–13180), physical/magic attack (11330/11340), element attacks (11500–11580);
+    /// the 34th, <see cref="CdRatioTracker.AttrId"/> (9011960), is PLUGIN-DERIVED — never a game attribute id, and
+    /// not itself an `IsSyncMe` entry (see <see cref="HasTrackedGameAttr"/>, which excludes it by design).</summary>
     internal static readonly int[] TrackedAttrs =
     {
         11710, 11780, 12510, 12530, 12670, 12630,

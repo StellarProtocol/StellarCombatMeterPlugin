@@ -136,24 +136,31 @@ public sealed class CdRatioTrackerTests
         Assert.Equal(1, tracker.Disagreements);
     }
 
-    // Task 5 review finding 7: cooldown buffs are DeleteChangeScene, so an elevated ratio must NOT survive a scene
-    // change — nothing guarantees a cooldown row arrives in the next scene to correct it, and the next segment's
-    // keyframe would then restate a buff that is already gone (a biased fit observation). Reset drops the scalar
-    // AND the per-skill cache, so the same rows are fresh again and the new scene re-states its own truth.
+    // Final review finding I1: the framework keeps cooldown rows across a scene change (CombatService clears
+    // _localCooldowns only on logout; the getter evicts only EXPIRED rows), so a Reset() that also cleared the
+    // per-skill cache would make every RETAINED row read as fresh again on the very next tick — Observe would then
+    // re-emit the PREVIOUS scene's peak ratio into the new segment (a biased fit observation) and bump
+    // Disagreements. Reset() must forget only the emitted scalar: a scene change forgets the emitted scalar, not
+    // what rows were seen — retained rows are stale, and stale rows never speak. Only a genuinely NEW or CHANGED
+    // cooldown row states the new scene's own truth.
     [Fact]
-    public void Reset_drops_the_scalar_and_the_cache_so_the_next_scene_re_observes()
+    public void Reset_forgets_the_scalar_but_stale_rows_stay_silent()
     {
         var tracker = new CdRatioTracker();
         var rows = new List<SkillCooldown> { Row(1, 100, 2500), Row(2, 100, 2500) };
         Assert.Equal(2500, tracker.Observe(rows));
-        Assert.Null(tracker.Observe(rows));                  // cached → stale
 
         tracker.Reset();
-        Assert.Null(tracker.Last);                           // nothing to restate into the next scene's keyframe
+        Assert.Null(tracker.Last);
 
-        var fresh = new List<SkillCooldown>();
-        Assert.Equal(2500, tracker.Observe(rows, fresh));    // the SAME rows are fresh again and re-emit
-        Assert.Equal(2, fresh.Count);
+        // The SAME retained rows are STALE, not fresh — Reset must not let them restate the old scene's ratio.
+        Assert.Null(tracker.Observe(rows));
+        Assert.Null(tracker.Last);
+        Assert.Equal(0, tracker.Disagreements);
+
+        // A genuinely changed row (skill 1's cooldown begins anew) states the new scene's own truth.
+        var changed = new List<SkillCooldown> { Row(1, 1000, 1000), Row(2, 100, 2500) };
+        Assert.Equal(1000, tracker.Observe(changed));
     }
 
     [Fact]

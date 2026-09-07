@@ -36,14 +36,15 @@ internal sealed class CdRatioTracker
         return candidate;
     }
 
-    /// <summary>Scene change: drop the per-skill cache AND the scalar. Cooldown buffs are <c>DeleteChangeScene</c>
-    /// (`Lower CD` among them), so a ratio they elevated does NOT survive the scene — and nothing guarantees a
-    /// cooldown row arrives in the next scene to correct it, which would leave the next segment's keyframe restating
-    /// an elevated ratio for a buff that is already gone (a biased fit observation). After this the same rows read as
-    /// fresh again, so the first real observation of the new scene re-states the truth.</summary>
+    /// <summary>Scene change: forget the emitted scalar ONLY. The per-skill cache is KEPT — the framework retains
+    /// cooldown rows across a scene change (<c>CombatService</c> clears <c>_localCooldowns</c> only on logout; the
+    /// getter evicts merely EXPIRED rows), so if this cleared <c>_seen</c> too, every retained row would read as
+    /// fresh again on the very next 10 Hz tick and <see cref="Observe"/> would re-emit the PREVIOUS scene's peak
+    /// ratio (e.g. a 120s imagine row latched under a Lower CD buff) into the new segment. A scene change forgets
+    /// the emitted scalar, not what rows were seen — retained rows are stale, and stale rows never speak. Only a
+    /// genuinely NEW or CHANGED cooldown row of the new scene re-states the truth.</summary>
     internal void Reset()
     {
-        _seen.Clear();
         Last = null;
     }
 }
