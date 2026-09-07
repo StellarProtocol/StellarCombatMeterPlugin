@@ -22,8 +22,13 @@
          was silently uploading nothing. (b) the upload header's encounter window is clamped to a
          non-negative duration (LogUpload/CombatLogAssembler.cs's ClampEncounterWindow) — a
          `durMs=0` archive whose EnteredAtMs landed after its own ArchivedAtMs produced a NEGATIVE
-         header.encounter.durationMs that the server rejected outright, failing the whole upload. -->
-    <Version>2.7.3</Version>
+         header.encounter.durationMs that the server rejected outright, failing the whole upload.
+         2.8.0: rDPS phase 2 capture — (a) every player's casts as skill/101 rows off AttrSkillId
+         (attr 100), (b) the sheet track grows 26→33 attrs (cooldown, versatility, haste, mastery,
+         resource), (c) a buff keyframe (kf rows) opens every spool segment. Still testing channel
+         only; requires framework 2.7.0 (no new framework API). Uploads only fully consumed by logs
+         worker rdpsVersion ≥ 3. -->
+    <Version>2.8.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
