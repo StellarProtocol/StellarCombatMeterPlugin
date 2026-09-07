@@ -7,7 +7,9 @@ namespace Stellar.CombatMeter.LogUpload;
 /// spool segment can open with a keyframe of what was already up — a buff applied before the segment's first row
 /// was otherwise invisible to the worker for the whole segment (spec § 3 "segment cuts"). Keyed per (target, uuid).
 /// Bounded at <see cref="MaxEntries"/> (AOI-scale; a full set drops NEW keys, never live ones). Cleared on scene
-/// change by the plugin (the framework clears its own buff cache silently there — no Removed rows arrive).</summary>
+/// change by the plugin (the framework clears its own buff cache silently there — no Removed rows arrive).
+/// Not thread-safe: Apply/Keyframe/Clear are main-thread only — every caller is EventSpool's own main-thread
+/// path.</summary>
 internal sealed class LiveBuffSet
 {
     internal const int MaxEntries = 4096;

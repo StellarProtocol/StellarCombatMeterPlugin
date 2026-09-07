@@ -52,4 +52,35 @@ public sealed class LiveBuffSetTests
         set.Clear();
         Assert.Equal(0, set.Count);
     }
+
+    // Boundary: Ms + DurMs == kfMs exactly (remaining == 0, not negative) is still "run out" — dropped from
+    // the keyframe AND removed from the set, same as a buff that expired strictly before kfMs.
+    [Fact]
+    public void Keyframe_drops_a_buff_whose_remaining_duration_is_exactly_zero()
+    {
+        var set = new LiveBuffSet();
+        set.Apply(Row(1000, "applied", 1, 2_000));         // 1000 + 2000 == kfMs below
+        Assert.Empty(set.Keyframe(3000));
+        Assert.Equal(0, set.Count);
+    }
+
+    // A FULL set (MaxEntries reached) must still let an EXISTING key be updated (a refreshed/applied row
+    // replaces it — the new Ms/DurMs show in the next Keyframe) and removed (a removed row for a present
+    // key drops it, Count decreases) — only NEW keys are refused while full (see Keys_are_per_target_...).
+    [Fact]
+    public void A_full_set_still_lets_an_existing_key_be_updated_and_removed()
+    {
+        var set = new LiveBuffSet();
+        set.Apply(Row(1, "applied", 7, 0, "3"));                              // the key we'll update/remove
+        for (var i = 0; i < LiveBuffSet.MaxEntries - 1; i++) set.Apply(Row(1, "applied", 100 + i, 0, "3"));
+        Assert.Equal(LiveBuffSet.MaxEntries, set.Count);                      // full
+
+        set.Apply(Row(2000, "refreshed", 7, 5_000, "3"));                     // update: refreshed for a PRESENT key
+        Assert.Equal(LiveBuffSet.MaxEntries, set.Count);                      // no growth — same key, not a new one
+        var updated = set.Keyframe(3000).Single(l => l.Row.Uuid == 7).Row;
+        Assert.Equal(3000, updated.Ms); Assert.Equal(4_000, updated.DurMs);
+
+        set.Apply(Row(1, "removed", 7, 0, "3"));                              // remove: present key drops
+        Assert.Equal(LiveBuffSet.MaxEntries - 1, set.Count);
+    }
 }
