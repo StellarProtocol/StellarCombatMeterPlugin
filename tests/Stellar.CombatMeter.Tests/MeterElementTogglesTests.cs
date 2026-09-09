@@ -63,4 +63,53 @@ public class MeterElementTogglesTests
         t.IllusionBreak = false;
         Assert.False(t.Resolve(collapse: false, widthNow: 9999f).IllusionBreak);
     }
+
+    // ----- Bar colour (Appearance → Bars, 2.10.0) -----
+
+    // Owner-visible guarantee: nobody's meter changes until they opt in (design 2026-09-09 § 4).
+    [Fact]
+    public void BarColor_defaults_to_Role_in_every_layout()
+    {
+        Assert.Equal(BarColorMode.Role, MeterElementToggles.Defaults().BarColor);
+        Assert.Equal(BarColorMode.Role, MeterElementToggles.Raid20Defaults().BarColor);
+    }
+
+    [Fact]
+    public void BarColor_round_trips_through_the_config_prefix()
+    {
+        var cfg = new FakeConfigSection();
+        var t = MeterElementToggles.Defaults();
+        t.BarColor = BarColorMode.Class;
+        t.Save(cfg, "list");
+
+        var loaded = MeterElementToggles.Load(cfg, "list", MeterElementToggles.Defaults());
+        Assert.Equal(BarColorMode.Class, loaded.BarColor);
+
+        // Per layout: writing "list" must not tint party20's own setting.
+        var other = MeterElementToggles.Load(cfg, "party20", MeterElementToggles.Raid20Defaults());
+        Assert.Equal(BarColorMode.Role, other.BarColor);
+    }
+
+    // Rollback safety: a config written by ≤ 2.9.1 (or by a build that rolled back and re-saved without
+    // the key) has no "bar.color" at all — that must read as the default, never as Class.
+    [Fact]
+    public void A_config_without_the_key_yields_the_default()
+    {
+        var cfg = new FakeConfigSection();
+        cfg.Set("list.show.rank", true);   // some other key exists, "list.bar.color" does not
+
+        var loaded = MeterElementToggles.Load(cfg, "list", MeterElementToggles.Defaults());
+        Assert.Equal(BarColorMode.Role, loaded.BarColor);
+    }
+
+    [Fact]
+    public void Save_writes_BarColor_as_the_enum_ordinal_under_bar_color()
+    {
+        var cfg = new FakeConfigSection();
+        var t = MeterElementToggles.Defaults();
+        t.BarColor = BarColorMode.Class;
+        t.Save(cfg, "party5");
+
+        Assert.Equal(1, cfg.Get<int>("party5.bar.color", -1));
+    }
 }

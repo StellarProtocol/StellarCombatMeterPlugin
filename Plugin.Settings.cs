@@ -73,6 +73,7 @@ public sealed partial class Plugin
             new SpacerElement(Height: 10f),
             SectionLabel("settings.section.bars"),
             MainBarRow(t),
+            BarColorRow(t),
             VerticalBarRow(t),
             SpineWidthRow(t),
 
@@ -176,6 +177,18 @@ public sealed partial class Plugin
                 Active: () => !t.MainBarIsHp, Width: 72f),
             new ButtonElement(() => _loc.T("common.hp"),  () => { t.MainBarIsHp = true;  PersistToggles(); },
                 Active: () => t.MainBarIsHp,  Width: 72f),
+        }, Gap: 6f);
+
+    // Which hue the player gauges take: the theme's role slots (default) or the game's class crest colour.
+    // Per layout, like every other row here — see ClassPalette / Plugin.GaugeColorFor.
+    private HudElement BarColorRow(MeterElementToggles t)
+        => new RowElement(new HudElement[]
+        {
+            new TextElement(() => _loc.T("settings.bar.barColor"), Width: 80f),
+            new ButtonElement(() => _loc.T("settings.barColor.role"),  () => { t.BarColor = BarColorMode.Role;  PersistToggles(); },
+                Active: () => t.BarColor == BarColorMode.Role,  Width: 72f),
+            new ButtonElement(() => _loc.T("settings.barColor.class"), () => { t.BarColor = BarColorMode.Class; PersistToggles(); },
+                Active: () => t.BarColor == BarColorMode.Class, Width: 72f),
         }, Gap: 6f);
 
     private void PersistToggles()

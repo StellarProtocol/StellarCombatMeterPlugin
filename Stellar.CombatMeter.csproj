@@ -51,7 +51,16 @@
          base (the owner-only staging override) is still honoured untouched; the testing-channel path is
          unchanged (testers keep their dev target). Decision stays the pure
          Plugin.ResolveInitialUploadTarget. -->
-    <Version>2.9.1</Version>
+    <!-- 2.10.0: Appearance → Bars → "Bar colour: Role | Class" (owner 2026-09-09: "combat meter should
+         have an option on appearance to be able to toggle to show role gauge color or class gauge
+         color"). Per layout (list / party5 / party20) under "{prefix}.bar.color"; DEFAULT Role, so no
+         existing install's meter changes until the user opts in. Class paints the player gauges (main
+         bar, the spine when it is in DPS mode, history chart series, archived history rows, skill
+         breakdown bars) with ClassPalette — the game's own class crest colours, byte-identical to the
+         logs site's classColor(). Unknown class → the role colour. The HP spine is untouched.
+         Rollback-safe: a ≤ 2.9.1 build never reads "bar.color" and is unaffected by its presence. No
+         upload, archive, stage or run-identity behaviour is touched — colour only. -->
+    <Version>2.10.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
