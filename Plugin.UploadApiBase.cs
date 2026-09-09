@@ -16,6 +16,14 @@ namespace Stellar.CombatMeter;
 // staying empty/production — production rejects every 2.7.x upload outright (schema predates the
 // buff/sheet flags), so an un-redirected testing build silently uploads nothing. The decision itself is
 // the pure Plugin.ResolveInitialUploadTarget; this file only wires it in before LogUploader.SetApiBase.
+//
+// 2.9.1 (owner 2026-09-09: "make sure combatmeter will point to production logs site"): the mirror rule.
+// The 2.7.3 default above PERSISTS the dev base into config, so an install that ever ran a testing build
+// carries "uploadApiBase = <dev>" forever — and a STABLE build has no Upload-target toggle to undo it
+// with. A stable build therefore CLEARS a configured base that is the testing one (normalised compare:
+// whitespace / letter case / trailing slash tolerant) and uploads to production, logging that it did so.
+// Any OTHER non-empty value is still honoured untouched — that is the owner-only staging override this
+// file exists for. STABLE ⇒ PRODUCTION unless the owner explicitly configured some third base.
 public sealed partial class Plugin
 {
     private const string PrefUploadApiBase = "uploadApiBase";
@@ -29,18 +37,23 @@ public sealed partial class Plugin
     {
         var configured = _prefs.Get(PrefUploadApiBase, "");
 
-        // Testing-channel default-to-dev (owner "yes" 2026-09-06) — BEFORE SetApiBase so a fresh
-        // testing-channel install (or one that has never touched the settings toggle) uploads
-        // somewhere real from its very first archive.
+        // Channel-dependent repair of the configured base (both directions) — BEFORE SetApiBase, so a
+        // fresh testing-channel install uploads somewhere real from its very first archive AND a stable
+        // build never inherits a leftover testing target from a build the user ran earlier.
+        var isTestingBuild = _isTestingBuildGate();
         var (resolvedConfigured, writeDefault) = ResolveInitialUploadTarget(
-            _isTestingBuildGate(), _prefs.Get(PrefUploadTargetChosen, false), configured ?? "");
+            isTestingBuild, _prefs.Get(PrefUploadTargetChosen, false), configured ?? "");
         configured = resolvedConfigured;
         if (writeDefault)
         {
             _prefs.Set(PrefUploadApiBase, configured);
             _prefs.Set(PrefUploadTargetChosen, true);
             _prefs.Save();
-            _services.Log.Info("[CombatMeter] testing-channel build: upload target defaulted to TESTING (dev)");
+            // ResolveInitialUploadTarget only ever asks for a write for ONE reason per channel: apply
+            // the dev default (testing) or clear a leftover one (stable) — see its own doc comment.
+            _services.Log.Info(isTestingBuild
+                ? "[CombatMeter] testing-channel build: upload target defaulted to TESTING (dev)"
+                : "[CombatMeter] stable build: testing upload target found in config — cleared; uploading to production.");
         }
 
         LogUploader.SetApiBase(configured);

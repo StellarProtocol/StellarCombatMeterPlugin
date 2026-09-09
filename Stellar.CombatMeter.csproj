@@ -38,8 +38,20 @@
          change. The ratio is SCENE-SCOPED: cooldown buffs are DeleteChangeScene, so the tracker is
          reset on the scene change that clears the live buff set, and the next scene's keyframe
          restates nothing until a real cooldown row states the new truth.
-         Consumed by logs worker rdpsVersion ≥ 5 (own-baseline bound test, D11). -->
-    <Version>2.9.0</Version>
+         Consumed by logs worker rdpsVersion ≥ 5 (own-baseline bound test, D11).
+         2.9.1: STABLE BUILDS ALWAYS UPLOAD TO PRODUCTION (owner 2026-09-09: "make sure combatmeter
+         will point to production logs site"). Player-language note for the release: "Fixed: a leftover
+         testing-server setting from the testing channel could make a stable build upload to the testing
+         site; stable builds now always upload to the production logs site." Mechanism: the 2.7.3
+         testing default (and the settings toggle) PERSIST the dev base into the "uploadApiBase" pref,
+         so any install that ever ran a 2.7.3+ testing build carried it forever — and a stable build
+         renders no Upload-target toggle to undo it with, so it kept uploading to dev with no way out.
+         A stable build now CLEARS a configured base equal to the testing one (normalised compare:
+         whitespace / case / trailing-slash tolerant) and logs that it did, UNGATED. Any other non-empty
+         base (the owner-only staging override) is still honoured untouched; the testing-channel path is
+         unchanged (testers keep their dev target). Decision stays the pure
+         Plugin.ResolveInitialUploadTarget. -->
+    <Version>2.9.1</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
