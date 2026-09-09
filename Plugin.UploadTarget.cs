@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
+using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
 
@@ -17,6 +18,13 @@ namespace Stellar.CombatMeter;
 // instead of production — so the owner can hand a testing build to a tester who then uploads onto
 // logs.dev.stellarresonance.app without hand-editing config. A stable build renders NOTHING here;
 // the toggle does not exist for normal players.
+//
+// 2.9.1 (owner 2026-09-09: "make sure combatmeter will point to production logs site"): because the
+// toggle (and the 2.7.3 first-run default) PERSIST the dev base into "uploadApiBase", that pref outlives
+// the testing build that wrote it — and a stable build renders no toggle to turn it back off. So the
+// channel gate now cuts BOTH ways: a STABLE build treats a configured testing base as a leftover, clears
+// it, and uploads to production (ResolveInitialUploadTarget / IsTestingApiBase below). Testers on the
+// testing channel are unaffected; the owner's unrelated staging override is left alone.
 //
 // Scope: this toggle only ever writes the EXISTING "uploadApiBase" pref (Plugin.UploadApiBase.cs) —
 // the same one knob that already routes every upload artifact. It never touches LogUploader.ApiBase
@@ -45,6 +53,18 @@ public sealed partial class Plugin
     /// entries). Never throws; never returns null.</summary>
     internal static string ChannelOf(IEnumerable<AssemblyMetadataAttribute> attrs)
         => attrs.FirstOrDefault(a => a.Key == "StellarChannel")?.Value ?? "stable";
+
+    /// <summary>Whether <paramref name="configured"/> names the dev/testing backend
+    /// (<see cref="TestingUploadApiBase"/>), compared through <see cref="LogUploader.NormalizeApiBase"/>
+    /// so the match tolerates surrounding whitespace, letter case and a trailing slash — the same
+    /// normalisation the base itself goes through before any upload URL is built from it. A value the
+    /// normaliser REJECTS (empty, non-https, scheme-only) is never the testing base. Used by
+    /// <see cref="ResolveInitialUploadTarget"/> to recognise a leftover testing target on a stable
+    /// build; deliberately an exact (normalised) match, never a prefix/substring one, so an unrelated
+    /// origin that merely starts with the dev host is left alone.</summary>
+    internal static bool IsTestingApiBase(string? configured)
+        => LogUploader.NormalizeApiBase(configured) is { } v
+            && string.Equals(v, TestingUploadApiBase, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether <paramref name="prefs"/>' "uploadApiBase" pref currently points at
     /// <see cref="TestingUploadApiBase"/>. Free function over <see cref="IConfigSection"/> (mirrors
@@ -85,14 +105,32 @@ public sealed partial class Plugin
     /// an explicit prior OFF sticks</item>
     /// <item>testing + unchosen + non-empty (custom/staging) configured → unchanged, no write — a
     /// hand-edited base is never clobbered by the default</item>
-    /// <item>stable build, any inputs → unchanged, no write — byte-identical to pre-2.7.3 behaviour</item>
+    /// <item>STABLE + configured IS the testing base (2.9.1, owner 2026-09-09 "make sure combatmeter
+    /// will point to production logs site") → CLEARED to "" (production), write — a user who ever ran
+    /// a 2.7.3+ testing build carries that base PERSISTED in config, and a stable build has no
+    /// Upload-target UI to undo it with, so honouring it would send their uploads to dev forever</item>
+    /// <item>stable + any other configured value → unchanged, no write — the owner's free-text staging
+    /// override still works exactly as before</item>
     /// </list>
-    /// Pure and services-free so it is unit-testable without constructing a <see cref="Plugin"/>.</summary>
+    /// Pure and services-free so it is unit-testable without constructing a <see cref="Plugin"/>.
+    /// NOTE for the caller: the two write reasons are discriminated by <paramref name="isTestingBuild"/>
+    /// alone — a testing build only ever writes to APPLY the dev default, a stable build only ever
+    /// writes to CLEAR a leftover one — which is what lets <c>InitUploadApiBase</c> log the right
+    /// line. Any future third write reason must be handed to the caller explicitly.</summary>
     internal static (string configured, bool writeDefault) ResolveInitialUploadTarget(
         bool isTestingBuild, bool chosen, string configured)
-        => isTestingBuild && !chosen && string.IsNullOrWhiteSpace(configured)
-            ? (TestingUploadApiBase, true)
+    {
+        if (isTestingBuild)
+            return !chosen && string.IsNullOrWhiteSpace(configured)
+                ? (TestingUploadApiBase, true)
+                : (configured, false);
+
+        // Stable build: a leftover testing target is cleared (and the clear PERSISTED, so it is a
+        // one-time repair rather than a per-launch override); everything else passes through.
+        return IsTestingApiBase(configured)
+            ? ("", true)
             : (configured, false);
+    }
 
     // Injectable so a test can force the gate without depending on THIS test assembly's own build
     // stamp; defaults to the real build-time gate for production use.

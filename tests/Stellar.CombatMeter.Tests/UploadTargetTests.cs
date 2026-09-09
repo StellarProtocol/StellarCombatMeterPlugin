@@ -12,7 +12,11 @@
 //   4. Plugin.ResolveInitialUploadTarget — the pure decision `InitUploadApiBase` (Plugin.UploadApiBase.cs)
 //      wires at construction: on a TESTING build, when the user has NEVER chosen an upload target
 //      (`uploadTargetChosen` unset) and no custom base is configured, default to the dev server and
-//      write the pref so an explicit OFF sticks across relaunches (owner "yes", 2026-09-06).
+//      write the pref so an explicit OFF sticks across relaunches (owner "yes", 2026-09-06); and, from
+//      2.9.1, the mirror rule — a STABLE build CLEARS a leftover testing base and uploads to production
+//      (owner 2026-09-09: "make sure combatmeter will point to production logs site"), because the
+//      persisted dev pref outlives the testing build that wrote it and stable renders no toggle to
+//      undo it with. Plugin.IsTestingApiBase is the normalised leftover match behind that clear.
 
 using System;
 using System.Collections.Generic;
@@ -173,18 +177,86 @@ public class UploadTargetTests
         Assert.False(writeDefault);
     }
 
+    // Every stable-build input EXCEPT a leftover testing base is passed through byte-identically with
+    // no write — the owner's free-text staging override (Plugin.UploadApiBase.cs) keeps working exactly
+    // as it did pre-2.9.1. The one stable-build case that DOES rewrite the pref is the leftover-testing
+    // clear pinned by ResolveInitialUploadTarget_StableBuild_LeftoverTestingBase_ClearedAndWritten below.
     [Theory]
     [InlineData(false, "")]
     [InlineData(true, "")]
     [InlineData(false, "https://staging.example.com")]
     [InlineData(true, "https://staging.example.com")]
-    public void ResolveInitialUploadTarget_StableBuild_AlwaysByteIdentical_NoWrite(bool chosen, string configured)
+    public void ResolveInitialUploadTarget_StableBuild_NonTestingConfigured_Unchanged_NoWrite(bool chosen, string configured)
     {
         var (resolvedConfigured, writeDefault) = Plugin.ResolveInitialUploadTarget(
             isTestingBuild: false, chosen: chosen, configured: configured);
         Assert.Equal(configured, resolvedConfigured);
         Assert.False(writeDefault);
     }
+
+    // 2.9.1 (owner 2026-09-09: "make sure combatmeter will point to production logs site"). A user who
+    // ran ANY 2.7.3+ TESTING build has `uploadApiBase = <dev>` PERSISTED in config (the testing default
+    // writes it). Moving that install to the STABLE channel used to keep honouring the pref — a stable
+    // build has no Upload-target UI, so their uploads went to dev forever with no switch to fix it.
+    // A stable build must therefore CLEAR a leftover testing base and upload to production.
+    [Theory]
+    [InlineData("https://api.dev.stellarresonance.app")]              // exact
+    [InlineData("https://api.dev.stellarresonance.app/")]             // trailing slash
+    [InlineData("  https://api.dev.stellarresonance.app  ")]          // whitespace-padded
+    [InlineData("https://API.DEV.StellarResonance.app")]              // different case
+    [InlineData("HTTPS://api.dev.stellarresonance.app/")]             // scheme case + trailing slash
+    public void ResolveInitialUploadTarget_StableBuild_LeftoverTestingBase_ClearedAndWritten(string configured)
+    {
+        foreach (var chosen in new[] { false, true })
+        {
+            var (resolvedConfigured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+                isTestingBuild: false, chosen: chosen, configured: configured);
+            Assert.Equal("", resolvedConfigured);          // production = the empty default
+            Assert.True(writeDefault);                     // caller PERSISTS the clear
+        }
+    }
+
+    // Boundary: only the dev backend ITSELF is cleared, never a host that merely starts with it. A
+    // substring match here would silently redirect an unrelated (owner-configured) origin to production.
+    [Theory]
+    [InlineData("https://api.dev.stellarresonance.app.evil.example")]
+    [InlineData("https://api.dev.stellarresonance.appx")]
+    [InlineData("https://api.dev.stellarresonance.app/sub")]
+    public void ResolveInitialUploadTarget_StableBuild_LookalikeBase_Unchanged_NoWrite(string configured)
+    {
+        var (resolvedConfigured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+            isTestingBuild: false, chosen: false, configured: configured);
+        Assert.Equal(configured, resolvedConfigured);
+        Assert.False(writeDefault);
+    }
+
+    // The testing-build path is UNCHANGED by 2.9.1: a tester whose target is already the dev server
+    // keeps it (in either `chosen` state). Clearing is a stable-build-only rule.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ResolveInitialUploadTarget_TestingBuild_TestingBaseConfigured_KeepsIt_NoWrite(bool chosen)
+    {
+        var (configured, writeDefault) = Plugin.ResolveInitialUploadTarget(
+            isTestingBuild: true, chosen: chosen, configured: Plugin.TestingUploadApiBase);
+        Assert.Equal(Plugin.TestingUploadApiBase, configured);
+        Assert.False(writeDefault);
+    }
+
+    // The normaliser-backed predicate behind the clear (trim / case / trailing slash tolerant), pinned
+    // directly so a change to LogUploader.NormalizeApiBase cannot quietly narrow the leftover match.
+    [Theory]
+    [InlineData("https://api.dev.stellarresonance.app", true)]
+    [InlineData("https://api.dev.stellarresonance.app/", true)]
+    [InlineData(" HTTPS://API.DEV.stellarresonance.APP/ ", true)]
+    [InlineData("https://api.stellarresonance.app", false)]
+    [InlineData("https://staging.example.com", false)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData(null, false)]
+    [InlineData("http://api.dev.stellarresonance.app", false)]   // not https → never a valid base at all
+    public void IsTestingApiBase_matches_the_dev_backend_modulo_normalisation(string? configured, bool expected)
+        => Assert.Equal(expected, Plugin.IsTestingApiBase(configured));
 
     // The 5th truth-table cell (CM-273 review, Minor #1): a tester who already picked a custom/staging
     // base AND had previously made an explicit choice — the same "unchanged, no write" outcome as the
