@@ -16,7 +16,7 @@ namespace Stellar.CombatMeter.LogUpload;
 /// Assembles a <see cref="CombatLog"/> from the raw encounter data captured by the plugin.
 /// Called once per run-archive; not on the hot path.
 /// </summary>
-internal sealed class CombatLogAssembler
+internal sealed partial class CombatLogAssembler
 {
     private readonly IPluginServices _services;
 
@@ -30,10 +30,10 @@ internal sealed class CombatLogAssembler
     /// </summary>
     /// <param name="entry">The archived encounter history entry (stats + entity snapshots).</param>
     /// <param name="events">
-    /// Raw combat events flushed from <see cref="CombatEventBuffer"/>. Task 8: no longer embedded
-    /// in the summary blob (which always ships <c>events: []</c>) — retained here only so callers
-    /// keep a single call site; the caller uploads the same list separately via
-    /// <see cref="EventChunker"/> + chunk uploads once this summary has landed.
+    /// Raw combat events. Task 8: no longer embedded in the summary blob (which always ships
+    /// <c>events: []</c>) — retained here only so callers keep a single call site. Since the rDPS
+    /// spool (2026-09-05) every caller passes an EMPTY list: the stream is already chunked into the
+    /// segment's <see cref="EventSpool"/> blobs and uploaded from there once this summary has landed.
     /// </param>
     /// <param name="signerKey">
     /// Base64-PKCS#8 private key, or null/empty to produce an empty placeholder signature
@@ -55,7 +55,8 @@ internal sealed class CombatLogAssembler
         string? signerKey,
         bool truncatedEvents,
         int eventChunks = 0,
-        InstallKey? installKey = null)
+        InstallKey? installKey = null,
+        bool truncatedBuffEvents = false, bool truncatedSheetEvents = false)
     {
         var logId    = GenerateLogId();
         var nowMs    = _services.CombatSnapshot.ServerNowMs;
@@ -81,13 +82,13 @@ internal sealed class CombatLogAssembler
         var bossConfigId = stageBossId != 0 ? stageBossId : ResolveBossConfigId(entry);
         var encounter    = BuildEncounter(entry, bossConfigId, ResolveSceneDisplayName(entry.SceneName), stageBossKilled, bosses, elites);
 
+        WarnIfClamped(entry, _services.Log);
         // --- Uploader ---
         var localEntityId = _services.CombatSnapshot.LocalEntityId;
         var localUid = localEntityId.Value;
         var nonce    = GenerateNonce();
-        // Attach the uploader's CURRENT account master score (from the social snapshot the ID card /
-        // portraits feed populates for self) so the char page updates promptly after a dungeon clear.
-        // 0 when no snapshot yet — the server's >0 guard then leaves the last-known value untouched.
+        // Attach the uploader's CURRENT account master score (from the self social snapshot the ID card / portraits feed
+        // populates) so the char page updates promptly after a clear; 0 when no snapshot yet (server's >0 guard keeps the last value).
         var masterScore = _services.EntityDetail.GetSocialSnapshot(localEntityId)?.Identity.MasterScore ?? 0;
 
         // Build a temporary uploader with empty sig, then compute the real sig over the assembled log.
@@ -122,7 +123,7 @@ internal sealed class CombatLogAssembler
             EventChunks:  eventChunks);
 
         // Plugin-authoritative aggregates (uncapped) ride alongside the (capped) raw event detail track.
-        var derived = DerivedBuilder.Build(entry, truncatedEvents);
+        var derived = DerivedBuilder.Build(entry, truncatedEvents, truncatedBuffEvents, truncatedSheetEvents);
         // Task 8: the summary blob always ships events: [] — the raw stream (if any) uploads
         // separately via sequential chunk POSTs once this summary lands (see ChunkUploader).
         var logUnsigned = new CombatLog(1, header, actors, Array.Empty<CombatLogEvent>(), derived);
@@ -191,6 +192,7 @@ internal sealed class CombatLogAssembler
             _                => "dungeon",
         };
 
+        var (windowEndMs, windowDurationMs, _) = ClampEncounterWindow(entry.EnteredAtMs, entry.ArchivedAtMs);
         return new Encounter(
             Kind:            encounterKind,
             LevelUuid:       entry.LevelUuid,
@@ -207,8 +209,8 @@ internal sealed class CombatLogAssembler
             TotalScore:      entry.TotalScore,
             Result:          entry.Result,
             StartMs:         entry.EnteredAtMs,
-            EndMs:           entry.ArchivedAtMs,
-            DurationMs:      entry.ArchivedAtMs - entry.EnteredAtMs,
+            EndMs:           windowEndMs,
+            DurationMs:      windowDurationMs,
             PassTime:        entry.PassTime,
             DifficultyLevel: entry.DifficultyLevel,
             DungeonStartMs:  entry.DungeonStartMs,
@@ -248,9 +250,8 @@ internal sealed class CombatLogAssembler
         return bossInfo.HasValue ? bossInfo.Value.Id : 0;
     }
 
-    /// <summary>Second signature over the SAME canonical payload as <see cref="ComputeSig"/>, using
-    /// the per-install key. Returns (pubkey SPKI base64, install sig base64); ("","") when no install
-    /// key. Kept separate from ComputeSig so the existing shared-key path is byte-for-byte unchanged.</summary>
+    /// <summary>Second signature over the SAME canonical payload as <see cref="ComputeSig"/>, using the per-install key.
+    /// Returns (pubkey SPKI base64, install sig base64); ("","") when no install key. Separate from ComputeSig so the shared-key path is byte-for-byte unchanged.</summary>
     private static (string PubKey, string InstallSig) ComputeInstallSig(CombatLog log, InstallKey? installKey)
     {
         if (installKey == null) return ("", "");

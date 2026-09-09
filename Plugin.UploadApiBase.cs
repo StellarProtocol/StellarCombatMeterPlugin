@@ -10,6 +10,12 @@ namespace Stellar.CombatMeter;
 // the content-kind fetch all build from — a build must never split its uploads across prod + staging,
 // which corrupts BOTH datasets and is worse than pointing wholly at either. The account claim base is a
 // separate knob ("stellarlogs.claimApiBase", see Plugin.Account) and is NOT affected.
+//
+// 2.7.3 (owner "yes" 2026-09-06): on a TESTING-channel build (Plugin.UploadTarget.cs), when the user has
+// NEVER chosen an upload target, the configured base defaults to the testing (dev) server instead of
+// staying empty/production — production rejects every 2.7.x upload outright (schema predates the
+// buff/sheet flags), so an un-redirected testing build silently uploads nothing. The decision itself is
+// the pure Plugin.ResolveInitialUploadTarget; this file only wires it in before LogUploader.SetApiBase.
 public sealed partial class Plugin
 {
     private const string PrefUploadApiBase = "uploadApiBase";
@@ -22,6 +28,21 @@ public sealed partial class Plugin
     private void InitUploadApiBase()
     {
         var configured = _prefs.Get(PrefUploadApiBase, "");
+
+        // Testing-channel default-to-dev (owner "yes" 2026-09-06) — BEFORE SetApiBase so a fresh
+        // testing-channel install (or one that has never touched the settings toggle) uploads
+        // somewhere real from its very first archive.
+        var (resolvedConfigured, writeDefault) = ResolveInitialUploadTarget(
+            _isTestingBuildGate(), _prefs.Get(PrefUploadTargetChosen, false), configured ?? "");
+        configured = resolvedConfigured;
+        if (writeDefault)
+        {
+            _prefs.Set(PrefUploadApiBase, configured);
+            _prefs.Set(PrefUploadTargetChosen, true);
+            _prefs.Save();
+            _services.Log.Info("[CombatMeter] testing-channel build: upload target defaulted to TESTING (dev)");
+        }
+
         LogUploader.SetApiBase(configured);
 
         if (LogUploader.IsApiBaseOverridden)

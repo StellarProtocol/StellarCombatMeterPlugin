@@ -207,6 +207,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred += OnCombatEvent;
         _services.Framework.Update                 += OnUpdate;
         _services.ClientState.SceneChanged         += OnSceneChanged;
+        _services.ClientState.SceneChanged         += OnSceneChangedClearLiveBuffs;   // rDPS phase 2 live-buff set (Plugin.BuffKeyframe.cs)
         WireSocialCapture();
         // Post-parse live build-state change (framework 2.2.0): the ONE trigger for per-setup
         // capture — gear/module/talent/imagine edits and class swaps alike. Replaces the pre-parse
@@ -306,6 +307,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;
+        _services.ClientState.SceneChanged         -= OnSceneChangedClearLiveBuffs;
         UnwireSocialCapture();
         _services.Loadout.LiveStateChanged         -= OnLoadoutLiveStateChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;

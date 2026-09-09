@@ -136,6 +136,10 @@ public sealed partial class Plugin
             new TextElement(() => _loc.T("settings.section.uploads"), Emphasis: true),
         };
         rows.AddRange(UploadsSection());
+        // Testing-channel-only "upload target" section (Plugin.UploadTarget.cs) — it belongs with the
+        // upload settings, not the Appearance window (owner 2026-09-06). Renders nothing on a stable
+        // build (the ConditionalElement's Else is a zero-height spacer).
+        rows.Add(UploadTargetSection());
         rows.AddRange(DiscordSectionRows());
         // Scroll the whole pane. MEASURED (tools/run-ui-sandbox.sh combatmeter-settings-full-window-ugui):
         // the pane's content still overflows a 620f window even after the dense Uploads rewrite cut ~160px

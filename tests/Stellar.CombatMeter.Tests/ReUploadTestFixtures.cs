@@ -39,6 +39,17 @@ internal static class ReUploadTestFixtures
         return EventChunker.Chunk(events);
     }
 
+    /// <summary>The local player, for spool routing (low16 = 640 → player).</summary>
+    internal static readonly Stellar.Abstractions.Domain.EntityId Self = new(0x0000_0001_0000_0280);
+
+    /// <summary>One raw damage event to feed an <see cref="EventSpool"/>.</summary>
+    internal static Stellar.Abstractions.Domain.CombatEvent Damage(long ms)
+        => new Stellar.Abstractions.Domain.CombatEvent.DamageDealt(
+            ms, Self, new Stellar.Abstractions.Domain.EntityId(0x0000_0009_0000_0040), 5, 100, 100, 0,
+            false, false, false, false,
+            default(Stellar.Abstractions.Domain.DamageElement),
+            default(Stellar.Abstractions.Domain.DamageSourceKind));
+
     /// <summary>A minimal PositionUploadDoc — empty tracks/meta, just the header identity fields.</summary>
     internal static PositionUploadDoc MinimalPositions(long levelUuid) =>
         new PositionUploadDoc(

@@ -1,4 +1,4 @@
-// Tests for the SP1 log-upload components (CombatEventBuffer, EventsJsonWriter,
+// Tests for the SP1 log-upload components (UploadStatusTable, DerivedBuilder, EventsJsonWriter,
 // CombatLogWriter, CanonicalPayload). No IL2CPP or IPluginServices mock needed for these pure-data paths.
 
 using System;
@@ -105,157 +105,12 @@ public sealed class LogUploadTests
     }
 
     // -------------------------------------------------------------------------
-    // CombatEventBuffer
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public void Buffer_AccumulatesEvents()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(new CombatEvent.DamageDealt(1000L, new EntityId(1), new EntityId(2), 99,
-            500, 480, 0, false, false, false, false,
-            DamageElement.Fire, DamageSourceKind.Skill));
-        buf.Add(new CombatEvent.SkillUsed(1001L, new EntityId(1), 99, SkillEventPhase.Begin));
-        Assert.Equal(2, buf.Count);
-    }
-
-    [Fact]
-    public void Buffer_FlushClearsAndReturnsEvents()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(new CombatEvent.SkillUsed(2000L, new EntityId(5), 42, SkillEventPhase.SkillEnd));
-        var flushed = buf.Flush();
-        Assert.Single(flushed);
-        Assert.Equal(0, buf.Count);
-    }
-
-    [Fact]
-    public void Buffer_ConvertsDamageEvent()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(new CombatEvent.DamageDealt(3000L, new EntityId(10), new EntityId(20), 7,
-            1234, 1000, 50, true, false, false, false,
-            DamageElement.Water, DamageSourceKind.Buff));
-        var events = buf.Flush();
-
-        var de = Assert.IsType<DamageEvent>(events[0]);
-        Assert.Equal(3000L, de.Ms);
-        Assert.Equal("10", de.Src);
-        Assert.Equal("20", de.Tgt);
-        Assert.Equal(7, de.Skill);
-        Assert.Equal(1234L, de.Amt);
-        Assert.Equal(1000L, de.Act);
-        Assert.Equal(50L, de.Shield);
-        Assert.True(de.Crit);
-        Assert.False(de.Lucky);
-        Assert.False(de.Heal);
-        Assert.False(de.Dead);
-        Assert.Equal((int)DamageElement.Water, de.Elem);
-        Assert.Equal((int)DamageSourceKind.Buff, de.Kind);
-    }
-
-    [Fact]
-    public void Buffer_ConvertsSkillEvent()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(new CombatEvent.SkillUsed(5000L, new EntityId(3), 88, SkillEventPhase.StageBegin));
-        var events = buf.Flush();
-
-        var se = Assert.IsType<SkillEvent>(events[0]);
-        Assert.Equal(5000L, se.Ms);
-        Assert.Equal("3", se.Src);
-        Assert.Equal(88, se.Skill);
-        Assert.Equal((int)SkillEventPhase.StageBegin, se.Phase);
-    }
-
-    [Fact]
-    public void Buffer_ConvertsBuffEvent()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(new CombatEvent.BuffChanged(6000L, new EntityId(99), 12345, 500,
-            BuffChangeKind.Applied, 2, 0, 30000));
-        var events = buf.Flush();
-
-        var be = Assert.IsType<BuffEvent>(events[0]);
-        Assert.Equal(6000L, be.Ms);
-        Assert.Equal("99", be.Tgt);
-        Assert.Equal(12345, be.Uuid);
-        Assert.Equal(500, be.Base);
-        Assert.Equal("applied", be.Kind);
-        Assert.Equal(2, be.Stacks);
-        Assert.Equal(0, be.Layer);
-        Assert.Equal(30000, be.DurMs);
-    }
-
-    [Fact]
-    public void Buffer_BuffRemovedMapsKindCorrectly()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(new CombatEvent.BuffChanged(7000L, new EntityId(1), 1, 1,
-            BuffChangeKind.Removed, 0, 0, 0));
-        var be = Assert.IsType<BuffEvent>(buf.Flush()[0]);
-        Assert.Equal("removed", be.Kind);
-    }
-
-    [Fact]
-    public void Buffer_BuffRefreshedMapsKindCorrectly()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(new CombatEvent.BuffChanged(8000L, new EntityId(2), 2, 2,
-            BuffChangeKind.Refreshed, 1, 0, 10000));
-        var be = Assert.IsType<BuffEvent>(buf.Flush()[0]);
-        Assert.Equal("refreshed", be.Kind);
-    }
-
-    [Fact]
-    public void Buffer_DamageRingDropsOldestOnOverflow()
-    {
-        // dmg/skill ring caps at MaxDamageEvents; once full, oldest is overwritten (count stays at cap).
-        var buf = new CombatEventBuffer();
-        var totalToAdd = CombatEventBuffer.MaxDamageEvents + 2;
-        for (var i = 0; i < totalToAdd; i++)
-            buf.Add(new CombatEvent.SkillUsed(i, new EntityId((long)i), i, SkillEventPhase.Begin));
-        Assert.Equal(CombatEventBuffer.MaxDamageEvents, buf.Count);
-    }
-
-    private static CombatEvent.BuffChanged MakeBuff(int i) =>
-        new CombatEvent.BuffChanged(i, new EntityId(1), 1, 1, BuffChangeKind.Applied, 1, 0, 1000);
-
-    private static CombatEvent.DamageDealt MakeDamage(int i) =>
-        new CombatEvent.DamageDealt(i, new EntityId(1), new EntityId(2), 99,
-            100, 100, 0, false, false, false, false, DamageElement.Fire, DamageSourceKind.Skill);
-
-    [Fact]
-    public void Buff_volume_does_not_evict_damage_and_does_not_flag_truncation()
-    {
-        var buf = new CombatEventBuffer();
-        // Flood buffs past their cap, plus a modest number of damage events under the dmg cap.
-        for (int i = 0; i < CombatEventBuffer.MaxBuffEvents + 50_000; i++) buf.Add(MakeBuff(i));
-        for (int i = 0; i < 1000; i++) buf.Add(MakeDamage(i));
-        var events = buf.Flush();
-        Assert.Equal(1000, events.Count(e => e is DamageEvent));  // all damage retained despite buff flood
-        Assert.False(buf.Truncated);                              // buff overflow is NOT flagged (nothing renders buffs)
-    }
-
-    [Fact]
-    public void Damage_overflow_flags_truncation()
-    {
-        var buf = new CombatEventBuffer();
-        for (int i = 0; i < CombatEventBuffer.MaxDamageEvents + 100; i++) buf.Add(MakeDamage(i));
-        Assert.True(buf.Truncated);                               // dmg/skill forensic ring overflowed
-    }
-
-    [Fact]
-    public void Flush_merges_rings_in_chronological_order()
-    {
-        var buf = new CombatEventBuffer();
-        buf.Add(MakeDamage(5000));
-        buf.Add(MakeBuff(1000));
-        buf.Add(MakeDamage(3000));
-        var events = buf.Flush();
-        Assert.Equal(new long[] { 1000, 3000, 5000 }, events.Select(e => e.Ms).ToArray());
-    }
-
+    // The event-ring test block that used to live here died with the ring (rDPS spool, 2026-09-05).
+    // Its behaviours moved, not vanished: the per-field CONVERSION pins are now
+    // CombatLogEventConverterTests (moved verbatim); accumulate/flush and the two-track split are
+    // EventSpoolTests; the honest per-track cap that replaced the silent oldest-overwrite ring is
+    // SpoolTrackTests.Exceeding_max_chunks_drops_and_flags. The rings' chronological MERGE has no
+    // successor by design — dmg and buff now upload as separate tracks to separate endpoints.
     // -------------------------------------------------------------------------
     // DerivedBuilder (B3): aggregates derived from the meter's uncapped stats/series/deaths.
     // -------------------------------------------------------------------------
@@ -379,6 +234,100 @@ public sealed class LogUploadTests
         Assert.Equal(1000, enc.StartMs);
         Assert.Equal(349535, enc.EndMs);
         Assert.Equal(348535, enc.DurationMs);     // EndMs - StartMs
+    }
+
+    // -------------------------------------------------------------------------
+    // Header window clamp (owner "do 1", 2026-09-06) — the zero-duration double-bank tail: a
+    // `reason=boss durMs=0` archive whose EnteredAtMs came from the NEXT segment's first hit can
+    // land AFTER its own ArchivedAtMs. Uncapped that produces header.encounter.durationMs < 0, which
+    // the server rejects outright (400 must be >= 0), failing the WHOLE upload with no retry path.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ClampEncounterWindow_NormalCase_PassesThroughUnchanged()
+    {
+        var (endMs, durationMs, clamped) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 349535);
+        Assert.Equal(349535, endMs);
+        Assert.Equal(348535, durationMs);
+        Assert.False(clamped);
+    }
+
+    [Fact]
+    public void ClampEncounterWindow_EnterAfterArchive_ClampsToZeroDurationPoint()
+    {
+        // The exact observed shape: ArchivedAtMs (rawEndMs) precedes EnteredAtMs (startMs).
+        var (endMs, durationMs, clamped) = CombatLogAssembler.ClampEncounterWindow(startMs: 500_087, rawEndMs: 500_000);
+        Assert.Equal(500_087, endMs);       // pulled UP to start — a point, never inverted
+        Assert.Equal(0, durationMs);
+        Assert.True(clamped);
+    }
+
+    [Fact]
+    public void ClampEncounterWindow_EqualBounds_ZeroDuration_NotClamped()
+    {
+        // Boundary case: start == end is already a valid (zero-length) window — not the defect shape.
+        var (endMs, durationMs, clamped) = CombatLogAssembler.ClampEncounterWindow(startMs: 1000, rawEndMs: 1000);
+        Assert.Equal(1000, endMs);
+        Assert.Equal(0, durationMs);
+        Assert.False(clamped);
+    }
+
+    [Fact]
+    public void BuildEncounter_EnterAfterArchive_ClampsDurationToZero_EndPulledUpToStart()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 500_087, ArchivedAtMs = 500_000,   // enter > arch (the defect shape)
+            LevelUuid = 42, Result = "kill",
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        Assert.Equal(500_087, enc.StartMs);
+        Assert.Equal(500_087, enc.EndMs);      // == StartMs — a point, never inverted
+        Assert.Equal(0, enc.DurationMs);        // never negative
+    }
+
+    // The assembled header must actually VALIDATE (never a negative durationMs, never endMs < startMs)
+    // once it round-trips through the writer, in both shapes.
+    [Fact]
+    public void Writer_EnterAfterArchive_EmitsNonNegativeDurationAndEndEqualsStart()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 500_087, ArchivedAtMs = 500_000,
+            LevelUuid = 42, Result = "kill",
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        var hdr = new LogHeader("cm-clamp", 500_100L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains("\"startMs\":500087", json);
+        Assert.Contains("\"endMs\":500087", json);
+        Assert.Contains("\"durationMs\":0", json);
+        Assert.DoesNotContain("\"durationMs\":-", json);
+    }
+
+    // The normal (non-defect) case is unchanged by the clamp — pinned separately from
+    // BuildEncounter_uses_entry_identity_not_live_state so a future regression in ClampEncounterWindow
+    // shows up at the writer boundary too.
+    [Fact]
+    public void Writer_NormalCase_DurationMsUnchangedByClamp()
+    {
+        var entry = new Plugin.EncounterHistoryEntry
+        {
+            SceneName = "7151", EnteredAtMs = 1000, ArchivedAtMs = 349535,
+            LevelUuid = 42, Result = "kill",
+        };
+        var enc = CombatLogAssembler.BuildEncounter(entry);
+        var hdr = new LogHeader("cm-noclamp", 349_600L, "2.11", "SEA", "1.9.0", "1.1.0", "unlisted",
+            enc, new Uploader(42L, "sig", "nonce"));
+        var log = new CombatLog(1, hdr, new Dictionary<string, Actor>(), Array.Empty<CombatLogEvent>());
+        var json = CombatLogWriter.Write(log);
+
+        Assert.Contains("\"startMs\":1000", json);
+        Assert.Contains("\"endMs\":349535", json);
+        Assert.Contains("\"durationMs\":348535", json);
     }
 
     // The archived entry's DungeonStartMs (snapshotted from IDungeonState.RunTimerStartMs at
@@ -607,7 +556,7 @@ public sealed class LogUploadTests
         {
             new SkillEvent(100L, "1", 10, 101),
             new DamageEvent(200L, "1", "2", 10, 500, 490, 0, true, false, false, false, 1, 0, 0),
-            new BuffEvent(300L, "2", 999, 5, "applied", 1, 0, 5000),
+            new BuffEvent(300L, "2", 999, 5, "applied", 1, 0, 5000, "0", 0, 0),
         };
 
         var eventsJson = EventsJsonWriter.Write(events);

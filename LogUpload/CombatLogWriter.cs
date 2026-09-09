@@ -29,6 +29,7 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
         w.BeginObject();
         w.Name("combatDurationMs").Number(d.CombatDurationMs);
         w.Name("truncatedEvents").Bool(d.TruncatedEvents);
+        WriteTrackFlags(w, d);
         w.Name("perActor"); WriteActorAggs(w, d.PerActor);
         w.Name("perActorSkills"); WriteSkillMap(w, d.PerActorSkills);
         w.Name("perActorHealSkills"); WriteSkillMap(w, d.PerActorHealSkills);
@@ -426,6 +427,8 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
                     w.Name("tgt").Str(b.Tgt); w.Name("uuid").Number(b.Uuid); w.Name("base").Number(b.Base);
                     w.Name("kind").Str(b.Kind); w.Name("stacks").Number(b.Stacks);
                     w.Name("layer").Number(b.Layer); w.Name("durMs").Number(b.DurMs);
+                    w.Name("src").Str(b.Src); w.Name("srcKind").Number(b.SrcKind); w.Name("srcId").Number(b.SrcId);
+                    if (b.Kf) w.Name("kf").Number(1);
                     w.EndObject();
                     break;
             }

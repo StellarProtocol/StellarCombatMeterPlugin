@@ -41,6 +41,18 @@ internal static class EventsJsonWriter
                     w.Name("tgt").Str(b.Tgt); w.Name("uuid").Number(b.Uuid); w.Name("base").Number(b.Base);
                     w.Name("kind").Str(b.Kind); w.Name("stacks").Number(b.Stacks);
                     w.Name("layer").Number(b.Layer); w.Name("durMs").Number(b.DurMs);
+                    w.Name("src").Str(b.Src); w.Name("srcKind").Number(b.SrcKind); w.Name("srcId").Number(b.SrcId);
+                    if (b.SrcOwner is not null) w.Name("srcOwner").Str(b.SrcOwner);
+                    if (b.Kf) w.Name("kf").Number(1);
+                    w.EndObject();
+                    break;
+                case SheetEvent s:
+                    w.BeginObject();
+                    w.Name("t").Str("sheet"); w.Name("ms").Number(s.Ms);
+                    if (s.Keyframe) w.Name("k").Number(1);
+                    w.Name("a"); w.BeginArray();
+                    foreach (var pair in s.Attrs) { w.BeginArray(); w.Number(pair[0]); w.Number(pair[1]); w.EndArray(); }
+                    w.EndArray();
                     w.EndObject();
                     break;
             }

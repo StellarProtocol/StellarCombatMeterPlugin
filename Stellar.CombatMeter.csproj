@@ -9,26 +9,60 @@
     <NoWarn>CS8632;CS8765</NoWarn>
     <RootNamespace>Stellar.CombatMeter</RootNamespace>
     <AssemblyName>Stellar.CombatMeter</AssemblyName>
-    <!-- 2.5.1, not 2.5.0: the registry already publishes 2.5.0, and published versions are immutable.
-         Uploads stamp pluginVer from THIS assembly version (LogUpload/CombatLogAssembler.cs:105), so
-         the owner's raid-test build of the run-split fix must be distinguishable from the published
-         2.5.0 in upload headers. -->
-    <Version>2.5.1</Version>
+    <!-- 2.7.0: rDPS P2 — the `sheet` track (the local player's damage-relevant attributes, spec § 6.1) on
+         top of P1's event spool + buff track. Requires framework 2.7.0 (Abstractions 2.7.0); released
+         lock-step with it. MUST NOT stay 2.6.0: the owner's MAIN client already runs a P1 build stamped
+         2.6.0 and header.pluginVer is what tells the two apart server-side.
+         2.7.1: testing-channel-only "upload target" setting (owner 2026-09-06) — a build stamped with
+         StellarChannel=testing (below) exposes a settings toggle pointing this install's uploads at the
+         dev/testing server; a plain build (StellarChannel unset → "stable") renders nothing for it.
+         2.7.3: (a) a TESTING build now DEFAULTS its upload target to the testing server the first time
+         it runs (until the user explicitly chooses otherwise via the settings toggle — owner "yes"
+         2026-09-06); production rejects every 2.7.x upload outright, so an un-redirected testing build
+         was silently uploading nothing. (b) the upload header's encounter window is clamped to a
+         non-negative duration (LogUpload/CombatLogAssembler.cs's ClampEncounterWindow) — a
+         `durMs=0` archive whose EnteredAtMs landed after its own ArchivedAtMs produced a NEGATIVE
+         header.encounter.durationMs that the server rejected outright, failing the whole upload.
+         2.8.0: rDPS phase 2 capture — (a) every player's casts as skill/101 rows off AttrSkillId
+         (attr 100), (b) the sheet track grows 26→33 attrs (cooldown, versatility, haste, mastery,
+         resource), (c) a buff keyframe (kf rows) opens every spool segment. Still testing channel
+         only; requires framework 2.7.0 (no new framework API). Uploads only fully consumed by logs
+         worker rdpsVersion ≥ 3. The archive decision now gates on real game events
+         (SpoolSegment.HasGameEvents), never on cast or keyframe rows (final review C1).
+         2.9.0: rDPS phase 2b (D10) — the local player's per-skill cooldown ratio is captured off the
+         existing ~10 Hz LocalCooldowns snapshot (CdRatioTracker) and spooled as a DERIVED sheet row
+         under the synthetic attribute id 9011960 (sheet track 33→34 attrs); every segment keyframe
+         restates the last known ratio so the worker's step function has a value at segment start.
+         It is a CAPTURE row: never gated by pause or a toggle, and it never counts toward
+         SpoolSegment.HasGameEvents, so it can never decide an archive. No new poll, no framework
+         change. The ratio is SCENE-SCOPED: cooldown buffs are DeleteChangeScene, so the tracker is
+         reset on the scene change that clears the live buff set, and the next scene's keyframe
+         restates nothing until a real cooldown row states the new truth.
+         Consumed by logs worker rdpsVersion ≥ 5 (own-baseline bound test, D11). -->
+    <Version>2.9.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
+         channel target). Unset (plain `dotnet build` — CI's default lane, local builds) = "stable".
+         Read at runtime via AssemblyMetadataAttribute (Plugin.UploadTarget.cs); gates a settings-only
+         UI surface, never upload/capture behaviour itself. -->
+    <StellarChannel Condition="'$(StellarChannel)' == ''">stable</StellarChannel>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Requires framework 2.5.0: IPluginServices.RunTimer / IRunTimer.Epoch (run-identity latch
-         epoch — raid run-split fix, spec 2026-08-26). 2.5.0 is NOT yet published: this repo's
+    <AssemblyMetadata Include="StellarChannel" Value="$(StellarChannel)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Requires framework 2.7.0: CombatEvent.BuffChanged.FirerId/SourceKind/SourceId (rDPS capture,
+         spec 2026-09-05). 2.7.0 is NOT yet published: this repo's
          committed NuGet.config <clear/>s sources down to nuget.org only, so local builds actually
-         resolve 2.5.0 from the global NuGet package cache (~/.nuget/packages/stellar.abstractions/
-         2.5.0), seeded there by an earlier `dotnet restore -s nuget.org -s .localfeed` against the
+         resolve 2.7.0 from the global NuGet package cache (~/.nuget/packages/stellar.abstractions/
+         2.7.0), seeded there by an earlier `dotnet restore -s nuget.org -s .localfeed` against the
          devkit's local pack (dotnet pack of Stellar.Abstractions) — NOT from a committed local-feed
-         source. Purge that cached unpublished 2.5.0 before any post-publish verification build, or
+         source. Purge that cached unpublished 2.7.0 before any post-publish verification build, or
          a stale local pack will silently shadow the real published package. Plugin CI stays red
-         until the framework 2.5.0 release publishes. The registry manifest's minModSystemVersion
+         until the framework 2.7.0 release publishes. The registry manifest's minModSystemVersion
          must be raised to match at release. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.5.0" />
+    <PackageReference Include="Stellar.Abstractions" Version="2.7.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws

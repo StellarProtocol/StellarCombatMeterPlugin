@@ -14,7 +14,8 @@ public class ReUploadContainerTests
             Summary: "{\"header\":{\"logId\":\"cm-20260721-abcd\"},\"events\":[]}",
             Chunks: new[] { "{\"logId\":\"cm-20260721-abcd\",\"index\":0,\"events\":[1,2,3]}",
                             "{\"logId\":\"cm-20260721-abcd\",\"index\":1,\"events\":[4,5]}" },
-            Positions: "{\"hz\":2,\"mapId\":4201,\"tracks\":{}}");
+            Positions: "{\"hz\":2,\"mapId\":4201,\"tracks\":{}}",
+            ChunkRefs: new SpoolChunkRef[0]);
 
         var bytes = ReUploadContainer.Serialize(payload);
         Assert.True(ReUploadContainer.TryDeserialize(bytes, out var back));
@@ -32,11 +33,75 @@ public class ReUploadContainerTests
     public void Null_positions_and_empty_chunks_roundtrip()
     {
         var payload = new ReUploadPayload(1, "jp", 9L, "cm-x", "{\"a\":1}",
-            new string[0], null);
+            new string[0], null, new SpoolChunkRef[0]);
         var bytes = ReUploadContainer.Serialize(payload);
         Assert.True(ReUploadContainer.TryDeserialize(bytes, out var back));
         Assert.Empty(back.Chunks);
         Assert.Null(back.Positions);
+    }
+
+    // V2 (rDPS spool, 2026-09-05): the container stores chunk REFS (pointers to the spool blobs the
+    // events already live in) instead of inlined envelope strings. V1 containers written by an older
+    // build still read — their `chunks` envelopes stay the re-upload source for those runs.
+    [Fact]
+    public void V2_round_trips_chunk_refs_and_reads_V1()
+    {
+        var refs = new[] { new SpoolChunkRef("dmg", 0, 1, 2, 3, "spool/s-dmg-000.gz"), new SpoolChunkRef("buff", 0, 1, 2, 1, "spool/s-buff-000.gz") };
+        var p = new ReUploadPayload(ReUploadContainer.Version, "sea", 7, "log-1", "{\"v\":1}", new string[0], null, refs);
+        var bytes = ReUploadContainer.Serialize(p);
+        Assert.True(ReUploadContainer.TryDeserialize(bytes, out var back));
+        Assert.Equal(2, back.ChunkRefs.Count);
+        Assert.Equal("spool/s-buff-000.gz", back.ChunkRefs[1].BlobName);
+        Assert.Equal(new[] { "spool/s-dmg-000.gz", "spool/s-buff-000.gz" }, ReUploadContainer.ReferencedBlobs(bytes));
+
+        var v1 = new ReUploadPayload(1, "sea", 7, "log-1", "{}", new[] { "{\"index\":0}" }, null, new SpoolChunkRef[0]);
+        Assert.True(ReUploadContainer.TryDeserialize(ReUploadContainer.Serialize(v1), out var v1back));
+        Assert.Single(v1back.Chunks); Assert.Empty(v1back.ChunkRefs);
+    }
+
+    // ReferencedBlobs decides what the startup sweep DELETES, so it must never under-report. It reads a
+    // bounded head of the container (chunkRefs is serialized first) — these two pin that the bodies being
+    // far larger than that head changes neither answer: a V2 container still yields ALL its refs, and a
+    // V1 container (no refs key at all, bodies way past the head) still yields none rather than failing.
+    [Fact]
+    public void ReferencedBlobs_is_head_read_and_survives_bodies_larger_than_the_head()
+    {
+        var huge = new string('x', 400_000);
+        var refs = new[] { new SpoolChunkRef("dmg", 0, 1, 2, 3, "spool/s-dmg-000.gz"), new SpoolChunkRef("buff", 1, 3, 4, 2, "spool/s-buff-001.gz") };
+        var v2 = ReUploadContainer.Serialize(new ReUploadPayload(ReUploadContainer.Version, "sea", 7, "log-1", huge, new string[0], huge, refs));
+        Assert.Equal(new[] { "spool/s-dmg-000.gz", "spool/s-buff-001.gz" }, ReUploadContainer.ReferencedBlobs(v2));
+        Assert.True(ReUploadContainer.TryDeserialize(v2, out var back));
+        Assert.Equal(huge, back.Summary);   // the full read still sees the whole body
+
+        var v1 = ReUploadContainer.Serialize(new ReUploadPayload(1, "sea", 7, "log-1", huge, new[] { "{\"index\":0}" }, huge, new SpoolChunkRef[0]));
+        Assert.Empty(ReUploadContainer.ReferencedBlobs(v1));
+    }
+
+    // The other side of the head read: a ref list that does NOT fit the bounded head. The head parse
+    // then dies mid-array, and the ONLY safe answer is the full read — a PARTIAL list would make the
+    // startup sweep delete blobs a live container still references (permanent event loss).
+    [Fact]
+    public void ReferencedBlobs_falls_back_to_the_full_read_when_the_refs_exceed_the_head()
+    {
+        const int n = 700;
+        var refs = new SpoolChunkRef[n];
+        var expected = new string[n];
+        for (var i = 0; i < n; i++)
+        {
+            // Long names on purpose: n × ~140 B of ref JSON is comfortably past RefsHeadBytes (64 KB).
+            expected[i] = $"spool/1757030000000-000000000000000000000042-dmg-{i:D4}.gz";
+            refs[i] = new SpoolChunkRef("dmg", i, 1000 + i, 2000 + i, 4000, expected[i]);
+        }
+        var bytes = ReUploadContainer.Serialize(new ReUploadPayload(
+            ReUploadContainer.Version, "sea", 7, "log-1", "{\"s\":1}", new string[0], null, refs));
+
+        Assert.Equal(expected, ReUploadContainer.ReferencedBlobs(bytes));
+    }
+
+    [Fact]
+    public void ReferencedBlobs_of_garbage_is_empty_never_throws()
+    {
+        Assert.Empty(ReUploadContainer.ReferencedBlobs(new byte[] { 0, 1, 2, 3 }));
     }
 
     [Fact]

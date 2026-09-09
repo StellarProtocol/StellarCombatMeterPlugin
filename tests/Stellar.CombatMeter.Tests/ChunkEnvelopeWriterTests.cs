@@ -58,6 +58,22 @@ public sealed class ChunkEnvelopeWriterTests
         Assert.Equal("https://x/run/jp/42/events", ChunkUploader.BuildUrl("https://x", "jp", 42));
     }
 
+    // -------------------------------------------------------------------------
+    // rDPS spool (2026-09-05): the envelope is now built from a SpoolChunkRef + the blob's raw
+    // events JSON (the chunk's events never re-enter memory as CombatLogEvent objects), and the
+    // buff track posts to its OWN endpoint.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void Envelope_from_ref_carries_total_and_raw_events()
+    {
+        var r = new SpoolChunkRef("buff", 2, 10, 20, 1, "spool/s-buff-002.gz");
+        var json = ChunkUploader.BuildEnvelope("log-1", r, total: 3, eventsJson: "[{\"t\":\"buff\"}]");
+        Assert.Contains("\"index\":2", json); Assert.Contains("\"total\":3", json); Assert.Contains("\"count\":1", json);
+        Assert.Contains("\"events\":[{\"t\":\"buff\"}]", json);
+        Assert.Equal("https://x/run/sea/7/buff-events", ChunkUploader.BuildBuffUrl("https://x", "sea", 7));
+    }
+
     // Pulls the raw `events` array substring out of the envelope so it can be compared
     // byte-for-byte against a standalone EventsJsonWriter.Write call.
     private static string ExtractEventsArray(string envelopeJson)
