@@ -51,7 +51,26 @@
          base (the owner-only staging override) is still honoured untouched; the testing-channel path is
          unchanged (testers keep their dev target). Decision stays the pure
          Plugin.ResolveInitialUploadTarget. -->
-    <Version>2.9.1</Version>
+    <!-- 2.10.0: Appearance → Bars → "Bar colour: Role | Class" (owner 2026-09-09: "combat meter should
+         have an option on appearance to be able to toggle to show role gauge color or class gauge
+         color"). Per layout (list / party5 / party20) under "{prefix}.bar.color"; DEFAULT Role, so no
+         existing install's meter changes until the user opts in. Class paints the player gauges (main
+         bar, the spine when it is in DPS mode, history chart series, archived history rows, skill
+         breakdown bars) with ClassPalette — the game's own class crest colours, byte-identical to the
+         logs site's classColor(). Unknown class → the role colour. The HP spine is untouched.
+         Rollback-safe: a ≤ 2.9.1 build never reads "bar.color" and is unaffected by its presence. No
+         upload, archive, stage or run-identity behaviour is touched — colour only.
+         Appearance → Bars → "Value text: Plain | Outline | Shadow" (owner 2026-09-09: "it should be
+         option for players 1. normal text, outline, smooth shadow") — controls how the per-second/total
+         values drawn ON a row's bar stay readable over the fill, via the new MeterRowData.LabelStyle
+         (framework 2.8.0, Stellar.Abstractions.Services.MeterLabelStyle). Per layout under
+         "{prefix}.bar.labelStyle"; DEFAULT Plain (today's white text), so no existing install's meter
+         changes until the user opts in, and a ≤ 2.10.0-pre build never reads "bar.labelStyle" and is
+         unaffected by its presence. Requires framework 2.8.0 (Abstractions 2.8.0) — see the
+         PackageReference note below for the local-feed situation; the version there must be flipped to
+         2.8.0 once the framework release publishes, and the registry manifest's minimum framework
+         becomes 2.8.0 at that point too. -->
+    <Version>2.10.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
@@ -73,8 +92,14 @@
          source. Purge that cached unpublished 2.7.0 before any post-publish verification build, or
          a stale local pack will silently shadow the real published package. Plugin CI stays red
          until the framework 2.7.0 release publishes. The registry manifest's minModSystemVersion
-         must be raised to match at release. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.7.0" />
+         must be raised to match at release.
+         2.8.0-dev bump (2.10.0 feature, "Value text" appearance option): requires framework 2.8.0's
+         MeterRowData.LabelStyle, also NOT yet published — resolved here against the devkit's local pack
+         at .localfeed/Stellar.Abstractions.2.8.0-dev.nupkg (restore with both the local feed AND
+         nuget.org as sources, since the committed NuGet.config sources nuget.org only). MUST be flipped
+         from "2.8.0-dev" to plain "2.8.0" once the framework 2.8.0 release publishes; the registry
+         manifest's minimum framework must be raised to 2.8.0 at that same release. -->
+    <PackageReference Include="Stellar.Abstractions" Version="2.8.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws

@@ -510,7 +510,7 @@ public sealed partial class Plugin : IStellarPlugin
         _mainWindow.SetRect(new WindowRect(r.X, r.Y, r.Width, PartyFocusHeight()));
     }
 
-    // ----- shared identity / colour helpers (ColorRgba — fed to MeterRowData) -----
+    // ----- shared identity / colour helpers (ColorRgba — fed to MeterRowData; gauges: Plugin.GaugeColor.cs) -----
 
     private ColorRgba RoleColorFor(EntityId id)
         => (RoleClassifier.Classify(ResolveProfessionId(id)) switch

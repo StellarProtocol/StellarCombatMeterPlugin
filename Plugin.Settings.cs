@@ -73,6 +73,8 @@ public sealed partial class Plugin
             new SpacerElement(Height: 10f),
             SectionLabel("settings.section.bars"),
             MainBarRow(t),
+            BarColorRow(t),
+            BarLabelStyleRow(t),
             VerticalBarRow(t),
             SpineWidthRow(t),
 
@@ -176,6 +178,33 @@ public sealed partial class Plugin
                 Active: () => !t.MainBarIsHp, Width: 72f),
             new ButtonElement(() => _loc.T("common.hp"),  () => { t.MainBarIsHp = true;  PersistToggles(); },
                 Active: () => t.MainBarIsHp,  Width: 72f),
+        }, Gap: 6f);
+
+    // Which hue the player gauges take: the theme's role slots (default) or the game's class crest colour.
+    // Per layout, like every other row here — see ClassPalette / Plugin.GaugeColorFor.
+    private HudElement BarColorRow(MeterElementToggles t)
+        => new RowElement(new HudElement[]
+        {
+            new TextElement(() => _loc.T("settings.bar.barColor"), Width: 80f),
+            new ButtonElement(() => _loc.T("settings.barColor.role"),  () => { t.BarColor = BarColorMode.Role;  PersistToggles(); },
+                Active: () => t.BarColor == BarColorMode.Role,  Width: 72f),
+            new ButtonElement(() => _loc.T("settings.barColor.class"), () => { t.BarColor = BarColorMode.Class; PersistToggles(); },
+                Active: () => t.BarColor == BarColorMode.Class, Width: 72f),
+        }, Gap: 6f);
+
+    // How the per-second/total values drawn ON a row's bar stay readable over the fill (owner 2026-09-09).
+    // MeterRowData.LabelStyle (framework 2.8.0) — Plain is today's white text; Outline/Shadow add the stat
+    // HUD's dark halo / soft under-shade. Per layout, like BarColorRow.
+    private HudElement BarLabelStyleRow(MeterElementToggles t)
+        => new RowElement(new HudElement[]
+        {
+            new TextElement(() => _loc.T("settings.bar.labelStyle"), Width: 80f),
+            new ButtonElement(() => _loc.T("settings.labelStyle.plain"),   () => { t.BarLabelStyle = MeterLabelStyle.Plain;   PersistToggles(); },
+                Active: () => t.BarLabelStyle == MeterLabelStyle.Plain,   Width: 72f),
+            new ButtonElement(() => _loc.T("settings.labelStyle.outline"), () => { t.BarLabelStyle = MeterLabelStyle.Outline; PersistToggles(); },
+                Active: () => t.BarLabelStyle == MeterLabelStyle.Outline, Width: 72f),
+            new ButtonElement(() => _loc.T("settings.labelStyle.shadow"),  () => { t.BarLabelStyle = MeterLabelStyle.Shadow;  PersistToggles(); },
+                Active: () => t.BarLabelStyle == MeterLabelStyle.Shadow,  Width: 72f),
         }, Gap: 6f);
 
     private void PersistToggles()

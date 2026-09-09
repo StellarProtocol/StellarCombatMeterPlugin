@@ -464,7 +464,7 @@ public sealed partial class Plugin
                 Dps = FormatAmount(ComputeArchivedDps(value, h.CombatDurationMs)),       // rate = metric / sec
                 Pct = FormatPercent(pct),
                 Share = pct,
-                Role = RoleColorFor(id),
+                Role = GaugeColorFor(id),
             });
         }
     }

@@ -24,7 +24,7 @@ public sealed partial class Plugin
 
     // The always-present team-total line (sits above the role-coloured source lines) uses the active theme's
     // neutral menu-text colour, read at build so it follows the active/custom theme (the chart rebuilds on
-    // metric change and re-skins on a full theme switch). Source lines keep their registry RoleColorFor.
+    // metric change and re-skins on a full theme switch). Source lines keep their registry GaugeColorFor.
     private ColorRgba TeamTotalColor => _services.Theme.Colors.MenuText;
 
     // Stable chart-series buffer + its dirty signature. The cached list INSTANCE is replaced (not mutated in
@@ -87,7 +87,7 @@ public sealed partial class Plugin
                 long sourceTotal = h.Stats.TryGetValue(id, out var st) ? MetricValueOf(st, _historyMetric) : 0L;
                 series.Add(new ChartSeries(
                     EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
-                    RoleColorFor(id),
+                    GaugeColorFor(id),
                     ToFloat(SeriesOrBucketZero(ChannelOf(s, _historyMetric), sourceTotal))));
             }
 

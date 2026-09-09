@@ -40,10 +40,11 @@ public sealed partial class Plugin
         {
             var idx = i;
             string F(Func<SkillRow, string> sel) => idx < _skillRows.Count ? sel(_skillRows[idx]) : "";
-            // Explicit per-skill share bar (role-coloured) makes each row read as a bar chart. Replaces the
-            // old AccentRowElement wash — both encoded the same Share, so the wash was dropped to avoid
-            // double-encoding. Fill is baked at build time from the source captured at open (stable).
-            ColorRgba barColor = _skillBreakdown is { } sbColor ? RoleColorFor(sbColor.Source) : default;
+            // Explicit per-skill share bar (role- or class-coloured per Appearance → Bar colour) makes each row
+            // read as a bar chart. Replaces the old AccentRowElement wash — both encoded the same Share, so the
+            // wash was dropped to avoid double-encoding. Fill is baked at build time from the source captured at
+            // open (stable).
+            ColorRgba barColor = _skillBreakdown is { } sbColor ? GaugeColorFor(sbColor.Source) : default;
             // Each skill is a Column of: (1) a top row — name (single-line, elastic) + numeric columns, so the
             // numbers sit on the skill-name baseline instead of vertically centring against a 2-line cell;
             // (2) the % DMG/Count/Crit/Luck sub-line; (3) a full-width role-coloured share bar (a per-skill bar
@@ -263,7 +264,7 @@ public sealed partial class Plugin
         _skillBreakdown = new SkillBreakdownState { Source = id, Session = session, Metric = _historyMetric };
         RebuildSkillRows();
         // Rebuild the root now that _skillBreakdown is set so BuildSkillBreakdownRoot re-resolves the baked bar
-        // Fill to RoleColorFor(Source) — without this the bars keep the transparent fill baked at registration.
+        // Fill to GaugeColorFor(Source) — without this the bars keep the transparent fill baked at registration.
         RebuildSkillBreakdownWindow();
         _skillBreakdownWindow.SetVisible(true);
     }

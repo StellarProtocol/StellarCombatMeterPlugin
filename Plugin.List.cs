@@ -27,6 +27,13 @@ public sealed partial class Plugin
     private MeterElementToggles Party5Toggles  => _party5TogglesCache  ??= MeterElementToggles.Load(_prefs, "party5",  MeterElementToggles.Defaults());
     private MeterElementToggles Party20Toggles => _party20TogglesCache ??= MeterElementToggles.Load(_prefs, "party20", MeterElementToggles.Raid20Defaults());
 
+    // The toggle set the VISIBLE layout is using. Mirrors BuildRowData's selection exactly: RebuildListRows
+    // (collapse: true → ListToggles) only runs in List mode and RebuildPartyFocusRows (collapse: false →
+    // the party set, 20-grid or 5-grid) only in Party-focus — see RebuildSnapshots in Plugin.cs. Read by the
+    // colour helpers (GaugeColorFor) and by anything else that needs the live layout's Appearance.
+    private MeterElementToggles ActiveToggles()
+        => _viewMode == ViewMode.List ? ListToggles : (IsRaid20View ? Party20Toggles : Party5Toggles);
+
     private HudElement BuildListBody()
     {
         var slots = new HudElement[MaxListRows];
@@ -113,8 +120,8 @@ public sealed partial class Plugin
         // Our own row degrades to "Self" in social areas where PlayerState.Name is blank — use the cached name.
         else if (label == "Self" && SelfNameFallback() is { } selfName) label = selfName;
         var (imagine0, imagine1) = ResolveImagines(id, id == self);
-        var roleColor = RoleColorFor(id);
-        var hpColor   = HpColor();
+        var gaugeColor = GaugeColorFor(id);   // role or class colour — see Plugin.GaugeColor.cs
+        var hpColor    = HpColor();
         return new MeterRowData
         {
             Id               = id,
@@ -123,8 +130,8 @@ public sealed partial class Plugin
             ClassName        = vis.ClassName ? GetClassLine(id) : "",
             Spec             = vis.Spec ? SpecLine(id) : "",
             AbilityScore     = FormatAbilityScore(_services.CombatLookup.GetFightPoint(id), _services.EntityDetail.GetAttribute(id, AttrSeasonStrengthId), vis.AbilityScore, vis.IllusionBreak),
-            RoleColor        = toggles.MainBarIsHp ? hpColor   : roleColor,
-            HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? roleColor : hpColor,
+            RoleColor        = toggles.MainBarIsHp ? hpColor   : gaugeColor, LabelStyle = toggles.BarLabelStyle,
+            HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? gaugeColor : hpColor,
             NameColor        = ReadyVoteColor(id),
             VoiceIcon        = VoiceIconFor(id),
             ShowVoiceIcon    = vis.VoiceIcon,
