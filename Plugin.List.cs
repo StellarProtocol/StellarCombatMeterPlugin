@@ -130,7 +130,7 @@ public sealed partial class Plugin
             ClassName        = vis.ClassName ? GetClassLine(id) : "",
             Spec             = vis.Spec ? SpecLine(id) : "",
             AbilityScore     = FormatAbilityScore(_services.CombatLookup.GetFightPoint(id), _services.EntityDetail.GetAttribute(id, AttrSeasonStrengthId), vis.AbilityScore, vis.IllusionBreak),
-            RoleColor        = toggles.MainBarIsHp ? hpColor   : gaugeColor,
+            RoleColor        = toggles.MainBarIsHp ? hpColor   : gaugeColor, LabelStyle = toggles.BarLabelStyle,
             HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? gaugeColor : hpColor,
             NameColor        = ReadyVoteColor(id),
             VoiceIcon        = VoiceIconFor(id),

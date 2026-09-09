@@ -40,6 +40,7 @@ public sealed class MeterElementToggles
     public bool ClassName, AbilityScore, IllusionBreak, VoiceIcon;
     public VerticalBarMode VerticalBar;
     public BarColorMode BarColor;
+    public MeterLabelStyle BarLabelStyle;
     public bool MainBarIsHp;
     public float SpineWidth;
     public ImagineSize ImagineSize;
@@ -51,7 +52,7 @@ public sealed class MeterElementToggles
     public static MeterElementToggles Defaults() => new()
     {
         Rank = true, Crest = true, Spec = true, VerticalBar = VerticalBarMode.Hp, MainBarIsHp = false, SpineWidth = 3f,
-        BarColor = BarColorMode.Role,
+        BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
         ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true,
         ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight,
@@ -110,6 +111,9 @@ public sealed class MeterElementToggles
         // Absent key → the default (Role), so an install upgrading from ≤ 2.9.1 keeps its current look.
         // Older builds simply never read "bar.color" — leaving it unknown to them is what makes a rollback safe.
         d.BarColor        = (BarColorMode)cfg.Get($"{prefix}.bar.color",        (int)defaults.BarColor);
+        // Absent key → Plain, so an install upgrading from ≤ 2.10.0-pre keeps today's look; those builds
+        // never read "bar.labelStyle" either, so the key's presence is rollback-safe in both directions.
+        d.BarLabelStyle    = (MeterLabelStyle)cfg.Get($"{prefix}.bar.labelStyle", (int)defaults.BarLabelStyle);
         d.MainBarIsHp     = cfg.Get($"{prefix}.bar.mainIsHp",                   defaults.MainBarIsHp);
         d.SpineWidth      = cfg.Get($"{prefix}.bar.spineWidth",                 defaults.SpineWidth);
         d.Primary         = cfg.Get($"{prefix}.show.primary",         defaults.Primary);
@@ -135,6 +139,7 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.spec",            Spec);
         cfg.Set($"{prefix}.bar.vertical",         (int)VerticalBar);
         cfg.Set($"{prefix}.bar.color",            (int)BarColor);
+        cfg.Set($"{prefix}.bar.labelStyle",       (int)BarLabelStyle);
         cfg.Set($"{prefix}.bar.mainIsHp",         MainBarIsHp);
         cfg.Set($"{prefix}.bar.spineWidth",       SpineWidth);
         cfg.Set($"{prefix}.show.primary",         Primary);

@@ -112,4 +112,54 @@ public class MeterElementTogglesTests
 
         Assert.Equal(1, cfg.Get<int>("party5.bar.color", -1));
     }
+
+    // ----- Value text: Plain | Outline | Shadow (Appearance → Bars, 2.10.0, framework 2.8.0's
+    // MeterRowData.LabelStyle) -----
+
+    // Owner-visible guarantee: nobody's meter changes until they opt in (same rollback contract as BarColor).
+    [Fact]
+    public void BarLabelStyle_defaults_to_Plain_in_every_layout()
+    {
+        Assert.Equal(MeterLabelStyle.Plain, MeterElementToggles.Defaults().BarLabelStyle);
+        Assert.Equal(MeterLabelStyle.Plain, MeterElementToggles.Raid20Defaults().BarLabelStyle);
+    }
+
+    [Fact]
+    public void BarLabelStyle_round_trips_through_the_config_prefix()
+    {
+        var cfg = new FakeConfigSection();
+        var t = MeterElementToggles.Defaults();
+        t.BarLabelStyle = MeterLabelStyle.Shadow;
+        t.Save(cfg, "list");
+
+        var loaded = MeterElementToggles.Load(cfg, "list", MeterElementToggles.Defaults());
+        Assert.Equal(MeterLabelStyle.Shadow, loaded.BarLabelStyle);
+
+        // Per layout: writing "list" must not tint party20's own setting.
+        var other = MeterElementToggles.Load(cfg, "party20", MeterElementToggles.Raid20Defaults());
+        Assert.Equal(MeterLabelStyle.Plain, other.BarLabelStyle);
+    }
+
+    // Rollback safety: a config written by ≤ 2.10.0-pre has no "bar.labelStyle" at all — that must read
+    // as the default, never as Outline/Shadow.
+    [Fact]
+    public void A_config_without_the_labelStyle_key_yields_Plain()
+    {
+        var cfg = new FakeConfigSection();
+        cfg.Set("list.show.rank", true);   // some other key exists, "list.bar.labelStyle" does not
+
+        var loaded = MeterElementToggles.Load(cfg, "list", MeterElementToggles.Defaults());
+        Assert.Equal(MeterLabelStyle.Plain, loaded.BarLabelStyle);
+    }
+
+    [Fact]
+    public void Save_writes_BarLabelStyle_as_the_enum_ordinal_under_bar_labelStyle()
+    {
+        var cfg = new FakeConfigSection();
+        var t = MeterElementToggles.Defaults();
+        t.BarLabelStyle = MeterLabelStyle.Outline;
+        t.Save(cfg, "party5");
+
+        Assert.Equal(1, cfg.Get<int>("party5.bar.labelStyle", -1));
+    }
 }
