@@ -99,7 +99,7 @@
          nuget.org as sources, since the committed NuGet.config sources nuget.org only). MUST be flipped
          from "2.8.0-dev" to plain "2.8.0" once the framework 2.8.0 release publishes; the registry
          manifest's minimum framework must be raised to 2.8.0 at that same release. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.8.0-dev" />
+    <PackageReference Include="Stellar.Abstractions" Version="2.8.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
