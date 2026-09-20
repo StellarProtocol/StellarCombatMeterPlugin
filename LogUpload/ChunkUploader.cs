@@ -34,6 +34,18 @@ internal static class ChunkUploader
     // so PositionUploaderRetryTests can pin PositionUploader's policy to THIS one (parity model).
     internal static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
 
+    /// <summary>Upper bound on how long <see cref="UploadSegmentAsync"/> waits for a segment's blob writes
+    /// (<see cref="SpoolSegment.Completion"/>) to finish before giving up on waiting and attempting the
+    /// tracks anyway. <b>Fix (2026-09-20, review of c723c214):</b> <see cref="SpoolTrack"/>.<c>SealOpen</c>
+    /// wraps every blob write in a catch-all, so <c>Completion</c> (a <c>Task.WhenAll</c> over those writes)
+    /// can FAULT but can never HANG-forever on its own — except it does: a <c>store.Write</c> call that
+    /// BLOCKS (stalled disk, AV scan, Proton I/O) never returns, so the <c>Task.Run</c> wrapping it never
+    /// completes, <c>Task.WhenAll</c> never completes, and an unbounded <c>await seg.Completion</c> parks
+    /// forever — no track is ever attempted and nothing is logged. This is the exact prod symptom (18/294
+    /// damage-bearing archives/day: header declared 1-20 chunks, delivered NONE). Settable seam for tests
+    /// (mirrors <see cref="LogUploader.DelayFunc"/>'s pattern) — restore in <c>finally</c>.</summary>
+    internal static TimeSpan CompletionWait = TimeSpan.FromSeconds(30);
+
     /// <summary>
     /// Kicks off sequential chunk uploads on the thread pool. Returns immediately; never throws.
     /// A chunk that still fails after retries is reported via <paramref name="logWarn"/> and
@@ -110,6 +122,14 @@ internal static class ChunkUploader
     internal static TrackEndpoint SheetEndpoint(string baseUrl, string region, long levelUuid, string label)
         => new(BuildSheetUrl(baseUrl, region, levelUuid), true, label);
 
+    /// <summary>Bundles the two loggers <see cref="UploadSegmentFireAndForget"/>/<see cref="UploadSegmentAsync"/>
+    /// take (review F2): adding the optional info logger had pushed that pair's parameter count from 7 to 8
+    /// (STELLAR0003 — &gt;5 params is `major`; 7 was already a pre-existing violation and must not grow).
+    /// One record struct in their place returns the count to 7. <paramref name="Info"/> defaults to
+    /// no-op-via-null (call sites use <c>?.Invoke</c>), same default <see cref="UploadSegmentFireAndForget"/>'s
+    /// old trailing optional parameter had.</summary>
+    internal readonly record struct SendLog(Action<string> Warn, Action<string>? Info = null);
+
     /// <summary>Uploads a rotated segment: dmg → /events, buff → /buff-events, sheet → /sheet-events; buffx
     /// absent. The segment's disk-only track (<c>buffx</c>, the rows the send filter rejected) is deliberately
     /// never posted anywhere. Blobs are NOT deleted here — they belong to the retention container
@@ -119,10 +139,10 @@ internal static class ChunkUploader
     /// unchanged; <c>Plugin.LogUpload.cs</c>'s call site passes <c>_services.Log.Info</c>.</summary>
     internal static void UploadSegmentFireAndForget(
         string baseUrl, string region, long levelUuid, string logId, SpoolSegment seg,
-        Stellar.Abstractions.Services.IPluginDataStore store, Action<string> logWarn, Action<string>? logInfo = null)
+        Stellar.Abstractions.Services.IPluginDataStore store, SendLog log)
     {
         if (seg.ChunkCount == 0) return;
-        _ = Task.Run(() => UploadSegmentAsync(baseUrl, region, levelUuid, logId, seg, store, logWarn, logInfo));
+        _ = Task.Run(() => UploadSegmentAsync(baseUrl, region, levelUuid, logId, seg, store, log));
     }
 
     /// <summary>Task-returning core of <see cref="UploadSegmentFireAndForget"/> — extracted so tests can
@@ -137,30 +157,42 @@ internal static class ChunkUploader
     /// point at whatever blobs DID land — a missing one is caught by <see cref="PostRefsAsync"/>'s own
     /// per-chunk guard); each track's send is wrapped individually via <see cref="PostTrackGuarded"/> so one
     /// track throwing never takes the other two down; an outer try/catch is the last belt. Behavior when
-    /// nothing faults is unchanged — same three POSTs, same dmg → buff → sheet order.</para></summary>
+    /// nothing faults is unchanged — same three POSTs, same dmg → buff → sheet order.</para>
+    /// <para><b>Fix (2026-09-20, review of c723c214):</b> the fault guard above did not cover a HANG — a
+    /// blocked <c>store.Write</c> never faults <see cref="SpoolSegment.Completion"/>, so the old unbounded
+    /// <c>await seg.Completion</c> parked forever with NO track ever attempted. The wait is now bounded by
+    /// <see cref="CompletionWait"/> (<see cref="Task.WhenAny"/> against a timer); on timeout this logs once
+    /// and falls through to the same three guarded POSTs (a chunk whose blob genuinely never landed fails
+    /// in <see cref="PostRefsAsync"/>'s own per-chunk catch, the rest proceed). The two loggers are now one
+    /// <see cref="SendLog"/> parameter (review F2, keeps this pair at 7 params, not 8).</para></summary>
     internal static async Task UploadSegmentAsync(
         string baseUrl, string region, long levelUuid, string logId, SpoolSegment seg,
-        Stellar.Abstractions.Services.IPluginDataStore store, Action<string> logWarn, Action<string>? logInfo = null)
+        Stellar.Abstractions.Services.IPluginDataStore store, SendLog log)
     {
         try
         {
-            logInfo?.Invoke($"[CombatMeter.SP1] Sending segment chunks for {logId}: dmg={seg.Dmg.Count} buff={seg.Buff.Count} sheet={seg.Sheet.Count}");
+            log.Info?.Invoke($"[CombatMeter.SP1] Sending segment chunks for {logId}: dmg={seg.Dmg.Count} buff={seg.Buff.Count} sheet={seg.Sheet.Count}");
             try
             {
-                // Thread-pool only: the main thread never blocks on a segment's write completion.
-                await seg.Completion.ConfigureAwait(false);
+                // Thread-pool only: the main thread never blocks on a segment's write completion. Bounded —
+                // see CompletionWait's doc comment for why an unbounded wait here silenced the whole send.
+                var winner = await Task.WhenAny(seg.Completion, Task.Delay(CompletionWait)).ConfigureAwait(false);
+                if (winner != seg.Completion)
+                    log.Warn($"[CombatMeter.SP1] Segment blob writes still pending after {CompletionWait.TotalSeconds:0}s for {logId} — attempting the tracks whose blobs exist");
+                else
+                    await seg.Completion.ConfigureAwait(false);   // already finished — observe a fault, if any, below
             }
             catch (Exception ex)
             {
-                logWarn($"[CombatMeter.SP1] Segment blob writes FAULTED for {logId} ({ex.GetType().Name}: {ex.Message}) — attempting the tracks whose blobs exist");
+                log.Warn($"[CombatMeter.SP1] Segment blob writes FAULTED for {logId} ({ex.GetType().Name}: {ex.Message}) — attempting the tracks whose blobs exist");
             }
-            await PostTrackGuarded(DmgEndpoint(baseUrl, region, levelUuid, "chunk"), SpoolCodec.TrackDmg, logId, seg.Dmg, store, logWarn).ConfigureAwait(false);
-            await PostTrackGuarded(BuffEndpoint(baseUrl, region, levelUuid, "buff chunk"), SpoolCodec.TrackBuff, logId, seg.Buff, store, logWarn).ConfigureAwait(false);
-            await PostTrackGuarded(SheetEndpoint(baseUrl, region, levelUuid, "sheet chunk"), SpoolCodec.TrackSheet, logId, seg.Sheet, store, logWarn).ConfigureAwait(false);
+            await PostTrackGuarded(() => DmgEndpoint(baseUrl, region, levelUuid, "chunk"), SpoolCodec.TrackDmg, logId, seg.Dmg, store, log.Warn).ConfigureAwait(false);
+            await PostTrackGuarded(() => BuffEndpoint(baseUrl, region, levelUuid, "buff chunk"), SpoolCodec.TrackBuff, logId, seg.Buff, store, log.Warn).ConfigureAwait(false);
+            await PostTrackGuarded(() => SheetEndpoint(baseUrl, region, levelUuid, "sheet chunk"), SpoolCodec.TrackSheet, logId, seg.Sheet, store, log.Warn).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logWarn($"[CombatMeter.SP1] Segment send aborted for {logId}: {ex.Message}");
+            log.Warn($"[CombatMeter.SP1] Segment send aborted for {logId}: {ex.Message}");
         }
     }
 
@@ -186,9 +218,9 @@ internal static class ChunkUploader
         try
         {
             var (dmg, buff, sheet) = SplitUploadable(refs);
-            await PostTrackGuarded(DmgEndpoint(baseUrl, region, levelUuid, "re-upload chunk"), SpoolCodec.TrackDmg, logId, dmg, store, logWarn).ConfigureAwait(false);
-            await PostTrackGuarded(BuffEndpoint(baseUrl, region, levelUuid, "re-upload buff chunk"), SpoolCodec.TrackBuff, logId, buff, store, logWarn).ConfigureAwait(false);
-            await PostTrackGuarded(SheetEndpoint(baseUrl, region, levelUuid, "re-upload sheet chunk"), SpoolCodec.TrackSheet, logId, sheet, store, logWarn).ConfigureAwait(false);
+            await PostTrackGuarded(() => DmgEndpoint(baseUrl, region, levelUuid, "re-upload chunk"), SpoolCodec.TrackDmg, logId, dmg, store, logWarn).ConfigureAwait(false);
+            await PostTrackGuarded(() => BuffEndpoint(baseUrl, region, levelUuid, "re-upload buff chunk"), SpoolCodec.TrackBuff, logId, buff, store, logWarn).ConfigureAwait(false);
+            await PostTrackGuarded(() => SheetEndpoint(baseUrl, region, levelUuid, "re-upload sheet chunk"), SpoolCodec.TrackSheet, logId, sheet, store, logWarn).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -199,14 +231,19 @@ internal static class ChunkUploader
     /// <summary>One track's guarded send: <see cref="PostRefsAsync"/> already catches per-CHUNK faults
     /// internally, but a track-level exception (thrown before its loop even starts, or from the await
     /// machinery itself) must not take the other two tracks down with it — each track gets its own
-    /// try/catch so a failure is logged and the caller moves on to the next track.</summary>
+    /// try/catch so a failure is logged and the caller moves on to the next track.
+    /// <para><b>Fix (review F4):</b> <paramref name="ep"/> is now a builder, called INSIDE this try —
+    /// it used to be built at the call site (e.g. <c>DmgEndpoint(...)</c> evaluated before this method was
+    /// even invoked), outside any guard, so a throwing endpoint builder would escape to
+    /// <see cref="UploadSegmentAsync"/>'s outer catch and abort every remaining track, not just this
+    /// one.</para></summary>
     private static async Task PostTrackGuarded(
-        TrackEndpoint ep, string track, string logId, IReadOnlyList<SpoolChunkRef> refs,
+        Func<TrackEndpoint> ep, string track, string logId, IReadOnlyList<SpoolChunkRef> refs,
         Stellar.Abstractions.Services.IPluginDataStore store, Action<string> logWarn)
     {
         try
         {
-            await PostRefsAsync(ep, logId, refs, store, logWarn).ConfigureAwait(false);
+            await PostRefsAsync(ep(), logId, refs, store, logWarn).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

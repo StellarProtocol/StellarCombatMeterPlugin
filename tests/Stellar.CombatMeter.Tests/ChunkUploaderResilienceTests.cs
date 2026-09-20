@@ -69,8 +69,9 @@ public sealed class ChunkUploaderResilienceTests
         try
         {
             await ChunkUploader.UploadSegmentAsync("https://x", "sea", 42, logId, seg, store,
-                w => { lock (warnings) warnings.Add(w); },
-                i => { lock (infos) infos.Add(i); });
+                new ChunkUploader.SendLog(
+                    w => { lock (warnings) warnings.Add(w); },
+                    i => { lock (infos) infos.Add(i); }));
         }
         finally { ChunkUploader.HttpClient = original; }
         return (handler.Urls, warnings, infos);
@@ -98,10 +99,11 @@ public sealed class ChunkUploaderResilienceTests
     }
 
     // s2: a store whose blob read throws for the dmg track only must not stop the buff/sheet tracks
-    // from posting; the dmg failure is logged (PostRefsAsync's own pre-existing per-chunk catch); and —
-    // the point of exercising this through the extracted Task-returning UploadSegmentAsync rather than
-    // the fire-and-forget wrapper — awaiting it here completes normally, proving no exception escapes
-    // to become an unobserved TaskScheduler exception on the discarded fire-and-forget task.
+    // from posting, and — the point of exercising this through the extracted Task-returning
+    // UploadSegmentAsync rather than the fire-and-forget wrapper — awaiting it here completes normally,
+    // proving no exception escapes to become an unobserved TaskScheduler exception on the discarded
+    // fire-and-forget task. Asserts the buff-then-sheet ORDER by index (review F3), not just presence:
+    // dmg posts nothing (its one blob is unreadable), so exactly two POSTs land, buff first.
     [Fact]
     public async Task Dmg_blob_read_fault_still_posts_buff_and_sheet_with_no_unobserved_exception()
     {
@@ -111,9 +113,9 @@ public sealed class ChunkUploaderResilienceTests
 
         var (urls, warnings, _) = await RunAsync(seg, store, "log-s2");   // must not throw
 
-        Assert.DoesNotContain(urls, u => u == "https://x/run/sea/42/events");   // dmg blob unreadable: nothing to POST
-        Assert.Contains(urls, u => u == "https://x/run/sea/42/buff-events");
-        Assert.Contains(urls, u => u == "https://x/run/sea/42/sheet-events");
+        Assert.Equal(2, urls.Count);   // dmg blob unreadable: nothing to POST for that track
+        Assert.Equal("https://x/run/sea/42/buff-events", urls[0]);
+        Assert.Equal("https://x/run/sea/42/sheet-events", urls[1]);
         Assert.Contains(warnings, w => w.Contains("threw") && w.Contains("log-s2"));
     }
 
@@ -134,6 +136,36 @@ public sealed class ChunkUploaderResilienceTests
         Assert.Equal("https://x/run/sea/42/events", urls[0]);
         Assert.Equal("https://x/run/sea/42/buff-events", urls[1]);
         Assert.Equal("https://x/run/sea/42/sheet-events", urls[2]);
+    }
+
+    // s4 (review F1 pin — the HANG this fix closes): a segment whose Completion NEVER completes (a
+    // stalled store.Write — the exact prod-measured symptom, 18/294 damage-bearing archives/day arriving
+    // with a header declaring 1-20 chunks and delivering NONE) must not park UploadSegmentAsync forever.
+    // RED on the pre-fix code: `await seg.Completion` was unbounded, so this test hangs / times out with
+    // NO POSTs ever recorded — quoted in the fix report. GREEN: CompletionWait (lowered here so the test
+    // runs in well under 5s; restored in `finally`) bounds the wait, the "still pending" warning fires
+    // exactly once, and all three tracks still POST (their blobs are on disk regardless of what
+    // Completion reports).
+    [Fact]
+    public async Task Never_completing_completion_still_posts_all_three_tracks_after_the_bounded_wait()
+    {
+        var store = new FakeDataStore();
+        var hang = new TaskCompletionSource<bool>().Task;   // never completes, never faults
+        var seg = MakeSegment(store, hang);
+        var originalWait = ChunkUploader.CompletionWait;
+        ChunkUploader.CompletionWait = TimeSpan.FromMilliseconds(200);
+        try
+        {
+            var (urls, warnings, _) = await RunAsync(seg, store, "log-s4");
+
+            Assert.Contains(urls, u => u == "https://x/run/sea/42/events");
+            Assert.Contains(urls, u => u == "https://x/run/sea/42/buff-events");
+            Assert.Contains(urls, u => u == "https://x/run/sea/42/sheet-events");
+            var w = Assert.Single(warnings);
+            Assert.Contains("still pending after", w);
+            Assert.Contains("log-s4", w);
+        }
+        finally { ChunkUploader.CompletionWait = originalWait; }
     }
 }
 
