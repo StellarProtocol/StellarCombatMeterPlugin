@@ -492,7 +492,7 @@ public sealed partial class Plugin
             ChunkUploader.UploadSegmentFireAndForget(
                 LogUploader.ApiBase, log.Header.Region,
                 log.Header.Encounter.LevelUuid, log.Header.LogId, seg,
-                _services.Data, msg => _services.Log.Warning(msg));
+                _services.Data, msg => _services.Log.Warning(msg), msg => _services.Log.Info(msg));
         if (replayDoc is not null)
         {
             // The doc is built even when the replay cell is off (it must be RETAINED regardless), so the
