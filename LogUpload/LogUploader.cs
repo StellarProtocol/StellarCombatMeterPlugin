@@ -67,11 +67,26 @@ internal static class LogUploader
     internal static string BuildSupplementUrl(string apiBase, string region, long levelUuid)
         => $"{apiBase}/run/{region}/{levelUuid.ToString(System.Globalization.CultureInfo.InvariantCulture)}/supplement";
 
-    // Single shared client (avoids socket exhaustion on repeated uploads).
-    private static readonly HttpClient HttpClient = new()
+    // Single shared client (avoids socket exhaustion on repeated uploads). Internal + mutable (not
+    // readonly) so LogUploaderRetryTests can swap in a fake-handler client for the header-retry pins
+    // (h1-h4, spec 2026-09-20 § 3) and restore it afterward — same seam shape as SetApiBase's override
+    // above. Production code never reassigns this.
+    internal static HttpClient HttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(30),
     };
+
+    // Header-retry backoff (spec 2026-09-20 § 2): 2 retries (3 attempts total), 5s then 15s. Its OWN
+    // ladder — slower than ChunkUploader/PositionUploader's 1s/3s, which retry a single already-accepted
+    // chunk; this retries the WHOLE header against a possibly lock-contended server, so a snappier ladder
+    // would just re-hit the same contention sooner. Only a transport exception/timeout or a 5xx enters
+    // this loop; a 4xx (incl. 409, handled separately) is a permanent verdict and is never retried.
+    internal static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15) };
+
+    // Test-only seam: the actual awaited backoff delay. Defaults to the real Task.Delay; swapped by
+    // LogUploaderRetryTests so h1/h3 exercise the real 3-attempt loop without blocking on 20 real
+    // wall-clock seconds. RetryDelays itself — the production VALUES pinned by h5 — is never touched.
+    internal static Func<TimeSpan, Task> DelayFunc = Task.Delay;
 
     /// <summary>
     /// Serializes <paramref name="log"/> and posts it to the StellarLogs upload endpoint.
@@ -84,6 +99,24 @@ internal static class LogUploader
         Action<bool, int, string?, UploadVerdict?>? onComplete = null,
         int delayMs = 0,
         bool skipPrecheck = false)
+        => UploadFireAndForget(log,
+            onComplete is null ? (Action<bool, int, string?, UploadVerdict?, int>?)null
+                               : (ok, status, err, verdict, _) => onComplete(ok, status, err, verdict),
+            delayMs, skipPrecheck);
+
+    /// <summary>Same as the 4-arg overload above, but the completion callback also receives the 1-based
+    /// TOTAL attempt count the final outcome landed on (1 = no retry needed; up to
+    /// <see cref="RetryDelays"/>.Length + 1 after exhausting the retry ladder). A separate overload —
+    /// rather than changing the 4-arg delegate shape everything else in this file uses — per spec
+    /// 2026-09-20's "do not change the public callback shape". Used by the one production call site
+    /// (Plugin.LogUpload.cs's AssembleAndUpload) for the testing-channel "attempt=" telemetry on the
+    /// Upload OK/FAILED lines; the 4-arg overload above is what LogUploaderRetryTests (h1-h4) exercises
+    /// and never observes attempts.</summary>
+    internal static void UploadFireAndForget(
+        CombatLog log,
+        Action<bool, int, string?, UploadVerdict?, int>? onComplete,
+        int delayMs = 0,
+        bool skipPrecheck = false)
     {
         // Serialize synchronously on the calling (main) thread — cheap; only called at archive.
         string json;
@@ -93,7 +126,7 @@ internal static class LogUploader
         }
         catch (Exception ex)
         {
-            onComplete?.Invoke(false, 0, $"serialize error: {ex.Message}", null);
+            onComplete?.Invoke(false, 0, $"serialize error: {ex.Message}", null, 0);
             return;
         }
 
@@ -114,13 +147,21 @@ internal static class LogUploader
                $"region={log.Header.Region}";
     }
 
-    private static async Task UploadAsync(CombatLog log, string json, Action<bool, int, string?, UploadVerdict?>? onComplete, int delayMs = 0, bool skipPrecheck = false)
+    // Outcome of one header POST attempt, discriminating what UploadAsync's retry loop does next.
+    // Retry covers BOTH a transport exception and a 5xx (spec 2026-09-20 § 2); a 4xx (ClientError) and
+    // a 409 (AlreadyUploaded, handled separately) are permanent verdicts and stop the loop immediately.
+    private enum AttemptKind { Success, AlreadyUploaded, ClientError, Retry }
+
+    private readonly record struct AttemptResult(AttemptKind Kind, int Status, string? Body);
+
+    // One header POST attempt. Never throws — a transport failure maps to Retry/status 0 — so
+    // UploadAsync's loop stays in sole control of every failure mode (retry vs. give up). `gzipped` is
+    // built ONCE by the caller and reused byte-for-byte across every retry (same logId every attempt —
+    // what lets the server's sameLogId dedupe converge a deferred first attempt with a retry).
+    private static async Task<AttemptResult> TrySendAsync(CombatLog log, byte[] gzipped, bool skipPrecheck)
     {
         try
         {
-            if (delayMs > 0) await Task.Delay(delayMs).ConfigureAwait(false);
-
-            var gzipped = Gzip(json);
             using var content = new ByteArrayContent(gzipped);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
             content.Headers.ContentEncoding.Add("gzip");
@@ -136,24 +177,49 @@ internal static class LogUploader
 
             using var response = await HttpClient.SendAsync(req, CancellationToken.None).ConfigureAwait(false);
             var status = (int)response.StatusCode;
-            if (response.IsSuccessStatusCode)
+            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (response.IsSuccessStatusCode) return new AttemptResult(AttemptKind.Success, status, body);
+            if (status == 409) return new AttemptResult(AttemptKind.AlreadyUploaded, status, body);
+            if (status >= 500) return new AttemptResult(AttemptKind.Retry, status, body);
+            return new AttemptResult(AttemptKind.ClientError, status, body);
+        }
+        catch (Exception ex)
+        {
+            return new AttemptResult(AttemptKind.Retry, 0, ex.Message);
+        }
+    }
+
+    private static async Task UploadAsync(CombatLog log, string json, Action<bool, int, string?, UploadVerdict?, int>? onComplete, int delayMs = 0, bool skipPrecheck = false)
+    {
+        try
+        {
+            if (delayMs > 0) await Task.Delay(delayMs).ConfigureAwait(false);
+            var gzipped = Gzip(json);
+
+            for (var attempt = 0; ; attempt++)
             {
-                var okBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                onComplete?.Invoke(true, status, null, UploadVerdict.Parse(okBody));
-            }
-            else if (status == 409)
-            {
-                await HandleAlreadyUploadedAsync(log, response, onComplete).ConfigureAwait(false);
-            }
-            else
-            {
-                var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                onComplete?.Invoke(false, status, body, null);
+                var result = await TrySendAsync(log, gzipped, skipPrecheck).ConfigureAwait(false);
+                if (result.Kind == AttemptKind.Success)
+                {
+                    onComplete?.Invoke(true, result.Status, null, UploadVerdict.Parse(result.Body), attempt + 1);
+                    return;
+                }
+                if (result.Kind == AttemptKind.AlreadyUploaded)
+                {
+                    await HandleAlreadyUploadedAsync(log, result.Body, attempt + 1, onComplete).ConfigureAwait(false);
+                    return;
+                }
+                if (result.Kind == AttemptKind.ClientError || attempt >= RetryDelays.Length)
+                {
+                    onComplete?.Invoke(false, result.Status, result.Body, null, attempt + 1);
+                    return;
+                }
+                await DelayFunc(RetryDelays[attempt]).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
         {
-            onComplete?.Invoke(false, 0, ex.Message, null);
+            onComplete?.Invoke(false, 0, ex.Message, null, 0);
         }
     }
 
@@ -167,23 +233,22 @@ internal static class LogUploader
     // back to a retryable failure only on a transient error (transport/5xx); a 2xx/4xx leaves the run
     // resolved-uploaded (best-effort detail). Reports the honest HTTP status either way.
     private static async Task HandleAlreadyUploadedAsync(
-        CombatLog log, HttpResponseMessage response, Action<bool, int, string?, UploadVerdict?>? onComplete)
+        CombatLog log, string? body409, int attempt, Action<bool, int, string?, UploadVerdict?, int>? onComplete)
     {
-        var body409 = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
         var verdict = UploadVerdict.From409(body409);
 
         if (!SupplementPolicy.ShouldSendSupplement(log))
         {
-            onComplete?.Invoke(true, 409, null, verdict);   // nothing to add — run already fully covered
+            onComplete?.Invoke(true, 409, null, verdict, attempt);   // nothing to add — run already fully covered
             return;
         }
 
         var supStatus = await PostSupplementAsync(log).ConfigureAwait(false);
         var applied = supStatus is >= 200 and < 300;
         if (applied || !SupplementPolicy.IsRetryable(supStatus))
-            onComplete?.Invoke(true, applied ? supStatus : 409, null, verdict);   // run up; supplement best-effort
+            onComplete?.Invoke(true, applied ? supStatus : 409, null, verdict, attempt);   // run up; supplement best-effort
         else
-            onComplete?.Invoke(false, supStatus, "supplement upload failed", verdict);   // transient → retryable
+            onComplete?.Invoke(false, supStatus, "supplement upload failed", verdict, attempt);   // transient → retryable
     }
 
     /// <summary>POSTs the supplement; returns the FINAL HTTP status honestly. A 2xx or any 4xx (incl. a
