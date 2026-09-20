@@ -465,22 +465,16 @@ public sealed partial class Plugin
         }
     }
 
-    // Bundles the header POST's final HTTP status with which attempt (1-based) it landed on (spec
-    // 2026-09-20 § 2 header-retry telemetry) as ONE parameter — rather than a bare extra `int attempt`
-    // — so this doesn't grow OnSummaryUploadOk's already-tracked 6-parameter count (docs/tech-debt.md;
-    // CLAUDE.md: a pre-existing size violation must not grow further).
-    private readonly record struct UploadOutcome(int Status, int Attempt);
-
-    // Pure decision: does a landed summary send its captured event chunks? Extracted (mirrors
-    // ShouldRetainUnsentArchive/PhaseFromResult in this same file) so the "upload all — never skip on
-    // the merge verdict" rule (owner 2026-08-25) pins headless without a live Plugin/IPluginServices
-    // instance (LogUploadTests' own header: no test in this suite constructs one). `verdict` is
-    // deliberately UNUSED — chunks send whenever the segment actually has any, regardless of `Kept`;
-    // spec 2026-09-20 § 1(b) re-confirms the pre-2026-08-25 "skip on Kept=false" behaviour stays gone.
-    internal static bool ShouldSendChunks(int chunkCount, UploadVerdict? verdict) => chunkCount > 0;
+    // UploadOutcome, ShouldSendChunks, and OnSummaryUploadFailed live in Plugin.LogUpload.Outcome.cs —
+    // moved out of this file (review F2) to keep it under the pre-branch line-count guardrail; same
+    // partial class, so they remain directly callable from here.
 
     // Success leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
-    // never touch uGUI). Gates chunk + positions uploads on the server's merge verdict.
+    // never touch uGUI). Chunks are sent regardless of the merge verdict (c498896, 2026-08-26 — a
+    // merge loser's chunks feed the per-uploader view; see ShouldSendChunks + its pin, in
+    // Plugin.LogUpload.Outcome.cs); positions are likewise sent regardless of the verdict — gated only
+    // on the replay-cell toggle (`replaySendAllowed`), NOT on the server's `HavePositions` (same
+    // commit — see the inline comment on the `replayDoc` block below).
     private void OnSummaryUploadOk(CombatLog log, SpoolSegment seg, PositionUploadDoc? replayDoc, UploadOutcome outcome, UploadVerdict? verdict, bool replaySendAllowed)
     {
         var v = verdict ?? new UploadVerdict(true, false);
@@ -508,22 +502,6 @@ public sealed partial class Plugin
                 _services.Log.Info("[CombatMeter.SP1] Positions retained, not uploaded (replay cell off).");
             else UploadReplayDoc(replayDoc);
         }
-    }
-
-    // Failure leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
-    // never touch uGUI). The header exhausted every retry (LogUploader.RetryDelays) — chunks are
-    // deliberately NEVER sent here (spec 2026-09-20 § 2 point 3: the server never saw this logId, so
-    // there is nothing for a chunk to attach to); PersistReUpload already retained the true bodies
-    // (auto path) so the info line below names the durable recovery the owner can actually click.
-    private void OnSummaryUploadFailed(PositionUploadDoc? replayDoc, int status, string? err, UploadVerdict? verdict, int attempt)
-    {
-        _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}) attempt={attempt}: {err}");
-        _services.Log.Info("[CombatMeter.SP1] Retained locally — use \"Re-upload\" in the history window to retry.");
-        // Summary failed — fall back to today's behavior: positions upload ungated
-        // (they attach via the pending path even without a matching segment). The one
-        // exception: a failed SUPPLEMENT still carried a verdict whose HavePositions
-        // came from the 409 body — respect it (Task 10's path).
-        if (replayDoc is not null && verdict?.HavePositions != true) UploadReplayDoc(replayDoc);
     }
 
     // -----------------------------------------------------------------------

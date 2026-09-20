@@ -111,7 +111,11 @@ internal static class LogUploader
     /// 2026-09-20's "do not change the public callback shape". Used by the one production call site
     /// (Plugin.LogUpload.cs's AssembleAndUpload) for the testing-channel "attempt=" telemetry on the
     /// Upload OK/FAILED lines; the 4-arg overload above is what LogUploaderRetryTests (h1-h4) exercises
-    /// and never observes attempts.</summary>
+    /// and never observes attempts. <c>onComplete</c> has no default here (review F5): a caller writing
+    /// <c>UploadFireAndForget(log, null, delayMs)</c> would be ambiguous (CS0121) between this overload
+    /// and the 4-arg one above — <c>null</c> plus the remaining positional args satisfies both equally
+    /// well, so callers wanting the 4-arg overload's shape must pass its callback explicitly (typed as
+    /// <c>Action&lt;bool, int, string?, UploadVerdict?&gt;</c>) rather than a bare <c>null</c>.</summary>
     internal static void UploadFireAndForget(
         CombatLog log,
         Action<bool, int, string?, UploadVerdict?, int>? onComplete,

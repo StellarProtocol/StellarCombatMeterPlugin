@@ -1,10 +1,10 @@
 // Task 1 (CombatMeter upload resilience, "chunk-loss fix 2"; design of record:
 // docs/superpowers/specs/2026-09-20-combatmeter-upload-resilience-design.md §§ 1-3). Header-retry pins
-// h1-h5. Every prior upload test in this suite is pure-data (URL building, UploadVerdict.Parse,
-// retry-DELAY-VALUE pinning — see LogUploadTests.cs's own header comment and
-// PositionUploaderRetryTests, which pins ONLY PositionUploader.NextRetryDelay/RetryDelays, never an
-// actual HttpMessageHandler). ScriptedHandler below is therefore new machinery for this suite, not a
-// mirror of an existing fake-handler test.
+// h1-h5, plus the 5xx/409 halves of the same retry policy (h6-h8, review follow-up). Every prior upload
+// test in this suite is pure-data (URL building, UploadVerdict.Parse, retry-DELAY-VALUE pinning — see
+// LogUploadTests.cs's own header comment and PositionUploaderRetryTests, which pins ONLY
+// PositionUploader.NextRetryDelay/RetryDelays, never an actual HttpMessageHandler). ScriptedHandler
+// below is therefore new machinery for this suite, not a mirror of an existing fake-handler test.
 //
 // LogUploader.HttpClient and LogUploader.DelayFunc are swapped for the duration of each test (restored
 // in `finally`) and serialized via LogUploaderHttpCollection (DisableParallelization) — the same pattern
@@ -173,6 +173,93 @@ public sealed class LogUploaderRetryTests
         Assert.True(verdict!.Kept);
         Assert.False(verdict.HavePositions);
         Assert.Equal("https://ctor/run/sea/1", UploadVerdict.PreferredUrl(verdict, "https://ctor/run/sea/1"));
+    }
+
+    // (h6) the 5xx half of the same retry policy TrySendAsync/UploadAsync applies to a transport
+    // exception (h1): two 5xx responses then a 200 land the upload on the 3rd attempt. Mutation-tested
+    // (review): temporarily narrowing LogUploader.cs's `status >= 500` retry gate to `status >= 502`
+    // makes this fail — a 500 no longer retries, so the 3rd-attempt 200 is never reached — see the Fix
+    // report for the exact failure line.
+    [Fact]
+    public void Http500_then_503_then_200_lands_on_third_attempt()
+    {
+        var handler = new ScriptedHandler(
+            Returns(HttpStatusCode.InternalServerError, "server error 1"),
+            Returns(HttpStatusCode.ServiceUnavailable, "server error 2"),
+            Returns(HttpStatusCode.OK, "{\"ok\":true,\"kept\":true}"));
+        (bool ok, int status, string? err, UploadVerdict? verdict, int attempt)? result = null;
+        var done = new ManualResetEventSlim();
+
+        WithFakeTransport(handler, () =>
+        {
+            LogUploader.UploadFireAndForget(MakeLog(),
+                (ok, status, err, verdict, attempt) => { result = (ok, status, err, verdict, attempt); done.Set(); },
+                delayMs: 0, skipPrecheck: true);
+            Assert.True(done.Wait(TimeSpan.FromSeconds(5)), "upload never completed");
+        });
+
+        Assert.Equal(3, handler.Calls);
+        Assert.True(result!.Value.ok);
+        Assert.Equal(200, result.Value.status);
+        Assert.Equal(3, result.Value.attempt);
+    }
+
+    // (h7) a 409 ("server already has this run") is a PERMANENT verdict, never retried — exactly one
+    // header POST, resolved as a success. MakeLog()'s Actors dict is empty (no local actor), so
+    // SupplementPolicy.ShouldSendSupplement is false and HandleAlreadyUploadedAsync never fires the
+    // supplement POST — the single ScriptedHandler (shared by both the header and supplement URLs, same
+    // LogUploader.HttpClient) staying at Calls==1 is itself proof the supplement leg never ran.
+    [Fact]
+    public void Http409_is_not_retried_and_resolves_as_success()
+    {
+        var handler = new ScriptedHandler(Returns(HttpStatusCode.Conflict, "{\"ok\":true,\"kept\":true}"));
+        (bool ok, int status, string? err, UploadVerdict? verdict, int attempt)? result = null;
+        var done = new ManualResetEventSlim();
+
+        WithFakeTransport(handler, () =>
+        {
+            LogUploader.UploadFireAndForget(MakeLog(),
+                (ok, status, err, verdict, attempt) => { result = (ok, status, err, verdict, attempt); done.Set(); },
+                delayMs: 0, skipPrecheck: true);
+            Assert.True(done.Wait(TimeSpan.FromSeconds(5)), "upload never completed");
+        });
+
+        Assert.Equal(1, handler.Calls);
+        Assert.True(result!.Value.ok);
+        Assert.Equal(409, result.Value.status);
+        Assert.Equal(1, result.Value.attempt);
+        Assert.NotNull(result.Value.verdict);
+        // UploadVerdict.From409 FORCES Kept=false (the 409 body carries no `kept` field for Parse to
+        // read — see UploadVerdict.cs's doc comment); this run is server-covered regardless.
+        Assert.False(result.Value.verdict!.Kept);
+    }
+
+    // (h8) a 5xx on ALL three attempts exhausts the retry ladder and gives up honestly with the last
+    // server status (not status 0 — a response WAS received every time, unlike h3's transport failures).
+    [Fact]
+    public void Three_5xx_responses_exhaust_retries_and_report_last_status()
+    {
+        var handler = new ScriptedHandler(
+            Returns(HttpStatusCode.InternalServerError, "server error 1"),
+            Returns(HttpStatusCode.BadGateway, "server error 2"),
+            Returns(HttpStatusCode.ServiceUnavailable, "server error 3"));
+        (bool ok, int status, string? err, UploadVerdict? verdict, int attempt)? result = null;
+        var done = new ManualResetEventSlim();
+
+        WithFakeTransport(handler, () =>
+        {
+            LogUploader.UploadFireAndForget(MakeLog(),
+                (ok, status, err, verdict, attempt) => { result = (ok, status, err, verdict, attempt); done.Set(); },
+                delayMs: 0, skipPrecheck: true);
+            Assert.True(done.Wait(TimeSpan.FromSeconds(5)), "upload never completed");
+        });
+
+        Assert.Equal(3, handler.Calls);
+        Assert.False(result!.Value.ok);
+        Assert.Equal(503, result.Value.status);
+        Assert.Equal("server error 3", result.Value.err);
+        Assert.Null(result.Value.verdict);
+        Assert.Equal(3, result.Value.attempt);
     }
 }
 
