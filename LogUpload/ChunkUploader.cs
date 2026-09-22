@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -74,7 +75,7 @@ internal static class ChunkUploader
                 try
                 {
                     // V1 envelopes are damage chunks on /events — a 404 there is an ordinary failure (retried).
-                    if (!await PostWithRetryAsync(url, envelopeJsons[i], terminalOn404: false).ConfigureAwait(false))
+                    if (!await PostWithRetryAsync(url, envelopeJsons[i], terminalOn404: false, logWarn).ConfigureAwait(false))
                         logWarn($"[CombatMeter.SP1] Re-upload chunk {i} FAILED after retries — skipping; later chunks continue.");
                 }
                 catch (Exception ex) { logWarn($"[CombatMeter.SP1] Re-upload chunk {i} threw: {ex.Message} — skipping."); }
@@ -283,7 +284,7 @@ internal static class ChunkUploader
                 var gz = store.Read(r.BlobName);
                 if (gz is null) { logWarn($"[CombatMeter.SP1] {ep.Label} {r.Index}/{refs.Count} for {logId}: blob {r.BlobName} missing — skipping."); continue; }
                 var json = BuildEnvelope(logId, r, refs.Count, SpoolCodec.Gunzip(gz));
-                var res = await PostAsync(ep.Url, json, ep.TerminalOn404).ConfigureAwait(false);
+                var res = await PostAsync(ep.Url, json, ep.TerminalOn404, logWarn).ConfigureAwait(false);
                 if (res.NotFound)
                 {
                     logWarn($"[CombatMeter.SP1] {r.Track} track not accepted by server (404) — blobs retained for re-upload.");
@@ -308,7 +309,7 @@ internal static class ChunkUploader
             try
             {
                 var json = BuildEnvelope(logId, chunk);
-                var ok = await PostWithRetryAsync(url, json, terminalOn404: false).ConfigureAwait(false);
+                var ok = await PostWithRetryAsync(url, json, terminalOn404: false, logWarn).ConfigureAwait(false);
                 if (!ok)
                     logWarn($"[CombatMeter.SP1] Chunk upload FAILED after retries (index {chunk.Index}/{chunk.Total}) for {logId} — skipping; later chunks continue.");
             }
@@ -331,18 +332,41 @@ internal static class ChunkUploader
         internal bool NotFound { get; }
     }
 
-    private static async Task<bool> PostWithRetryAsync(string url, string json, bool terminalOn404)
-        => (await PostAsync(url, json, terminalOn404).ConfigureAwait(false)).Ok;
+    private static async Task<bool> PostWithRetryAsync(string url, string json, bool terminalOn404, Action<string>? logWarn = null)
+        => (await PostAsync(url, json, terminalOn404, logWarn).ConfigureAwait(false)).Ok;
 
-    private static async Task<PostOutcome> PostAsync(string url, string json, bool terminalOn404)
+    /// <summary>Posts one chunk envelope with the V1 retry ladder.
+    /// <para><b>2.12.0 — brotli on the wire (owner 2026-09-22).</b> The envelope is compressed ONCE, before
+    /// the retry loop (a retry re-sends the same bytes, it never re-compresses), and sent as
+    /// <see cref="ByteArrayContent"/> with <c>Content-Type: application/json</c> +
+    /// <c>Content-Encoding: br</c>. The logs api decodes it to validate the envelope and stores the
+    /// client's bytes as received (StellarLogs main <c>d85d194c</c>).</para>
+    /// <para><b>An upload is never lost to compression.</b> If the encoder is unavailable,
+    /// <see cref="ChunkCompressor.TryEncode"/> returns null and this posts the IDENTICAL
+    /// <see cref="StringContent"/> the pre-2.12.0 path posted. If the server answers <b>415</b> (an api
+    /// predating the `br` routes), that same chunk is resent PLAIN immediately — <c>attempt--</c> makes the
+    /// compat resend not one of the chunk's retries, so no backoff is burned and a genuinely failing chunk
+    /// still gets its full ladder — and brotli is off for the rest of the process, which also bounds this
+    /// loop: <c>br</c> is null from then on, so the 415 branch can fire at most once per call.</para>
+    /// <para>Every other status/exception path is unchanged: the 5xx/transport retry halves, the
+    /// <paramref name="terminalOn404"/> reading of a 404, and a 409 falling through to the ladder.</para></summary>
+    private static async Task<PostOutcome> PostAsync(string url, string json, bool terminalOn404, Action<string>? logWarn = null)
     {
+        var br = ChunkCompressor.Enabled ? ChunkCompressor.TryEncode(Encoding.UTF8.GetBytes(json), logWarn) : null;
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var content = BuildContent(json, br);
                 using var response = await HttpClient.PostAsync(url, content, CancellationToken.None).ConfigureAwait(false);
                 if (response.IsSuccessStatusCode) return new PostOutcome(true, false);
+                if (br is not null && (int)response.StatusCode == 415)
+                {
+                    ChunkCompressor.DisableAfterUnsupported(logWarn);
+                    br = null;
+                    attempt--;   // the compat resend is not one of this chunk's retries
+                    continue;    // ...and it is immediate: no backoff for a server that simply cannot read `br`
+                }
                 // 404 on the /buff-events endpoint = the endpoint itself is absent. Retrying cannot conjure a
                 // route; the caller keeps the blobs so a later re-upload against an updated server still lands
                 // them. On /events (terminalOn404 false) a 404 is just another failure and falls through to the
@@ -357,6 +381,19 @@ internal static class ChunkUploader
             if (attempt >= RetryDelays.Length) return new PostOutcome(false, false);
             await Task.Delay(RetryDelays[attempt]).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>The request body: the client's brotli stream when we have one, otherwise the EXACT
+    /// <see cref="StringContent"/> every build before 2.12.0 sent (same bytes, same
+    /// <c>application/json; charset=utf-8</c>) — pinned by
+    /// ChunkUploaderBrotliTests.A_disabled_compressor_sends_exactly_what_the_plain_path_sent_before_this_change.</summary>
+    private static HttpContent BuildContent(string json, byte[]? br)
+    {
+        if (br is null) return new StringContent(json, Encoding.UTF8, "application/json");
+        var content = new ByteArrayContent(br);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        content.Headers.ContentEncoding.Add(ChunkCompressor.ContentEncoding);
+        return content;
     }
 
     /// <summary>
