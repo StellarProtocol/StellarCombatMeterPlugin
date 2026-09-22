@@ -17,6 +17,13 @@ public sealed class FakeDataStore : IPluginDataStore
     /// so this stands in for a serialization/gzip fault on the spool's background write task.</summary>
     public bool ThrowOnWrite;
 
+    /// <summary>Optional predicate: when it returns true for a given blob name, <see cref="Read"/> throws
+    /// instead of returning. Stands in for a disk/IO fault on the UPLOAD side (as opposed to
+    /// <see cref="ThrowOnWrite"/>, which fakes a write-side fault) — e.g. ChunkUploaderResilienceTests'
+    /// "dmg track's blob read throws" pin, which needs ONE track to fail while the others still succeed.
+    /// Null (default) never throws.</summary>
+    public System.Func<string, bool>? ThrowOnRead;
+
     public void Write(string name, byte[] data)
     {
         System.Threading.Interlocked.Increment(ref Writes);
@@ -24,7 +31,11 @@ public sealed class FakeDataStore : IPluginDataStore
         _files[name] = data;
     }
 
-    public byte[]? Read(string name) => _files.TryGetValue(name, out var data) ? data : null;
+    public byte[]? Read(string name)
+    {
+        if (ThrowOnRead?.Invoke(name) == true) throw new System.IO.IOException("fake read fault");
+        return _files.TryGetValue(name, out var data) ? data : null;
+    }
 
     public void Delete(string name) => _files.TryRemove(name, out _);
 

@@ -430,7 +430,7 @@ public sealed partial class Plugin
             var delayMs = flushBuffer ? Random.Shared.Next(0, UploadJitterMaxMs) : 0;
             fired = true;
             if (flushBuffer) PersistReUpload(entry, log, seg, replayDoc);
-            LogUploader.UploadFireAndForget(log, (ok, status, err, verdict) =>
+            LogUploader.UploadFireAndForget(log, (ok, status, err, verdict, attempt) =>
             {
                 // Callback fires on a thread-pool thread; only mutate the (lock-free) status dict +
                 // call thread-safe log methods here — never touch uGUI. Flag the terminal phase change
@@ -438,11 +438,13 @@ public sealed partial class Plugin
                 // On success prefer the server's short run URL when the response carried one (a relative
                 // "/run/…" is absolutized against the same SiteBase as `url`); otherwise (old server,
                 // failure, or 409-resolved path whose body has no shortUrl) keep the constructed `url`.
+                // `attempt` (1-based; spec 2026-09-20 § 2) is the header-retry telemetry — a tester's
+                // log line shows retries happening even though the callback shape itself is unchanged.
                 _uploadStatus.Set(entry, PhaseFromResult(ok, status),
                     UploadVerdict.PreferredUrl(verdict, url));
                 MarkUploadStateDirty(entry);
-                if (ok) OnSummaryUploadOk(log, seg, replayDoc, status, verdict, replaySendAllowed);
-                else    OnSummaryUploadFailed(replayDoc, status, err, verdict);
+                if (ok) OnSummaryUploadOk(log, seg, replayDoc, new UploadOutcome(status, attempt), verdict, replaySendAllowed);
+                else    OnSummaryUploadFailed(replayDoc, status, err, verdict, attempt);
             }, delayMs, skipPrecheck: !flushBuffer);   // manual re-upload (flushBuffer=false) forces full ingest so the server can REPAIR a bad run
 
             MaybeReportPortraits();
@@ -463,12 +465,20 @@ public sealed partial class Plugin
         }
     }
 
+    // UploadOutcome, ShouldSendChunks, and OnSummaryUploadFailed live in Plugin.LogUpload.Outcome.cs —
+    // moved out of this file (review F2) to keep it under the pre-branch line-count guardrail; same
+    // partial class, so they remain directly callable from here.
+
     // Success leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
-    // never touch uGUI). Gates chunk + positions uploads on the server's merge verdict.
-    private void OnSummaryUploadOk(CombatLog log, SpoolSegment seg, PositionUploadDoc? replayDoc, int status, UploadVerdict? verdict, bool replaySendAllowed)
+    // never touch uGUI). Chunks are sent regardless of the merge verdict (c498896, 2026-08-26 — a
+    // merge loser's chunks feed the per-uploader view; see ShouldSendChunks + its pin, in
+    // Plugin.LogUpload.Outcome.cs); positions are likewise sent regardless of the verdict — gated only
+    // on the replay-cell toggle (`replaySendAllowed`), NOT on the server's `HavePositions` (same
+    // commit — see the inline comment on the `replayDoc` block below).
+    private void OnSummaryUploadOk(CombatLog log, SpoolSegment seg, PositionUploadDoc? replayDoc, UploadOutcome outcome, UploadVerdict? verdict, bool replaySendAllowed)
     {
         var v = verdict ?? new UploadVerdict(true, false);
-        _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {status}): {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
+        _services.Log.Info($"[CombatMeter.SP1] Upload OK (HTTP {outcome.Status}) attempt={outcome.Attempt}: {log.Header.LogId} kept={v.Kept} havePositions={v.HavePositions}");
         // UPLOAD ALL — never skip on the merge verdict (owner rule 2026-08-25: "all uploads kept, never
         // drop"). Every uploader streams its OWN event chunks + positions regardless of `Kept`, so each
         // uploader's per-uploader view (`?upload=`) is COMPLETE. The worker keeps every contributor's
@@ -478,11 +488,11 @@ public sealed partial class Plugin
         // `Kept`/`HavePositions` skips are what dropped a non-elected uploader's data — removed.
         // Chunks still upload only AFTER the summary landed (ordering guarantee — the worker cannot
         // associate chunks with a run it never saw).
-        if (seg.ChunkCount > 0)
+        if (ShouldSendChunks(seg.ChunkCount, verdict))
             ChunkUploader.UploadSegmentFireAndForget(
                 LogUploader.ApiBase, log.Header.Region,
                 log.Header.Encounter.LevelUuid, log.Header.LogId, seg,
-                _services.Data, msg => _services.Log.Warning(msg));
+                _services.Data, new ChunkUploader.SendLog(msg => _services.Log.Warning(msg), msg => _services.Log.Info(msg)));
         if (replayDoc is not null)
         {
             // The doc is built even when the replay cell is off (it must be RETAINED regardless), so the
@@ -492,18 +502,6 @@ public sealed partial class Plugin
                 _services.Log.Info("[CombatMeter.SP1] Positions retained, not uploaded (replay cell off).");
             else UploadReplayDoc(replayDoc);
         }
-    }
-
-    // Failure leg of the summary-upload callback (thread-pool thread — thread-safe calls only;
-    // never touch uGUI).
-    private void OnSummaryUploadFailed(PositionUploadDoc? replayDoc, int status, string? err, UploadVerdict? verdict)
-    {
-        _services.Log.Warning($"[CombatMeter.SP1] Upload FAILED (HTTP {status}): {err}");
-        // Summary failed — fall back to today's behavior: positions upload ungated
-        // (they attach via the pending path even without a matching segment). The one
-        // exception: a failed SUPPLEMENT still carried a verdict whose HavePositions
-        // came from the 409 body — respect it (Task 10's path).
-        if (replayDoc is not null && verdict?.HavePositions != true) UploadReplayDoc(replayDoc);
     }
 
     // -----------------------------------------------------------------------
