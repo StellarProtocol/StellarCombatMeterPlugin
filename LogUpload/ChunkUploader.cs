@@ -332,7 +332,9 @@ internal static class ChunkUploader
         internal bool NotFound { get; }
     }
 
-    private static async Task<bool> PostWithRetryAsync(string url, string json, bool terminalOn404, Action<string>? logWarn = null)
+    // logWarn is REQUIRED (no `= null` default, review I1): ChunkCompressor's once-per-process line is the
+    // only evidence a fallback fired, and a sink-less call site would otherwise be able to swallow it.
+    private static async Task<bool> PostWithRetryAsync(string url, string json, bool terminalOn404, Action<string> logWarn)
         => (await PostAsync(url, json, terminalOn404, logWarn).ConfigureAwait(false)).Ok;
 
     /// <summary>Posts one chunk envelope with the V1 retry ladder.
@@ -341,37 +343,62 @@ internal static class ChunkUploader
     /// <see cref="ByteArrayContent"/> with <c>Content-Type: application/json</c> +
     /// <c>Content-Encoding: br</c>. The logs api decodes it to validate the envelope and stores the
     /// client's bytes as received (StellarLogs main <c>d85d194c</c>).</para>
-    /// <para><b>An upload is never lost to compression.</b> If the encoder is unavailable,
-    /// <see cref="ChunkCompressor.TryEncode"/> returns null and this posts the IDENTICAL
-    /// <see cref="StringContent"/> the pre-2.12.0 path posted. If the server answers <b>415</b> (an api
-    /// predating the `br` routes), that same chunk is resent PLAIN immediately — <c>attempt--</c> makes the
-    /// compat resend not one of the chunk's retries, so no backoff is burned and a genuinely failing chunk
-    /// still gets its full ladder — and brotli is off for the rest of the process, which also bounds this
-    /// loop: <c>br</c> is null from then on, so the 415 branch can fire at most once per call.</para>
+    /// <para><b>AN UPLOAD IS NEVER LOST TO COMPRESSION.</b> Two ways that holds:</para>
+    /// <para>1. The encoder being unavailable — <see cref="ChunkCompressor.TryEncode"/> returns null and this
+    /// posts the IDENTICAL <see cref="StringContent"/> the pre-2.12.0 path posted.</para>
+    /// <para>2. The server REFUSING the compressed body. <b>Fix (review C1):</b> this used to special-case
+    /// only <b>415</b>, so a <b>400</b> (`bad content-encoding body` — a truncated or mangled stream), a
+    /// <b>413</b>, or a WAF/edge answering 400/501/502 to an unknown request encoding re-sent the SAME
+    /// brotli bytes twice more and then abandoned the chunk — with brotli still on, so every later chunk of
+    /// every later segment died the same way and the run landed `incomplete-*` with no self-healing. Now,
+    /// while a chunk went out as `br`, ANY non-2xx that is not the terminal 404 buys ONE immediate plain
+    /// resend of the same chunk: <c>attempt--</c> keeps it out of the chunk's retry budget (so a genuinely
+    /// failing chunk still gets its full ladder on the plain body) and there is no backoff. Setting
+    /// <c>br</c> to null also BOUNDS the loop — the branch cannot re-fire, so the cost is at most one extra
+    /// request per call.</para>
+    /// <para><b>Only a 415 latches brotli off for the process</b> (<see cref="ChunkCompressor.DisableAfterUnsupported"/>):
+    /// that status means "this api does not accept `br` on this route" and is the compatibility switch. A
+    /// transient 400/413/5xx must NOT cost the session its compression — it gets the free plain resend and
+    /// the next chunk is compressed again.</para>
     /// <para>Every other status/exception path is unchanged: the 5xx/transport retry halves, the
-    /// <paramref name="terminalOn404"/> reading of a 404, and a 409 falling through to the ladder.</para></summary>
-    private static async Task<PostOutcome> PostAsync(string url, string json, bool terminalOn404, Action<string>? logWarn = null)
+    /// <paramref name="terminalOn404"/> reading of a 404 (checked BEFORE the fallback, so a track-terminal
+    /// 404 still stops the track rather than buying a pointless plain resend), and a 409 falling through to
+    /// the ladder. A transport EXCEPTION is not a refusal of the encoding and keeps the ladder as-is.</para></summary>
+    private static async Task<PostOutcome> PostAsync(string url, string json, bool terminalOn404, Action<string> logWarn)
     {
-        var br = ChunkCompressor.Enabled ? ChunkCompressor.TryEncode(Encoding.UTF8.GetBytes(json), logWarn) : null;
+        byte[]? br = null;
+        var rawBytes = 0;
+        if (ChunkCompressor.Enabled)
+        {
+            var raw = Encoding.UTF8.GetBytes(json);
+            rawBytes = raw.Length;
+            br = ChunkCompressor.TryEncode(raw, logWarn);
+        }
         for (var attempt = 0; ; attempt++)
         {
             try
             {
                 using var content = BuildContent(json, br);
                 using var response = await HttpClient.PostAsync(url, content, CancellationToken.None).ConfigureAwait(false);
-                if (response.IsSuccessStatusCode) return new PostOutcome(true, false);
-                if (br is not null && (int)response.StatusCode == 415)
+                if (response.IsSuccessStatusCode)
                 {
-                    ChunkCompressor.DisableAfterUnsupported(logWarn);
-                    br = null;
-                    attempt--;   // the compat resend is not one of this chunk's retries
-                    continue;    // ...and it is immediate: no backoff for a server that simply cannot read `br`
+                    // review I2: one POSITIVE line per process, so the in-game proof does not rest on the
+                    // ABSENCE of a warning. Only on a chunk the server actually ACCEPTED compressed.
+                    if (br is not null) ChunkCompressor.NoteFirstAccepted(br.Length, rawBytes, logWarn);
+                    return new PostOutcome(true, false);
                 }
                 // 404 on the /buff-events endpoint = the endpoint itself is absent. Retrying cannot conjure a
                 // route; the caller keeps the blobs so a later re-upload against an updated server still lands
                 // them. On /events (terminalOn404 false) a 404 is just another failure and falls through to the
                 // V1 retry ladder — that path has always retried it, and this change must not alter it.
                 if (terminalOn404 && (int)response.StatusCode == 404) return new PostOutcome(false, true);
+                if (br is not null)
+                {
+                    if ((int)response.StatusCode == 415) ChunkCompressor.DisableAfterUnsupported(logWarn);
+                    br = null;
+                    attempt--;   // the compat resend is not one of this chunk's retries
+                    continue;    // ...and it is immediate: no backoff for a server that refused the encoding
+                }
             }
             catch
             {
