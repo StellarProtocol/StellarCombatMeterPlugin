@@ -70,7 +70,27 @@
          PackageReference note below for the local-feed situation; the version there must be flipped to
          2.8.0 once the framework release publishes, and the registry manifest's minimum framework
          becomes 2.8.0 at that point too. -->
-    <Version>2.10.0</Version>
+    <!-- 2.11.0: upload resilience (PR #46, branch fix/upload-resilience — the base of this stack). The
+         header re-send retry, the per-track send guards, and the bounded wait on a segment's blob writes.
+         That work never bumped this property (the owner's MAIN client runs a build stamped via
+         `-p:Version=2.11.0`), so the number is recorded here and the value jumps 2.10.0 -> 2.12.0.
+         2.12.0: EVENT CHUNKS UPLOAD BROTLI-COMPRESSED (owner 2026-09-22: "why gzip when we already use
+         brotli?"). Player-language changelog bullet for the release:
+           * "Uploads are far smaller and much faster — a chunk of combat data now goes out about 27x
+              smaller, so a long raid finishes uploading in seconds instead of minutes."
+         Mechanism: LogUpload/ChunkCompressor.cs + the HTTP send in LogUpload/ChunkUploader.cs POST the
+         envelope as `Content-Encoding: br` (brotli quality 9, window 22, one-shot System.IO.Compression
+         BrotliEncoder — BCL only, no new dependency). The logs api accepts and STORES the client's bytes
+         as received (StellarLogs main d85d194c, live on api.stellarresonance.app and on dev); chunks were
+         already stored brotli at rest, so this removes the server's re-compression instead of adding one.
+         Nothing in capture / archive / spool / run identity / the buff send filter is touched: the same
+         bytes go to the same endpoints in the same order — only the transfer encoding changes.
+         An upload is NEVER lost to compression: an unavailable encoder (the native compression library
+         failing under BepInEx's .NET 6 runtime on Wine) and a server answering 415 both fall back to the
+         byte-identical plain JSON the 2.11.0 path sent, each logging ONE line per process; the 415 resend
+         is immediate and does not consume one of the chunk's retries. Requires no framework change and no
+         minModSystemVersion bump. -->
+    <Version>2.12.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
