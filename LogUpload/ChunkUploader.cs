@@ -360,10 +360,23 @@ internal static class ChunkUploader
     /// that status means "this api does not accept `br` on this route" and is the compatibility switch. A
     /// transient 400/413/5xx must NOT cost the session its compression — it gets the free plain resend and
     /// the next chunk is compressed again.</para>
-    /// <para>Every other status/exception path is unchanged: the 5xx/transport retry halves, the
-    /// <paramref name="terminalOn404"/> reading of a 404 (checked BEFORE the fallback, so a track-terminal
-    /// 404 still stops the track rather than buying a pointless plain resend), and a 409 falling through to
-    /// the ladder. A transport EXCEPTION is not a refusal of the encoding and keeps the ladder as-is.</para></summary>
+    /// <para>3. The TRANSPORT refusing the compressed body. <b>Fix (re-review (d)):</b> an intermediary that
+    /// RESETS the connection on a request encoding it dislikes raises an EXCEPTION, not a status, so the
+    /// status fallback above never sees it and the chunk used to die compressed on all three attempts with
+    /// nothing latched — the same loss shape as 2, in its one remaining disguise. The <c>catch</c> below
+    /// therefore drops <c>br</c> so the rest of THIS chunk's attempts go plain. Deliberately unlike 2: NO
+    /// free attempt (no <c>attempt--</c>, so the ladder keeps its exact 3-attempt shape and its backoff) and
+    /// NO process latch — a network blip is encoding-independent and must not cost the session its
+    /// compression.</para>
+    /// <para><b>What is unchanged</b> (review minor 10 — the earlier wording here was approximate): the
+    /// retry halves stay <c>{1 s, 3 s}</c> and the ladder stays 3 attempts; the <paramref name="terminalOn404"/>
+    /// reading of a 404 is evaluated BEFORE the fallback, so a track-terminal 404 still stops the track
+    /// rather than buying a pointless plain resend; and the OUTCOME of every status is what it always was.
+    /// What DID change for a compressed body is the shape of the first refusal: a 409, or a non-terminal
+    /// 404 on <c>/events</c>, now costs ONE extra immediate plain attempt before the ladder — the plain body
+    /// is byte-for-byte what 2.11.0 sent and no backoff is consumed, so the only cost is that one request.
+    /// After any refusal, <c>br</c> stays null for the rest of THIS chunk's attempts (review minor 11): a
+    /// transient 500 costs that one chunk its compression, never the session's.</para></summary>
     private static async Task<PostOutcome> PostAsync(string url, string json, bool terminalOn404, Action<string> logWarn)
     {
         byte[]? br = null;
@@ -402,7 +415,9 @@ internal static class ChunkUploader
             }
             catch
             {
-                // Network/transport error — fall through to the retry/backoff below.
+                // Network/transport error — fall through to the retry/backoff below, but plain from here
+                // on for this chunk (re-review (d); no free attempt, no process latch — see paragraph 3).
+                br = null;
             }
 
             if (attempt >= RetryDelays.Length) return new PostOutcome(false, false);
