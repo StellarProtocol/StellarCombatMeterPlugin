@@ -1,6 +1,7 @@
 using System;
 using Stellar.Abstractions.Domain;
 using Stellar.CombatMeter.AutoArchive;
+using Stellar.CombatMeter.LogUpload;   // ContentKind (belt-cut content gate)
 
 namespace Stellar.CombatMeter;
 
@@ -235,8 +236,37 @@ public sealed partial class Plugin
             // re-arm interleave lets the tracker independently resolve Cut on the same frame its own
             // Commit already zeroed Plugin._lastRunId. There is nothing left to cut; skip rather than
             // stamp a bogus LevelUuid = 0 segment archive.
-            LogRunBoundary("combat-belt-cut", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
-            RunSegmentCut(AutoArchive.ArchiveReason.RunBoundary);
+            //
+            // Content gate (owner report 2026-09-24, Void - Tina's Mindrealm run 90078997639069696): a
+            // combat-event Cut fires on a same-instance loading flash resolved by a combat event. In a
+            // RAID that flash is the scripted-death stage seam and this path is the ONLY thing that cuts
+            // it (spec 2026-08-26, cuts PRESERVED) — keep it. But a map-asset teleport ("Echo Residue"
+            // closet) in a DUNGEON raises the SAME flash while the boss is still alive (measured at 96.4%
+            // HP), and dungeon/world-boss/vault carry the game's own stage/settlement clear signal, so
+            // splitting the fight there is wrong. Suppress the Cut for CONFIRMED non-raid content; Raid —
+            // and unknown/unfetched (Other) — keep cutting (fail-safe: an unfetched raid map must never
+            // lose a stage). The tracker already cleared its arm (_armedRunId=0), so skipping the bank
+            // simply lets the segment (stats + replay window) keep flowing into the ongoing fight, which
+            // then banks whole at the real bosskill — preserving replay contiguity (invariant 6). The raid
+            // path is byte-unchanged. See docs/recon/combatmeter-archive-flow.md.
+            if (SegmentCutAllowedForKind(_currentKind))
+            {
+                LogRunBoundary("combat-belt-cut", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+                RunSegmentCut(AutoArchive.ArchiveReason.RunBoundary);
+            }
+            else
+            {
+                LogRunBoundary("combat-belt-cut-skip-nonraid", _lastRunId, _services.Dungeon.CurrentRunId, _stats.Count);
+            }
         }
     }
+
+    // A same-instance loading-flash belt resolution banks a segment CUT ONLY where a raid's scripted-death
+    // stage seam needs it — that path is the sole cutter of that seam (spec 2026-08-26). Dungeon / WorldBoss
+    // / Vault carry the game's own stage/settlement signal, so a same-instance teleport (map asset) there is
+    // NOT a segment boundary and must not split the fight. Unknown/Other keeps the cut (fail-safe: an
+    // unfetched or newly-added raid map id must never silently lose a stage). Unit-tested in
+    // SegmentCutContentGateTests; the raid path stays byte-identical to before this gate.
+    internal static bool SegmentCutAllowedForKind(ContentKind kind)
+        => kind != ContentKind.Dungeon && kind != ContentKind.WorldBoss && kind != ContentKind.Vault;
 }
