@@ -22,6 +22,10 @@ public sealed partial class Plugin
         long charId = id.Uid;
         if (!IsPartyMember(charId)) return null;
         EnsureVoiceTextures();
+        // A member I've voice-blocked shows the muted glyph regardless of their wire mic-mode: the block is a
+        // LOCAL state the game doesn't reflect back into the mic status. _blockedVoice is kept in sync by every
+        // menu open (IsVoiceBlocked) so this also mirrors a block done via the native HUD.
+        if (_blockedVoice.Contains(charId)) return _mutedTex;
         return _services.PartyRoster.GetMicStatus(charId) switch
         {
             MicrophoneStatus.Closed      => _micTex,   // Speak Mode

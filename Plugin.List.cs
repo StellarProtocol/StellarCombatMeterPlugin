@@ -135,6 +135,9 @@ public sealed partial class Plugin
             NameColor        = ReadyVoteColor(id),
             VoiceIcon        = VoiceIconFor(id),
             ShowVoiceIcon    = vis.VoiceIcon,
+            // Only the local player's own row, and only in Party-focus, gets a clickable voice icon that cycles
+            // our own team-voice mode; every other row leaves it null (display-only).
+            OnVoiceIconClick = (id == self && _viewMode == ViewMode.PartyFocus) ? (System.Action)CycleOwnVoiceMode : null,
             RowBorder        = TalkBorderFor(id),
             SelfAccent       = _selfAccentSlot.Value,
             HpFraction       = toggles.VerticalBar == VerticalBarMode.Dps ? cur : frac,
