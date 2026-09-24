@@ -1,4 +1,5 @@
 using System;
+using Stellar.Abstractions.Domain;   // MicrophoneStatus (own-voice cycle)
 
 namespace Stellar.CombatMeter;
 
@@ -79,5 +80,35 @@ public sealed partial class Plugin
             _readyCheckCooldown = ReadyCheckCooldownS;
         }
         // on failure the game shows its own notice tip — nothing extra needed here
+    }
+
+    // Own team-voice cycle Speak -> Listen -> Mute -> Speak, replicating team_view.switchVoiceState EXACTLY.
+    // Driven by a PLUGIN-tracked position, NOT GetMicStatus: the wire/server mic status lags and is echoed a
+    // frame late, so reading it kept the cycle re-issuing the same transition (stuck at Mute, then stuck at
+    // Listen — owner reports 2026-09-24). We mirror the game's OWN curVoiceState the way its Ctrl+I does, so the
+    // emitted VM calls are byte-identical to Ctrl+I (which the owner confirmed cycles + syncs both icons).
+    // ETeamVoiceState: MicVoice=Speak, SpeakerVoice=Listen, CloseVoice=Mute. Position: 0=Speak,1=Listen,2=Mute.
+    private int  _ownVoicePos;
+    private bool _ownVoiceKnown;
+
+    private void CycleOwnVoiceMode()
+    {
+        if (!_services.Lua.Ready) return;
+        if (!_ownVoiceKnown)   // lazy seed from the live icon state so the FIRST click advances from the current mode
+        {
+            _ownVoicePos = _services.PartyRoster.GetMicStatus(_services.CombatSnapshot.LocalEntityId.Uid) switch
+            {
+                MicrophoneStatus.Closed => 0, MicrophoneStatus.OpenSpeaker => 2, _ => 1,
+            };
+            _ownVoiceKnown = true;
+        }
+        string action;
+        switch (_ownVoicePos)
+        {
+            case 1:  action = "vm.CloseTeamVoice() vm.SetMicrophoneStatus((E.ETeamVoiceState).CloseVoice)"; _ownVoicePos = 2; break;                 // Listen -> Mute (send CloseVoice, else server keeps Listen)
+            case 2:  action = "local o=vm.OpenTeamMic() if o then vm.SetMicrophoneStatus((E.ETeamVoiceState).MicVoice) end"; _ownVoicePos = 0; break;   // Mute -> Speak
+            default: action = "vm.OpenTeamSpeaker()"; _ownVoicePos = 1; break;                                                                       // Speak -> Listen
+        }
+        _services.Lua.DoString($"pcall(function() local vm=(Z.VMMgr).GetVM('team') if vm and vm.CheckIsInTeam() then {action} end end)");
     }
 }

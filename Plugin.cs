@@ -44,6 +44,7 @@ public sealed partial class Plugin : IStellarPlugin
     private IHotkeyAction _pauseAction = null!;
     private IHotkeyAction _modeAction = null!;
     private IHotkeyAction _partyFocusAction = null!;
+    private IHotkeyAction _voiceCycleAction = null!;
 
     // Role colours (DPS/Tank/Healer) + the HP-spine colour, themeable. The spine is a plain HP bar:
     // its length tracks HP, its colour stays a steady green (matching the game's own HP bar) — it does
@@ -297,6 +298,10 @@ public sealed partial class Plugin : IStellarPlugin
             new HotkeyAction("combatmeter.mode", "Cycle CombatMeter metric (DPS/HPS/Taken)", null), callback: CycleMetric);
         _partyFocusAction = _services.Hotkeys.DeclareAction(
             new HotkeyAction("combatmeter.party-focus", "Toggle CombatMeter Party-focus view", null), callback: ToggleViewMode);
+        // Unbound by default (SuggestedDefault: null) so it never clashes with the game's own Ctrl+I voice
+        // toggle out of the box — the user binds it in Settings → Hotkeys.
+        _voiceCycleAction = _services.Hotkeys.DeclareAction(
+            new HotkeyAction("combatmeter.voice-cycle", "Cycle team voice mode", null), callback: CycleOwnVoiceMode);
     }
 
     public void Dispose()
