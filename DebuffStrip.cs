@@ -51,16 +51,6 @@ public static class DebuffStrip
         return new DebuffStripResult(e0, e1, e2, e3, count, overflow);
     }
 
-    /// <summary>True if any of <paramref name="buffs"/> is a displayable debuff (used by the party pre-pass to
-    /// decide whether to reserve the debuff column group-wide). Early-exits; allocation-free.</summary>
-    public static bool HasAny(IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff, IReadOnlyCollection<int> denylist)
-    {
-        if (buffs == null) return false;
-        foreach (var b in buffs)
-            if (Passes(b.BaseId, getBuff, denylist)) return true;
-        return false;
-    }
-
     // The single filter predicate shared by Build and HasAny: a real debuff (BuffType 0), not a hidden
     // internal marker (BuffTable.Visible 0), with a display icon, and not on the tunable denylist.
     private static bool Passes(int baseId, Func<int, BuffInfo?> getBuff, IReadOnlyCollection<int> denylist)

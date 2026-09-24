@@ -121,14 +121,4 @@ public class DebuffStripTests
         Assert.Equal(1, r.Count);
         Assert.Equal(11, r.E0.BaseId);
     }
-
-    [Fact]
-    public void HasAny_reflects_a_visible_debuff()
-    {
-        var buffs = new[] { Buff(11, 1, 0, 1000, 1) };
-        System.Func<int, BuffInfo?> shown  = id => new BuffInfo(id, "B", "", "path/x", default, true, 0, Visible: 2);
-        System.Func<int, BuffInfo?> hidden = id => new BuffInfo(id, "B", "", "path/x", default, true, 0, Visible: 0);
-        Assert.True(DebuffStrip.HasAny(buffs, shown, System.Array.Empty<int>()));
-        Assert.False(DebuffStrip.HasAny(buffs, hidden, System.Array.Empty<int>()));
-    }
 }

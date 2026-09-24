@@ -62,23 +62,10 @@ public sealed partial class Plugin
         return new ColumnElement(children, Gap: 3f);
     }
 
-    // Group-level debuff reservation: does ANY occupied grid slot have a displayable debuff? Early-exits
-    // via DebuffStrip.HasAny (no per-member strip build). Feeds ResolveDebuffs so the debuff column is
-    // reserved on all rows only while debuffs exist somewhere (uniform bars, no empty gap out of combat).
-    private bool ComputePartyHasDebuff(IReadOnlyList<MeterRow?> grid)
-    {
-        _getBuffFn ??= _services.GameData.Combat.GetBuff;
-        for (var i = 0; i < grid.Count; i++)
-            if (grid[i] is { } row && DebuffStrip.HasAny(_services.CombatLookup.BuffsFor(row.Id), _getBuffFn, DebuffDenylist))
-                return true;
-        return false;
-    }
-
     private void RebuildPartyFocusRows()
     {
         var grid = _agg.PartyGrid(PartyFocusRoster(), _metric);
         double elapsed = EncounterElapsedSeconds();
-        _partyHasDebuff = ComputePartyHasDebuff(grid);
         for (var i = 0; i < GridSize; i++)
             _gridRows[i] = grid[i] is { } row ? BuildRowData(row, i + 1, elapsed, collapse: false) : EmptySlot(i + 1);
     }
