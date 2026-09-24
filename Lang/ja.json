@@ -158,6 +158,7 @@
   "settings.toggle.total": "合計",
   "settings.toggle.uploadTesting": "本番ではなくテスト用サーバー（開発環境）にランをアップロードする",
   "settings.toggle.voiceIcon": "ボイスアイコン",
+  "settings.toggle.debuffs": "デバフを表示",
   "settings.uploadTarget.hint": "テストチャンネルのビルドです。既定でランはテスト用サーバー（logs.dev.stellarresonance.app）にアップロードされます。オフにすると本番環境にアップロードされます。",
   "settings.uploadTarget.relaunch": "保存しました — ゲームを再起動すると反映されます。",
   "settings.width.normal": "標準",

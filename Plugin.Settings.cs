@@ -96,6 +96,10 @@ public sealed partial class Plugin
             ToggleRow("settings.toggle.abilityScore",      () => t.AbilityScore,  v => t.AbilityScore = v),
             ToggleRow("settings.toggle.illusionBreak", () => t.IllusionBreak, v => t.IllusionBreak = v),
             ToggleRow("settings.toggle.voiceIcon",         () => t.VoiceIcon,     v => t.VoiceIcon = v),
+            // Party-mode 2×2 debuff block (spec 2026-09-24). Party-focus only, so it is hidden on the List
+            // tab (_settingsTab 0); List rows never read Debuffs.
+            new ConditionalElement(() => _settingsTab != 0,
+                ToggleRow("settings.toggle.debuffs", () => t.Debuffs, v => t.Debuffs = v)),
 
             new SpacerElement(Height: 10f),
             new TextElement(() => _loc.T("settings.appearance.autoStyled"), MutedCol),

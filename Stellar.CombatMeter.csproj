@@ -104,7 +104,21 @@
               straight from there, without turning the meter on first. 'Link to site' moved into settings."
          No capture / archive / stage / run-identity / upload behaviour is touched — this is UI wiring
          only. Requires no framework change and no minModSystemVersion bump. -->
-    <Version>2.13.0</Version>
+    <!-- 2.14.0: PARTY-MODE PLAYER DEBUFF ICONS (owner request 2026-09-24; spec
+         docs/superpowers/specs/2026-09-24-party-debuff-icons-design.md). The party-focus rows (5-player
+         column + raid-20 grid) now show each member's active debuffs as a fixed-width 2×2 icon block on
+         the far right — icon + ×N stacks badge + a radial duration sweep (like the game's party frame),
+         up to 4 with a "+N" overflow. Because the block is a constant width, every DPS bar now ends at
+         the same x (fixes the uneven-bar look). Player-language changelog bullet:
+           * "Party mode now shows each member's debuffs as icons on the right of their row — with stacks
+              and a countdown, like the game's party frame."
+         Data source: the combat wire (ICombatLookup.BuffsFor) for every member, filtered to real debuffs
+         (BuffInfo.IsDebuff + a display icon, minus a tunable denylist), ordered stable-FIFO, remaining
+         time from ServerNowMs. New per-mode Appearance toggle "Show debuffs" (default on, party tabs only).
+         Display only — NO capture/archive/stage/run-identity/upload behaviour is touched. Requires the
+         framework build that adds MeterRowData.Debuff0..3/DebuffOverflow/ShowDebuffs + DebuffSlot + the
+         2×2 renderer (Abstractions >= 2.10.0; referenced here as 2.10.0-dev until the framework releases). -->
+    <Version>2.14.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
