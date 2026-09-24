@@ -96,18 +96,13 @@ public sealed partial class Plugin
             ToggleRow("settings.toggle.abilityScore",      () => t.AbilityScore,  v => t.AbilityScore = v),
             ToggleRow("settings.toggle.illusionBreak", () => t.IllusionBreak, v => t.IllusionBreak = v),
             ToggleRow("settings.toggle.voiceIcon",         () => t.VoiceIcon,     v => t.VoiceIcon = v),
-            // Party-mode 2×2 debuff block (spec 2026-09-24). Party-focus only, so it is hidden on the List
-            // tab (_settingsTab 0); List rows never read Debuffs. The "Configure debuffs…" button opens
-            // the debuff config panel (Plugin.DebuffConfig.cs) — the selection it edits is a single,
-            // view-mode-independent DebuffSelection, so the button sits beside the toggle regardless of
-            // which of the two party toggle sets (t) is currently rendering.
-            new ConditionalElement(() => _settingsTab != 0,
-                new ColumnElement(new HudElement[]
-                {
-                    ToggleRow("settings.toggle.debuffs", () => t.Debuffs, v => t.Debuffs = v),
-                    DebuffConfigureRow(),
-                    new ConditionalElement(() => t.Debuffs, DebuffSizeRow(t)),
-                }, Gap: 3f)),
+            // Buffs & debuffs block. Supported in ALL modes now (owner 2026-09-24) — List included. Player-tile
+            // size resizes every party row uniformly, so it is party-only (List rows are single-height). The
+            // count + Configure sit under the toggle; the config panel edits the shared per-tab selections.
+            new ConditionalElement(() => _settingsTab != 0, TileSizeRow(t)),
+            ToggleRow("settings.toggle.debuffs", () => t.Debuffs, v => t.Debuffs = v),
+            new ConditionalElement(() => t.Debuffs,
+                new ColumnElement(new HudElement[] { DebuffMaxRow(t), DebuffConfigureRow() }, Gap: 3f)),
 
             new SpacerElement(Height: 10f),
             new TextElement(() => _loc.T("settings.appearance.autoStyled"), MutedCol),
@@ -138,15 +133,29 @@ public sealed partial class Plugin
             new ButtonElement(() => _loc.T("settings.debuffs.configure"), ToggleDebuffConfig, Width: 170f),
         }, Gap: 6f);
 
-    // Debuff-icon size (Small/Medium/Large) for the party 2×2 block — bigger sizes grow the row height.
-    private HudElement DebuffSizeRow(MeterElementToggles t)
+    // Max buffs/debuffs shown per row: 4 (2×2) up to 12 (2×6) — the block grows in columns, keeping 2 rows and
+    // the same row height (owner 2026-09-24). Indented under the "Show buffs & debuffs" toggle.
+    private HudElement DebuffMaxRow(MeterElementToggles t)
         => new RowElement(new HudElement[]
         {
             new SpacerElement(Width: 8f),
-            new TextElement(() => _loc.T("settings.debuff.size"), MutedCol, Width: 72f),
-            new ButtonElement(() => _loc.T("common.small"),  () => { t.DebuffSize = DebuffIconSize.Small;  PersistToggles(); }, Active: () => t.DebuffSize == DebuffIconSize.Small,  Width: 60f),
-            new ButtonElement(() => _loc.T("common.medium"), () => { t.DebuffSize = DebuffIconSize.Medium; PersistToggles(); }, Active: () => t.DebuffSize == DebuffIconSize.Medium, Width: 60f),
-            new ButtonElement(() => _loc.T("common.large"),  () => { t.DebuffSize = DebuffIconSize.Large;  PersistToggles(); }, Active: () => t.DebuffSize == DebuffIconSize.Large,  Width: 60f),
+            new TextElement(() => _loc.T("settings.debuff.max"), MutedCol, Width: 88f),
+            DebuffMaxButton(t, 4), DebuffMaxButton(t, 6), DebuffMaxButton(t, 8), DebuffMaxButton(t, 10), DebuffMaxButton(t, 12),
+        }, Gap: 4f);
+
+    private HudElement DebuffMaxButton(MeterElementToggles t, int n)
+        => new ButtonElement(() => n.ToString(), () => { t.DebuffMax = n; PersistToggles(); },
+            Active: () => MeterElementToggles.DebuffMaxCells(t.DebuffMax) == n, Width: 40f);
+
+    // Player-tile size (Small/Medium/Large) for the party grid — bigger sizes grow EVERY row uniformly and
+    // scale the debuff block to fit (owner 2026-09-24).
+    private HudElement TileSizeRow(MeterElementToggles t)
+        => new RowElement(new HudElement[]
+        {
+            new TextElement(() => _loc.T("settings.tile.size"), MutedCol, Width: 96f),
+            new ButtonElement(() => _loc.T("common.small"),  () => { t.TileSize = TileSize.Small;  PersistToggles(); }, Active: () => t.TileSize == TileSize.Small,  Width: 60f),
+            new ButtonElement(() => _loc.T("common.medium"), () => { t.TileSize = TileSize.Medium; PersistToggles(); }, Active: () => t.TileSize == TileSize.Medium, Width: 60f),
+            new ButtonElement(() => _loc.T("common.large"),  () => { t.TileSize = TileSize.Large;  PersistToggles(); }, Active: () => t.TileSize == TileSize.Large,  Width: 60f),
         }, Gap: 6f);
 
     private HudElement ImagineShowRow(MeterElementToggles t)

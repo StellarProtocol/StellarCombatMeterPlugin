@@ -88,9 +88,13 @@ public class DebuffSelectionTests
         var sel = new DebuffSelection { Mode = DebuffTrackMode.ShowOnlySelected, ShowHidden = true };
         sel.SetSelected(10, true);
         sel.SetSelected(20, true);
-        sel.Save(cfg);
+        sel.Save(cfg, "status.debuff");
 
-        var loaded = DebuffSelection.Load(cfg);
+        // Different-prefix load sees nothing (the two tabs are independent); same-prefix round-trips exactly.
+        var other = DebuffSelection.Load(cfg, "status.buff", Array.Empty<int>(), DebuffTrackMode.ShowOnlySelected, false);
+        Assert.Empty(other.Selected);
+
+        var loaded = DebuffSelection.Load(cfg, "status.debuff", Array.Empty<int>(), DebuffTrackMode.ShowAllExceptSelected, false);
         Assert.Equal(DebuffTrackMode.ShowOnlySelected, loaded.Mode);
         Assert.True(loaded.ShowHidden);
         Assert.True(loaded.IsSelected(10));
@@ -99,11 +103,19 @@ public class DebuffSelectionTests
     }
 
     [Fact]
-    public void Load_from_an_empty_config_section_yields_defaults()
+    public void Load_from_an_empty_config_section_applies_the_supplied_defaults()
     {
-        var loaded = DebuffSelection.Load(new FakeConfigSection());
-        Assert.Equal(DebuffTrackMode.ShowAllExceptSelected, loaded.Mode);
+        // Absent keys → the caller-supplied new-install defaults. The debuff tab pre-checks the 3 imagine lockouts.
+        var loaded = DebuffSelection.Load(
+            new FakeConfigSection(), "status.debuff", DebuffSelection.DefaultChecked, DebuffTrackMode.ShowOnlySelected, false);
+        Assert.Equal(DebuffTrackMode.ShowOnlySelected, loaded.Mode);
         Assert.False(loaded.ShowHidden);
-        Assert.Empty(loaded.Selected);
+        Assert.Equal(DebuffSelection.DefaultChecked.Length, loaded.Selected.Count);
+        foreach (var id in DebuffSelection.DefaultChecked) Assert.True(loaded.IsSelected(id));
+
+        // The buff tab defaults empty.
+        var buffs = DebuffSelection.Load(
+            new FakeConfigSection(), "status.buff", Array.Empty<int>(), DebuffTrackMode.ShowOnlySelected, false);
+        Assert.Empty(buffs.Selected);
     }
 }

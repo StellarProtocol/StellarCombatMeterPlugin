@@ -23,7 +23,7 @@ public sealed partial class Plugin
     private MeterElementToggles? _listTogglesCache;
     private MeterElementToggles? _party5TogglesCache;
     private MeterElementToggles? _party20TogglesCache;
-    private MeterElementToggles ListToggles    => _listTogglesCache    ??= MeterElementToggles.Load(_prefs, "list",    MeterElementToggles.Defaults());
+    private MeterElementToggles ListToggles    => _listTogglesCache    ??= MeterElementToggles.Load(_prefs, "list",    MeterElementToggles.ListDefaults());
     private MeterElementToggles Party5Toggles  => _party5TogglesCache  ??= MeterElementToggles.Load(_prefs, "party5",  MeterElementToggles.Defaults());
     private MeterElementToggles Party20Toggles => _party20TogglesCache ??= MeterElementToggles.Load(_prefs, "party20", MeterElementToggles.Raid20Defaults());
 
@@ -94,8 +94,11 @@ public sealed partial class Plugin
         cur = Mathf.Lerp(cur, target, 0.18f);
         _barAnim[id] = cur;
         var rowData = AssembleRow(row, rank, elapsed, vis, toggles);
-        ResolveDebuffs(id, vis.Debuffs, ref rowData);
-        rowData.DebuffCellSize = MeterElementToggles.DebuffSizePx(toggles.DebuffSize);
+        ResolveDebuffs(id, vis.Debuffs, MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
+        // Player-tile size drives the row height (party-focus grows every row uniformly). List keeps the base
+        // height (its TileSize control isn't exposed, so it stays Small → 48px), but the block still renders
+        // when its Debuffs toggle is on (owner 2026-09-24: buffs & debuffs supported in List too).
+        rowData.DebuffCellSize = MeterElementToggles.TileSizePx(toggles.TileSize);
         return rowData;
     }
 
@@ -141,6 +144,8 @@ public sealed partial class Plugin
             // Only the local player's own row, and only in Party-focus, gets a clickable voice icon that cycles
             // our own team-voice mode; every other row leaves it null (display-only).
             OnVoiceIconClick = (id == self && _viewMode == ViewMode.PartyFocus) ? (System.Action)CycleOwnVoiceMode : null,
+            OnDebuffClick    = DebuffClickHandler,   // Plugin.DebuffTooltip.cs — click a debuff cell -> name+desc popup
+
             RowBorder        = TalkBorderFor(id),
             SelfAccent       = _selfAccentSlot.Value,
             HpFraction       = toggles.VerticalBar == VerticalBarMode.Dps ? cur : frac,
@@ -150,6 +155,9 @@ public sealed partial class Plugin
             PrimaryValue     = FormatAmount(perSec),
             SecondaryValue   = FormatAmount(row.Value),
             BarFraction      = toggles.MainBarIsHp ? frac : cur,
+            // Shield on the MAIN bar mirrors the spine's shield, but only in HP mode (0 in DPS mode). Same
+            // shield/maxHp value clamped to the bar's HP fraction (owner 2026-09-24).
+            BarShieldFraction = toggles.MainBarIsHp ? HpShieldFractionFor(id, frac) : 0f,
             SharePercent     = $"{row.Share * 100d:F0}%",
             IsSelf           = id == self,
             IsLeader         = IsPartyLeader(id),

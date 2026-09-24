@@ -20,13 +20,16 @@ public class DebuffStripTests
         => new(uuid, baseId, 1, EntityId.None, stacks, 0, create, dur);
 
     [Fact]
-    public void Keeps_only_debuffs_with_an_icon()
+    public void Keeps_buffs_and_debuffs_with_an_icon_and_tags_the_kind()
     {
+        // The block mixes both kinds now (owner 2026-09-24): a debuff and a buff both list if named + icon'd;
+        // an icon-less row is dropped. Each entry is tagged IsBuff so the renderer colours it (red vs green).
         var buffs = new[] { Buff(10,1,0,1000,1), Buff(20,1,0,1000,2), Buff(30,1,0,1000,3) };
         var t = Table((10,true,true),(20,false,true) /*buff*/,(30,true,false) /*no icon*/);
-        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), nowMs:0);
-        Assert.Equal(1, r.Count);
-        Assert.Equal(10, r.E0.BaseId);
+        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs:0);
+        Assert.Equal(2, r.Count);
+        Assert.Equal(10, r.E0.BaseId); Assert.False(r.E0.IsBuff);   // debuff -> red tile
+        Assert.Equal(20, r.E1.BaseId); Assert.True(r.E1.IsBuff);    // buff   -> green tile
     }
 
     [Fact]
@@ -36,7 +39,7 @@ public class DebuffStripTests
         var t = Table((10,true,true),(11,true,true));
         var sel = new DebuffSelection { Mode = DebuffTrackMode.ShowOnlySelected };
         sel.SetSelected(10, true);
-        var r = DebuffStrip.Build(buffs, t, sel, nowMs:0);
+        var r = DebuffStrip.Build(buffs, t, sel, new DebuffSelection(), nowMs:0);
         Assert.Equal(1, r.Count);
         Assert.Equal(10, r.E0.BaseId);
     }
@@ -46,7 +49,7 @@ public class DebuffStripTests
     {
         var buffs = new[] { Buff(10,1,300,1000,1), Buff(11,1,100,1000,2), Buff(12,1,200,1000,3) };
         var t = Table((10,true,true),(11,true,true),(12,true,true));
-        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), nowMs:0);
+        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs:0);
         Assert.Equal(11, r.E0.BaseId); // oldest first
         Assert.Equal(12, r.E1.BaseId);
         Assert.Equal(10, r.E2.BaseId);
@@ -61,7 +64,7 @@ public class DebuffStripTests
         for (int i = 0; i < 6; i++) buffs.Add(Buff(10+i, 1, i, 1000, i));
         var rows = new List<(int,bool,bool)>();
         for (int i = 0; i < 6; i++) rows.Add((10+i, true, true));
-        var r = DebuffStrip.Build(buffs, Table(rows.ToArray()), new DebuffSelection(), nowMs:0);
+        var r = DebuffStrip.Build(buffs, Table(rows.ToArray()), new DebuffSelection(), new DebuffSelection(), nowMs:0);
         Assert.Equal(3, r.Count);
         Assert.Equal(3, r.Overflow);
         Assert.Equal(12, r.E2.BaseId); // 3rd kept is the 3rd-oldest (E0=10, E1=11, E2=12)
@@ -75,7 +78,7 @@ public class DebuffStripTests
         for (int i = 0; i < 4; i++) buffs.Add(Buff(10+i, 1, i, 1000, i));
         var rows = new List<(int,bool,bool)>();
         for (int i = 0; i < 4; i++) rows.Add((10+i, true, true));
-        var r = DebuffStrip.Build(buffs, Table(rows.ToArray()), new DebuffSelection(), nowMs:0);
+        var r = DebuffStrip.Build(buffs, Table(rows.ToArray()), new DebuffSelection(), new DebuffSelection(), nowMs:0);
         Assert.Equal(4, r.Count);
         Assert.Equal(0, r.Overflow);
         Assert.Equal(13, r.E3.BaseId);
@@ -86,7 +89,7 @@ public class DebuffStripTests
     {
         var buffs = new[] { Buff(10,1, create:0, dur:1000, uuid:1), Buff(11,1, create:0, dur:0, uuid:2) };
         var t = Table((10,true,true),(11,true,true));
-        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), nowMs:250);
+        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs:250);
         Assert.Equal(0.75f, r.E0.RemainFraction, 3); // 750/1000 left
         Assert.Equal(1f,    r.E1.RemainFraction, 3); // permanent -> full
     }
@@ -95,7 +98,7 @@ public class DebuffStripTests
     public void Stacks_carry_through()
     {
         var buffs = new[] { Buff(10, stacks:5, create:0, dur:1000, uuid:1) };
-        var r = DebuffStrip.Build(buffs, Table((10,true,true)), new DebuffSelection(), nowMs:0);
+        var r = DebuffStrip.Build(buffs, Table((10,true,true)), new DebuffSelection(), new DebuffSelection(), nowMs:0);
         Assert.Equal(5, r.E0.Stacks);
     }
 
@@ -107,7 +110,7 @@ public class DebuffStripTests
         // in-place insertion sort (stable by construction) so ties preserve input order.
         var buffs = new[] { Buff(10,1,100,1000,1), Buff(11,1,100,1000,2) };
         var t = Table((10,true,true),(11,true,true));
-        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), nowMs:0);
+        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs:0);
         Assert.Equal(10, r.E0.BaseId);
         Assert.Equal(11, r.E1.BaseId);
     }
@@ -119,11 +122,11 @@ public class DebuffStripTests
         System.Func<int, BuffInfo?> t = id => id == 10
             ? new BuffInfo(10, "", "", "path/x", default, true, 0)     // no name — hidden by default
             : new BuffInfo(11, "B11", "", "path/x", default, true, 0); // named — shown
-        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), nowMs: 0);
+        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs: 0);
         Assert.Equal(1, r.Count);
         Assert.Equal(11, r.E0.BaseId);
 
-        var shown = DebuffStrip.Build(buffs, t, new DebuffSelection { ShowHidden = true }, nowMs: 0);
+        var shown = DebuffStrip.Build(buffs, t, new DebuffSelection { ShowHidden = true }, new DebuffSelection(), nowMs: 0);
         Assert.Equal(2, shown.Count);
     }
 
@@ -134,7 +137,7 @@ public class DebuffStripTests
         var skillSourced = new ActiveBuff(1, 10, 1, EntityId.None, 1, 0, 0, 1000, 0, 777);
         var buffSourced  = new ActiveBuff(2, 11, 1, EntityId.None, 1, 0, 0, 1000, 1, 888); // SourceKind 1 = Buff
         var t = Table((10, true, true), (11, true, true));
-        var r = DebuffStrip.Build(new[] { skillSourced, buffSourced }, t, new DebuffSelection(), nowMs: 0);
+        var r = DebuffStrip.Build(new[] { skillSourced, buffSourced }, t, new DebuffSelection(), new DebuffSelection(), nowMs: 0);
         Assert.Equal(777, r.E0.SourceSkillId);   // skill-sourced -> carried
         Assert.Equal(0,   r.E1.SourceSkillId);   // non-skill source -> 0
     }

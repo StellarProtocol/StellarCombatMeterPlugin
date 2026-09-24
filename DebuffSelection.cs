@@ -23,12 +23,19 @@ public sealed class DebuffSelection
 {
     private readonly HashSet<int> _selected = new();
 
-    /// <summary>How <see cref="_selected"/> is interpreted. Defaults to <see cref="DebuffTrackMode.ShowAllExceptSelected"/>
-    /// so an empty selection shows every named, icon'd debuff — never an empty strip out of the box.</summary>
+    /// <summary>Out-of-the-box checked set for a NEW install (owner 2026-09-24): the three imagine-lockout
+    /// debuffs whose cells show the source Battle-Imagine card — Mechanical Failure, Element Stasis, Time Stasis.
+    /// Applied by <see cref="Load"/> (not the bare model) together with <see cref="DebuffTrackMode.ShowOnlySelected"/>
+    /// so a fresh install shows exactly these and none of the ~8000 internal buff/debuff markers.</summary>
+    public static readonly int[] DefaultChecked = { 2110049, 2110050, 2110056 };
+
+    /// <summary>How <see cref="_selected"/> is interpreted. A bare model defaults to
+    /// <see cref="DebuffTrackMode.ShowAllExceptSelected"/>; <see cref="Load"/> supplies the product default
+    /// (<see cref="DebuffTrackMode.ShowOnlySelected"/>) for a fresh install.</summary>
     public DebuffTrackMode Mode { get; set; } = DebuffTrackMode.ShowAllExceptSelected;
 
-    /// <summary>When true, debuffs with no display name (icon-only rows) are also eligible to show.
-    /// Defaults to false — unnamed rows are usually internal markers the player has no context for.</summary>
+    /// <summary>When true, effects with no display name (icon-only rows) are also eligible. Bare-model default
+    /// false; <see cref="Load"/> supplies the product default (true).</summary>
     public bool ShowHidden { get; set; }
 
     /// <summary>The checked debuff base ids. Read-only view over the persisted set.</summary>
@@ -59,24 +66,28 @@ public sealed class DebuffSelection
         return Mode == DebuffTrackMode.ShowOnlySelected ? IsSelected(baseId) : !IsSelected(baseId);
     }
 
-    /// <summary>Populates a new <see cref="DebuffSelection"/> from a persisted config section.</summary>
-    public static DebuffSelection Load(IConfigSection cfg)
+    /// <summary>Populates a new <see cref="DebuffSelection"/> from a persisted config section under a per-tab key
+    /// <paramref name="prefix"/> ("status.debuff" or "status.buff"), applying the supplied new-install defaults
+    /// when a key is absent. The Debuffs and Buffs tabs each own an independent selection (owner 2026-09-24):
+    /// their own mode + checked set + show-hidden, so "show only checked" on one tab does not affect the other.</summary>
+    public static DebuffSelection Load(
+        IConfigSection cfg, string prefix, int[] defaultChecked, DebuffTrackMode defaultMode, bool defaultShowHidden)
     {
         var sel = new DebuffSelection();
-        foreach (var id in cfg.Get("debuffs.track", Array.Empty<int>()) ?? Array.Empty<int>())
+        foreach (var id in cfg.Get($"{prefix}.track", defaultChecked) ?? defaultChecked)
             sel._selected.Add(id);
-        sel.Mode = (DebuffTrackMode)cfg.Get("debuffs.mode", 0);
-        sel.ShowHidden = cfg.Get("debuffs.showHidden", false);
+        sel.Mode = (DebuffTrackMode)cfg.Get($"{prefix}.mode", (int)defaultMode);
+        sel.ShowHidden = cfg.Get($"{prefix}.showHidden", defaultShowHidden);
         return sel;
     }
 
-    /// <summary>Persists the checked set, mode and show-hidden flag to <paramref name="cfg"/> and calls
-    /// <see cref="IConfigSection.Save"/>.</summary>
-    public void Save(IConfigSection cfg)
+    /// <summary>Persists the checked set, mode and show-hidden flag under the per-tab key <paramref name="prefix"/>
+    /// and calls <see cref="IConfigSection.Save"/>.</summary>
+    public void Save(IConfigSection cfg, string prefix)
     {
-        cfg.Set("debuffs.track", ToArray());
-        cfg.Set("debuffs.mode", (int)Mode);
-        cfg.Set("debuffs.showHidden", ShowHidden);
+        cfg.Set($"{prefix}.track", ToArray());
+        cfg.Set($"{prefix}.mode", (int)Mode);
+        cfg.Set($"{prefix}.showHidden", ShowHidden);
         cfg.Save();
     }
 

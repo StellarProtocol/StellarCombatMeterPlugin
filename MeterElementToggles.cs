@@ -34,8 +34,9 @@ public enum BarColorMode
 /// Unity-free so it is unit-testable. Resolve combines the user toggles with the existing width-driven
 /// collapse (List only) into the final per-element visibility.
 /// </summary>
-/// <summary>Debuff-icon size for the party-focus 2×2 block. Bigger sizes grow the row to fit.</summary>
-public enum DebuffIconSize { Small = 0, Medium = 1, Large = 2 }
+/// <summary>Player-tile size for the party-focus rows. Bigger sizes grow EVERY row uniformly (occupied,
+/// debuff-less, and empty/absent slots alike) and scale the 2×2 debuff block to fit (owner 2026-09-24).</summary>
+public enum TileSize { Small = 0, Medium = 1, Large = 2 }
 
 public sealed class MeterElementToggles
 {
@@ -47,7 +48,8 @@ public sealed class MeterElementToggles
     public bool MainBarIsHp;
     public float SpineWidth;
     public ImagineSize ImagineSize;
-    public DebuffIconSize DebuffSize;
+    public TileSize TileSize;
+    public int DebuffMax;   // max buff/debuff cells shown (4/6/8 → 2/3/4 columns × 2 rows)
     public ImaginePosition ImaginePosition;
 
     private const float SpecTotalMinW = 230f;
@@ -59,8 +61,18 @@ public sealed class MeterElementToggles
         BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
         ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true, Debuffs = true,
-        ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight, DebuffSize = DebuffIconSize.Small,
+        ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight, TileSize = TileSize.Small,
+        DebuffMax = 4,
     };
+
+    // List-mode defaults: the buffs & debuffs block is OFF by default in the DPS list (it competes with the bar
+    // width there); the user opts in per the List tab. Party modes default it ON via Defaults().
+    public static MeterElementToggles ListDefaults()
+    {
+        var d = Defaults();
+        d.Debuffs = false;
+        return d;
+    }
 
     // Leaner defaults for the dense 20-player raid grid: the tiny cells can't fit the full set, so spec /
     // total / imagine start off (rank · crest · name · HP · per-second · share · leader stay on).
@@ -98,7 +110,7 @@ public sealed class MeterElementToggles
             ImagineCooldown: Imagine && ImagineCooldown,
             LeaderFlag:      LeaderFlag,
             VoiceIcon:       VoiceIcon,
-            Debuffs:         Debuffs && !collapse);
+            Debuffs:         Debuffs);   // supported in List too now (owner 2026-09-24); List defaults it OFF (ListDefaults)
     }
 
     /// <summary>
@@ -133,13 +145,21 @@ public sealed class MeterElementToggles
         d.VoiceIcon       = cfg.Get($"{prefix}.show.voiceIcon",       defaults.VoiceIcon);
         d.Debuffs         = cfg.Get($"{prefix}.show.debuffs",         defaults.Debuffs);
         d.ImagineSize     = (ImagineSize)cfg.Get($"{prefix}.imagine.size",     (int)defaults.ImagineSize);
-        d.DebuffSize      = (DebuffIconSize)cfg.Get($"{prefix}.debuff.size",   (int)defaults.DebuffSize);
+        // Config key stays "debuff.size" (was the debuff-icon-size control before the 2026-09-24 rename to
+        // "Player tile size") so an install keeps whatever size it had picked across this build.
+        d.TileSize        = (TileSize)cfg.Get($"{prefix}.debuff.size",          (int)defaults.TileSize);
+        d.DebuffMax       = cfg.Get($"{prefix}.debuff.max",                     defaults.DebuffMax);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
         return d;
     }
 
-    /// <summary>The 2×2 debuff cell edge in px for a chosen size (Small=20 default, Medium=26, Large=32).</summary>
-    public static float DebuffSizePx(DebuffIconSize s) => s switch { DebuffIconSize.Medium => 26f, DebuffIconSize.Large => 32f, _ => 20f };
+    /// <summary>Player-tile size in px for a chosen size (Small=20 default → 48px row, Medium=26 → 58px,
+    /// Large=32 → 72px). Drives both the debuff cell edge and, via the framework, the row height so every
+    /// party row is the same size.</summary>
+    public static float TileSizePx(TileSize s) => s switch { TileSize.Medium => 26f, TileSize.Large => 32f, _ => 20f };
+
+    /// <summary>Clamp a stored buff/debuff max-cell count to a supported even value 4..12 (2 rows × 2..6 columns).</summary>
+    public static int DebuffMaxCells(int m) => m <= 4 ? 4 : (m >= 12 ? 12 : (m % 2 == 0 ? m : m + 1));
 
     /// <summary>Persist back to the config section under the per-mode prefix.</summary>
     public void Save(IConfigSection cfg, string prefix)
@@ -164,7 +184,8 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.voiceIcon",       VoiceIcon);
         cfg.Set($"{prefix}.show.debuffs",         Debuffs);
         cfg.Set($"{prefix}.imagine.size",         (int)ImagineSize);
-        cfg.Set($"{prefix}.debuff.size",          (int)DebuffSize);
+        cfg.Set($"{prefix}.debuff.size",          (int)TileSize);   // key kept for continuity — now the player-tile size
+        cfg.Set($"{prefix}.debuff.max",           DebuffMax);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);
     }
 }
