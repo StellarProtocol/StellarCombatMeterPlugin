@@ -90,7 +90,21 @@
          byte-identical plain JSON the 2.11.0 path sent, each logging ONE line per process; the 415 resend
          is immediate and does not consume one of the chunk's retries. Requires no framework change and no
          minModSystemVersion bump. -->
-    <Version>2.12.0</Version>
+    <!-- 2.13.0: CombatMeter joins the Stellar plugins window (owner feature request, Toir 2026-09-17:
+         CombatMeter was "in a limbo of being a plugin and not being in the plugin window"). It was the
+         only tool plugin that registered NO launcher entry, so its history + settings were reachable only
+         through the meter overlay's header menu — a player who hid the meter had to unhide it just to open
+         history or link an account. Two launcher tiles now expose CombatMeter's config WITHOUT the meter
+         being visible (Plugin.Launcher.cs): a ⚙ "CombatMeter" tile opens the uploads/auto-archive Settings
+         window, and a 🕘 "Combat History" tile opens the history window; both are shown only in the World
+         phase (like Wardrobe / LoadoutSwitcher). Account → "Link to site" moved from its own standalone
+         window into a section at the bottom of the Settings window (it is upload-related) and its meter
+         header button was removed. Player-language changelog bullet:
+           * "CombatMeter is now in the Stellar plugins window — open your combat history or settings
+              straight from there, without turning the meter on first. 'Link to site' moved into settings."
+         No capture / archive / stage / run-identity / upload behaviour is touched — this is UI wiring
+         only. Requires no framework change and no minModSystemVersion bump. -->
+    <Version>2.13.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
@@ -137,6 +151,7 @@
     <EmbeddedResource Include="Resources/headphone.png" LogicalName="Stellar.CombatMeter.headphone.png" />
     <EmbeddedResource Include="Resources/mute.png" LogicalName="Stellar.CombatMeter.mute.png" />
     <EmbeddedResource Include="Resources/settings-gear.png" LogicalName="Stellar.CombatMeter.settings-gear.png" />
+    <EmbeddedResource Include="Resources/history.png" LogicalName="Stellar.CombatMeter.history.png" />
   </ItemGroup>
   <ItemGroup>
     <!-- i18n catalogs: auto-discovered by the framework via the Lang.<code>.json suffix (framework 2.1.0). -->

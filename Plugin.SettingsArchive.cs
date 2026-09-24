@@ -141,6 +141,7 @@ public sealed partial class Plugin
         // build (the ConditionalElement's Else is a zero-height spacer).
         rows.Add(UploadTargetSection());
         rows.AddRange(DiscordSectionRows());
+        rows.AddRange(AccountSectionRows());   // Account → Link to site (folded in from its own window)
         // Scroll the whole pane. MEASURED (tools/run-ui-sandbox.sh combatmeter-settings-full-window-ugui):
         // the pane's content still overflows a 620f window even after the dense Uploads rewrite cut ~160px
         // off it, so the viewport stays required. Raising DefaultRect alone would NOT have fixed it either:
