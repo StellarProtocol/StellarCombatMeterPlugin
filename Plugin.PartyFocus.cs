@@ -66,18 +66,23 @@ public sealed partial class Plugin
     {
         var grid = _agg.PartyGrid(PartyFocusRoster(), _metric);
         double elapsed = EncounterElapsedSeconds();
+        // Player-tile size for the active party mode — applied to empty/absent slots too so every row in the
+        // grid renders at the same height (owner 2026-09-24). Occupied rows read it via BuildRowData.
+        float tilePx = MeterElementToggles.TileSizePx((IsRaid20View ? Party20Toggles : Party5Toggles).TileSize);
         for (var i = 0; i < GridSize; i++)
-            _gridRows[i] = grid[i] is { } row ? BuildRowData(row, i + 1, elapsed, collapse: false) : EmptySlot(i + 1);
+            _gridRows[i] = grid[i] is { } row ? BuildRowData(row, i + 1, elapsed, collapse: false) : EmptySlot(i + 1, tilePx);
     }
 
-    // Faint full-height placeholder for an unoccupied raid slot ("N. —", no bar/spine).
-    private static MeterRowData EmptySlot(int number) => new MeterRowData
+    // Faint full-height placeholder for an unoccupied raid slot ("N. —", no bar/spine). Carries the same tile
+    // size (DebuffCellSize) as the occupied rows so its height matches; no player ⇒ no debuff block (ShowDebuffs off).
+    private static MeterRowData EmptySlot(int number, float tilePx) => new MeterRowData
     {
         Rank = $"{number}.", Name = "—", Spec = "", ClassName = "", AbilityScore = "",
         PrimaryValue = "", SecondaryValue = "", SharePercent = "",
         RoleColor = new ColorRgba(0f, 0f, 0f, 0f), HpColor = new ColorRgba(0f, 0f, 0f, 0f),
         HpFraction = 0f, BarFraction = 0f, CrestTexture = null, CrestUv = new UvRect(0f, 0f, 1f, 1f),
         IsSelf = false, Offline = false, ShowSpec = false, ShowSecondary = false, ShowShare = false,
+        ShowDebuffs = false, DebuffCellSize = tilePx,
     };
 
     private void OnGridSlotRightClick(int idx)

@@ -37,6 +37,7 @@ public sealed partial class Plugin : IStellarPlugin
     private IWindowControl _skillBreakdownWindow = null!;
     private IWindowControl _snapshotWindow = null!;
     private IWindowControl _settingsWindow = null!;
+    private IWindowControl _debuffConfigWindow = null!;
     private IHotkeyAction _toggleAction = null!;
     private IHotkeyAction _historyAction = null!;
     private IHotkeyAction _resetAction = null!;
@@ -187,6 +188,10 @@ public sealed partial class Plugin : IStellarPlugin
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
         _filter   = (FilterMode) _prefs.Get("scope",  (int)FilterMode.Party);
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
+        // Per-tab party status-effect selections (Plugin.Debuffs.cs). Debuffs default: show-only-checked with the
+        // 3 imagine lockouts pre-checked; Buffs default: show-only-checked, empty (the user opts buffs in).
+        _debuffSelection = DebuffSelection.Load(_prefs, "status.debuff", DebuffSelection.DefaultChecked, DebuffTrackMode.ShowOnlySelected, defaultShowHidden: false);
+        _buffSelection   = DebuffSelection.Load(_prefs, "status.buff",   System.Array.Empty<int>(),      DebuffTrackMode.ShowOnlySelected, defaultShowHidden: false);
         InitUploadPolicy();  // SP1: load/migrate the 8 upload-policy cells + cache the hot-path bools
         InitReplay();      // Replay R1: load pref + create capture instance
         InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
@@ -269,6 +274,8 @@ public sealed partial class Plugin : IStellarPlugin
 
         _settingsWindow = BuildAndRegisterSettings();
         _archiveSettingsWindow = BuildAndRegisterArchiveSettings();
+        _debuffConfigWindow = BuildAndRegisterDebuffConfig();
+        _debuffTip = BuildAndRegisterDebuffTip();   // Plugin.DebuffTooltip.cs — click a debuff cell -> name+desc popup
         _rowMenuWindow = RegisterRowMenuWindow();
         RegisterHotkeys();
         RegisterLauncher();
@@ -337,6 +344,7 @@ public sealed partial class Plugin : IStellarPlugin
         _toggleAction.Dispose();
         DisposeLauncher();
         _rowMenuWindow.Remove();
+        _debuffConfigWindow.Remove();
         _settingsWindow.Remove();
         _snapshotWindow.Remove();
         _skillBreakdownWindow.Remove();
@@ -357,6 +365,7 @@ public sealed partial class Plugin : IStellarPlugin
         DrainSocialCatchup();
         EnsureReadyCheckSubscribed();
         TickRowMenuPlace();
+        TickDebuffTipPlace();   // Plugin.DebuffTooltip.cs — re-assert cursor rect after destroy-on-hide remount
         PumpClassIcons();
         PumpDungeonIcon();
         TickEntitySnapshots(deltaTime);
@@ -498,11 +507,23 @@ public sealed partial class Plugin : IStellarPlugin
         _mainWindow.SetRect(rect);
     }
 
-    // Party-focus window height: base grid height (20-player 4×5 vs 5-player single group) + any open inline
-    // menu (so the grid is never squeezed). Follows the live party size; RefreshPartyFocusHeight re-applies it.
+    // Party-focus window height: base grid height (20-player 4×5 vs 5-player single group), SCALED for the
+    // current player-tile size, + any open inline menu (so the grid is never squeezed). Follows the live party
+    // size; RefreshPartyFocusHeight re-applies it. The per-row growth mirrors the framework row-height formula
+    // (max(MeterRowHeight 48, DebuffBlockPx + 6); DebuffBlockPx = tilePx*2 + gap 2) so a Medium/Large tile
+    // auto-fits — owner 2026-09-24: a resized party window "wasn't remembered" because this height was a fixed
+    // constant that ignored the tile size, so every mode switch / menu toggle snapped it back and clipped the
+    // enlarged grid. Vertical rows: 20-player stacks two 5-slot quadrants (10), 5-player is one group (5).
     private float PartyFocusHeight()
-        => (IsRaid20View ? PartyFocusH : PartyFocus5H)
-           + (_mainMenuOpen ? MainMenuPanelH : 0f);
+    {
+        int rows = IsRaid20View ? MeterAggregator.SlotsPerGroup * 2 : MeterAggregator.SlotsPerGroup;
+        float tilePx = MeterElementToggles.TileSizePx((IsRaid20View ? Party20Toggles : Party5Toggles).TileSize);
+        float extraPerRow = tilePx * 2f + 8f - 48f;   // 0 at Small (48px rows), +12 Medium, +24 Large
+        if (extraPerRow < 0f) extraPerRow = 0f;
+        return (IsRaid20View ? PartyFocusH : PartyFocus5H)
+               + rows * extraPerRow
+               + (_mainMenuOpen ? MainMenuPanelH : 0f);
+    }
 
     // Re-apply the party-focus window height in place (keep current pos + width) when a menu opens/closes.
     // Uses the LIVE rect, not the remembered _partyX/_partyY, so toggling a menu never teleports a

@@ -22,6 +22,7 @@ public sealed partial class Plugin
         RebuildWindow(ref _snapshotWindow, RegisterSnapshotWindow);
         RebuildWindow(ref _settingsWindow, BuildAndRegisterSettings);
         RebuildWindow(ref _archiveSettingsWindow, BuildAndRegisterArchiveSettings);
+        RebuildWindow(ref _debuffConfigWindow, BuildAndRegisterDebuffConfig);
 
         // Context-menu items baked their labels at Register-time; re-register under the new language.
         ReRegisterTeamContextMenuItems();

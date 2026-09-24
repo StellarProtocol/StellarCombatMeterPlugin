@@ -34,16 +34,22 @@ public enum BarColorMode
 /// Unity-free so it is unit-testable. Resolve combines the user toggles with the existing width-driven
 /// collapse (List only) into the final per-element visibility.
 /// </summary>
+/// <summary>Player-tile size for the party-focus rows. Bigger sizes grow EVERY row uniformly (occupied,
+/// debuff-less, and empty/absent slots alike) and scale the 2×2 debuff block to fit (owner 2026-09-24).</summary>
+public enum TileSize { Small = 0, Medium = 1, Large = 2 }
+
 public sealed class MeterElementToggles
 {
     public bool Rank, Crest, Spec, Primary, Total, Share, Imagine, ImagineCooldown, LeaderFlag;
-    public bool ClassName, AbilityScore, IllusionBreak, VoiceIcon;
+    public bool ClassName, AbilityScore, IllusionBreak, VoiceIcon, Debuffs;
     public VerticalBarMode VerticalBar;
     public BarColorMode BarColor;
     public MeterLabelStyle BarLabelStyle;
     public bool MainBarIsHp;
     public float SpineWidth;
     public ImagineSize ImagineSize;
+    public TileSize TileSize;
+    public int DebuffMax;   // max buff/debuff cells shown (4/6/8 → 2/3/4 columns × 2 rows)
     public ImaginePosition ImaginePosition;
 
     private const float SpecTotalMinW = 230f;
@@ -54,9 +60,19 @@ public sealed class MeterElementToggles
         Rank = true, Crest = true, Spec = true, VerticalBar = VerticalBarMode.Hp, MainBarIsHp = false, SpineWidth = 3f,
         BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
-        ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true,
-        ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight,
+        ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true, Debuffs = true,
+        ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight, TileSize = TileSize.Small,
+        DebuffMax = 4,
     };
+
+    // List-mode defaults: the buffs & debuffs block is OFF by default in the DPS list (it competes with the bar
+    // width there); the user opts in per the List tab. Party modes default it ON via Defaults().
+    public static MeterElementToggles ListDefaults()
+    {
+        var d = Defaults();
+        d.Debuffs = false;
+        return d;
+    }
 
     // Leaner defaults for the dense 20-player raid grid: the tiny cells can't fit the full set, so spec /
     // total / imagine start off (rank · crest · name · HP · per-second · share · leader stay on).
@@ -71,7 +87,7 @@ public sealed class MeterElementToggles
     public readonly record struct Resolved(
         bool Rank, bool Crest, bool Spec, bool ClassName, bool AbilityScore, bool IllusionBreak,
         bool Primary, bool Total, bool Share, bool Imagine, bool ImagineCooldown,
-        bool LeaderFlag, bool VoiceIcon);
+        bool LeaderFlag, bool VoiceIcon, bool Debuffs);
 
     /// <summary>Final visibility = user toggle AND (List only) the width-collapse guard.</summary>
     // Note: VerticalBar/MainBarIsHp/ImagineSize/ImaginePosition are NOT in Resolved — callers read them
@@ -93,7 +109,8 @@ public sealed class MeterElementToggles
             Imagine:         Imagine,
             ImagineCooldown: Imagine && ImagineCooldown,
             LeaderFlag:      LeaderFlag,
-            VoiceIcon:       VoiceIcon);
+            VoiceIcon:       VoiceIcon,
+            Debuffs:         Debuffs);   // supported in List too now (owner 2026-09-24); List defaults it OFF (ListDefaults)
     }
 
     /// <summary>
@@ -126,10 +143,23 @@ public sealed class MeterElementToggles
         d.AbilityScore    = cfg.Get($"{prefix}.show.abilityScore",    defaults.AbilityScore);
         d.IllusionBreak   = cfg.Get($"{prefix}.show.illusionBreak",   defaults.IllusionBreak);
         d.VoiceIcon       = cfg.Get($"{prefix}.show.voiceIcon",       defaults.VoiceIcon);
+        d.Debuffs         = cfg.Get($"{prefix}.show.debuffs",         defaults.Debuffs);
         d.ImagineSize     = (ImagineSize)cfg.Get($"{prefix}.imagine.size",     (int)defaults.ImagineSize);
+        // Config key stays "debuff.size" (was the debuff-icon-size control before the 2026-09-24 rename to
+        // "Player tile size") so an install keeps whatever size it had picked across this build.
+        d.TileSize        = (TileSize)cfg.Get($"{prefix}.debuff.size",          (int)defaults.TileSize);
+        d.DebuffMax       = cfg.Get($"{prefix}.debuff.max",                     defaults.DebuffMax);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
         return d;
     }
+
+    /// <summary>Player-tile size in px for a chosen size (Small=20 default → 48px row, Medium=26 → 58px,
+    /// Large=32 → 72px). Drives both the debuff cell edge and, via the framework, the row height so every
+    /// party row is the same size.</summary>
+    public static float TileSizePx(TileSize s) => s switch { TileSize.Medium => 26f, TileSize.Large => 32f, _ => 20f };
+
+    /// <summary>Clamp a stored buff/debuff max-cell count to a supported even value 4..12 (2 rows × 2..6 columns).</summary>
+    public static int DebuffMaxCells(int m) => m <= 4 ? 4 : (m >= 12 ? 12 : (m % 2 == 0 ? m : m + 1));
 
     /// <summary>Persist back to the config section under the per-mode prefix.</summary>
     public void Save(IConfigSection cfg, string prefix)
@@ -152,7 +182,10 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.abilityScore",    AbilityScore);
         cfg.Set($"{prefix}.show.illusionBreak",   IllusionBreak);
         cfg.Set($"{prefix}.show.voiceIcon",       VoiceIcon);
+        cfg.Set($"{prefix}.show.debuffs",         Debuffs);
         cfg.Set($"{prefix}.imagine.size",         (int)ImagineSize);
+        cfg.Set($"{prefix}.debuff.size",          (int)TileSize);   // key kept for continuity — now the player-tile size
+        cfg.Set($"{prefix}.debuff.max",           DebuffMax);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);
     }
 }
