@@ -126,4 +126,16 @@ public class DebuffStripTests
         var shown = DebuffStrip.Build(buffs, t, new DebuffSelection { ShowHidden = true }, nowMs: 0);
         Assert.Equal(2, shown.Count);
     }
+
+    [Fact]
+    public void SourceSkillId_comes_from_skill_source_only()
+    {
+        // SourceKind 0 = Skill -> SourceId is the applying skill id (the imagine for a lockout debuff).
+        var skillSourced = new ActiveBuff(1, 10, 1, EntityId.None, 1, 0, 0, 1000, 0, 777);
+        var buffSourced  = new ActiveBuff(2, 11, 1, EntityId.None, 1, 0, 0, 1000, 1, 888); // SourceKind 1 = Buff
+        var t = Table((10, true, true), (11, true, true));
+        var r = DebuffStrip.Build(new[] { skillSourced, buffSourced }, t, new DebuffSelection(), nowMs: 0);
+        Assert.Equal(777, r.E0.SourceSkillId);   // skill-sourced -> carried
+        Assert.Equal(0,   r.E1.SourceSkillId);   // non-skill source -> 0
+    }
 }

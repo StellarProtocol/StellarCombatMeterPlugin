@@ -6,7 +6,9 @@ using Stellar.Abstractions.Domain.GameData;
 namespace Stellar.CombatMeter;
 
 /// <summary>One resolved debuff for a member's 2×2 block (icon resolution happens later, in Plugin.Debuffs).</summary>
-public readonly record struct DebuffEntry(int BaseId, int Stacks, float RemainFraction);
+/// <summary>One resolved debuff. <c>SourceSkillId</c> is the live skill that applied it (ActiveBuff.SourceId
+/// when SourceKind==Skill), used to render imagine-lockout debuffs as their Battle-Imagine card.</summary>
+public readonly record struct DebuffEntry(int BaseId, int Stacks, float RemainFraction, int SourceSkillId = 0);
 
 /// <summary>Up to four debuffs + an overflow count for a member's trailing block.</summary>
 public readonly record struct DebuffStripResult(
@@ -82,6 +84,7 @@ public static class DebuffStrip
     {
         float remain = b.DurationMs <= 0 ? 1f
             : Math.Clamp((b.CreateTimeMs + b.DurationMs - nowMs) / (float)b.DurationMs, 0f, 1f);
-        return new DebuffEntry(b.BaseId, b.Stacks, remain);
+        // SourceKind 0 = Skill (EFightSource) -> SourceId is the applying skill id (the imagine for a lockout debuff).
+        return new DebuffEntry(b.BaseId, b.Stacks, remain, b.SourceKind == 0 ? b.SourceId : 0);
     }
 }

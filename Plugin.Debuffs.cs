@@ -62,7 +62,9 @@ public sealed partial class Plugin
         // Imagine-lockout debuffs (e.g. Time Stasis) show the SOURCE Battle-Imagine card instead of the raw
         // debuff icon — same as the CooldownBar plugin (DebuffAttribution): BuffTable.SkillId -> is that skill
         // a Battle Imagine? If so, load the imagine art. Otherwise the debuff's own icon.
-        int skillId = _getBuffFn?.Invoke(e.BaseId)?.SkillId ?? 0;
+        // Imagine skill = the LIVE source skill that applied the debuff (ActiveBuff.SourceId; e.g. Time Stasis
+        // has BuffTable.SkillId 0 but its wire source IS the imagine). Fall back to the static table SkillId.
+        int skillId = e.SourceSkillId != 0 ? e.SourceSkillId : (_getBuffFn?.Invoke(e.BaseId)?.SkillId ?? 0);
         object? icon = skillId > 0 && _services.ResonanceData.GetImagineForSkill(skillId) is { } img
             ? _services.GameAssets.LoadImagineIcon(img.SkillId, out uv)              // imagine-lockout -> imagine card
             : _services.GameAssets.LoadBuffIcon(e.BaseId, out uv);                   // normal debuff icon
