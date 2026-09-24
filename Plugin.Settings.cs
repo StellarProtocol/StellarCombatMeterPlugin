@@ -106,6 +106,7 @@ public sealed partial class Plugin
                 {
                     ToggleRow("settings.toggle.debuffs", () => t.Debuffs, v => t.Debuffs = v),
                     DebuffConfigureRow(),
+                    new ConditionalElement(() => t.Debuffs, DebuffSizeRow(t)),
                 }, Gap: 3f)),
 
             new SpacerElement(Height: 10f),
@@ -135,6 +136,17 @@ public sealed partial class Plugin
         {
             new SpacerElement(Width: 8f),
             new ButtonElement(() => _loc.T("settings.debuffs.configure"), ToggleDebuffConfig, Width: 170f),
+        }, Gap: 6f);
+
+    // Debuff-icon size (Small/Medium/Large) for the party 2×2 block — bigger sizes grow the row height.
+    private HudElement DebuffSizeRow(MeterElementToggles t)
+        => new RowElement(new HudElement[]
+        {
+            new SpacerElement(Width: 8f),
+            new TextElement(() => _loc.T("settings.debuff.size"), MutedCol, Width: 72f),
+            new ButtonElement(() => _loc.T("common.small"),  () => { t.DebuffSize = DebuffIconSize.Small;  PersistToggles(); }, Active: () => t.DebuffSize == DebuffIconSize.Small,  Width: 60f),
+            new ButtonElement(() => _loc.T("common.medium"), () => { t.DebuffSize = DebuffIconSize.Medium; PersistToggles(); }, Active: () => t.DebuffSize == DebuffIconSize.Medium, Width: 60f),
+            new ButtonElement(() => _loc.T("common.large"),  () => { t.DebuffSize = DebuffIconSize.Large;  PersistToggles(); }, Active: () => t.DebuffSize == DebuffIconSize.Large,  Width: 60f),
         }, Gap: 6f);
 
     private HudElement ImagineShowRow(MeterElementToggles t)

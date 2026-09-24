@@ -34,6 +34,9 @@ public enum BarColorMode
 /// Unity-free so it is unit-testable. Resolve combines the user toggles with the existing width-driven
 /// collapse (List only) into the final per-element visibility.
 /// </summary>
+/// <summary>Debuff-icon size for the party-focus 2×2 block. Bigger sizes grow the row to fit.</summary>
+public enum DebuffIconSize { Small = 0, Medium = 1, Large = 2 }
+
 public sealed class MeterElementToggles
 {
     public bool Rank, Crest, Spec, Primary, Total, Share, Imagine, ImagineCooldown, LeaderFlag;
@@ -44,6 +47,7 @@ public sealed class MeterElementToggles
     public bool MainBarIsHp;
     public float SpineWidth;
     public ImagineSize ImagineSize;
+    public DebuffIconSize DebuffSize;
     public ImaginePosition ImaginePosition;
 
     private const float SpecTotalMinW = 230f;
@@ -55,7 +59,7 @@ public sealed class MeterElementToggles
         BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
         ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true, Debuffs = true,
-        ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight,
+        ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight, DebuffSize = DebuffIconSize.Small,
     };
 
     // Leaner defaults for the dense 20-player raid grid: the tiny cells can't fit the full set, so spec /
@@ -129,9 +133,13 @@ public sealed class MeterElementToggles
         d.VoiceIcon       = cfg.Get($"{prefix}.show.voiceIcon",       defaults.VoiceIcon);
         d.Debuffs         = cfg.Get($"{prefix}.show.debuffs",         defaults.Debuffs);
         d.ImagineSize     = (ImagineSize)cfg.Get($"{prefix}.imagine.size",     (int)defaults.ImagineSize);
+        d.DebuffSize      = (DebuffIconSize)cfg.Get($"{prefix}.debuff.size",   (int)defaults.DebuffSize);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
         return d;
     }
+
+    /// <summary>The 2×2 debuff cell edge in px for a chosen size (Small=20 default, Medium=26, Large=32).</summary>
+    public static float DebuffSizePx(DebuffIconSize s) => s switch { DebuffIconSize.Medium => 26f, DebuffIconSize.Large => 32f, _ => 20f };
 
     /// <summary>Persist back to the config section under the per-mode prefix.</summary>
     public void Save(IConfigSection cfg, string prefix)
@@ -156,6 +164,7 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.voiceIcon",       VoiceIcon);
         cfg.Set($"{prefix}.show.debuffs",         Debuffs);
         cfg.Set($"{prefix}.imagine.size",         (int)ImagineSize);
+        cfg.Set($"{prefix}.debuff.size",          (int)DebuffSize);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);
     }
 }

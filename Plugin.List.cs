@@ -95,6 +95,7 @@ public sealed partial class Plugin
         _barAnim[id] = cur;
         var rowData = AssembleRow(row, rank, elapsed, vis, toggles);
         ResolveDebuffs(id, vis.Debuffs, ref rowData);
+        rowData.DebuffCellSize = MeterElementToggles.DebuffSizePx(toggles.DebuffSize);
         return rowData;
     }
 
