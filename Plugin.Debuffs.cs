@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Domain.GameData;
 using Stellar.Abstractions.Services;
@@ -12,9 +11,9 @@ namespace Stellar.CombatMeter;
 // fills the row's 2×2 debuff slots. Display only — touches no capture/archive/upload path.
 public sealed partial class Plugin
 {
-    // Known non-display debuff base-ids to hide even though they are BuffType 0 with an icon. Empty until
-    // measured in-game (the "tune it in-game" knob from the spec).
-    private static readonly HashSet<int> DebuffDenylist = new();
+    // Default selection: empty set + ShowAllExceptSelected shows every named, icon'd debuff.
+    // TODO(main-session): load/save _debuffSelection + seen catalog + config panel
+    private DebuffSelection _debuffSelection = new();
 
     // Hoisted once so ResolveDebuffs (~200 calls/sec at raid-20) doesn't allocate a new delegate from the
     // method group on every call.
@@ -26,7 +25,7 @@ public sealed partial class Plugin
         if (!show) { row.DebuffOverflow = 0; return; }
         var buffs = _services.CombatLookup.BuffsFor(id);
         _getBuffFn ??= _services.GameData.Combat.GetBuff;
-        var r = DebuffStrip.Build(buffs, _getBuffFn, DebuffDenylist, _services.CombatSnapshot.ServerNowMs);
+        var r = DebuffStrip.Build(buffs, _getBuffFn, _debuffSelection, _services.CombatSnapshot.ServerNowMs);
         row.Debuff0 = ToSlot(r, 0);
         row.Debuff1 = ToSlot(r, 1);
         row.Debuff2 = ToSlot(r, 2);

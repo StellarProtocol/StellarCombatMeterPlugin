@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;   // still needed: denylist.Contains(...) below (IReadOnlyCollection<int> has no member Contains)
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Domain.GameData;
 
@@ -21,8 +20,9 @@ public readonly record struct DebuffStripResult(
 }
 
 /// <summary>
-/// Pure builder for a member's party-focus debuff strip: filter (IsDebuff + Visible!=0 + has-icon − denylist), stable
-/// FIFO order by CreateTimeMs, cap 4 + overflow, remaining-duration fraction. Unity-free + testable.
+/// Pure builder for a member's party-focus debuff strip: filter (IsDebuff + user-configurable
+/// <see cref="DebuffSelection"/>), stable FIFO order by CreateTimeMs, cap 4 + overflow, remaining-duration
+/// fraction. Unity-free + testable.
 /// </summary>
 public static class DebuffStrip
 {
@@ -32,12 +32,12 @@ public static class DebuffStrip
     /// <summary>Filters, orders and caps a member's live buffs into the up-to-four debuff strip (4th cell reserved for the overflow "+N" whenever the kept count exceeds <see cref="MaxCells"/>).</summary>
     public static DebuffStripResult Build(
         IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff,
-        IReadOnlyCollection<int> denylist, long nowMs)
+        DebuffSelection selection, long nowMs)
     {
         if (buffs == null || buffs.Count == 0) return DebuffStripResult.Empty;
         var kept = new List<ActiveBuff>(buffs.Count);
         foreach (var b in buffs)
-            if (Passes(b.BaseId, getBuff, denylist)) kept.Add(b);
+            if (Passes(b.BaseId, getBuff, selection)) kept.Add(b);
         if (kept.Count == 0) return DebuffStripResult.Empty;
         StableSortByCreateTime(kept);
         // Renderer sacrifices the 4th cell for "+N" whenever there's overflow, so reserve it here too —
@@ -51,15 +51,13 @@ public static class DebuffStrip
         return new DebuffStripResult(e0, e1, e2, e3, count, overflow);
     }
 
-    // The single filter predicate shared by Build and HasAny: a real debuff (BuffType 0), not a hidden
-    // internal marker (BuffTable.Visible 0), with a display icon, and not on the tunable denylist.
-    private static bool Passes(int baseId, Func<int, BuffInfo?> getBuff, IReadOnlyCollection<int> denylist)
+    // The single filter predicate: a real debuff (BuffType 0) whose name/icon pass the user's
+    // DebuffSelection (default mode + empty selection shows every named, icon'd debuff).
+    private static bool Passes(int baseId, Func<int, BuffInfo?> getBuff, DebuffSelection selection)
     {
-        if (denylist.Contains(baseId)) return false;
         var info = getBuff(baseId);
         if (info is not { IsDebuff: true } bi) return false;
-        if (bi.Visible == 0) return false;   // hidden internal marker (never shown in the game UI)
-        return !string.IsNullOrEmpty(bi.IconPath);
+        return selection.ShouldShow(baseId, !string.IsNullOrEmpty(bi.Name), !string.IsNullOrEmpty(bi.IconPath));
     }
 
     // In-place insertion sort by CreateTimeMs: stable (only shifts on strictly-greater, so equal-time
