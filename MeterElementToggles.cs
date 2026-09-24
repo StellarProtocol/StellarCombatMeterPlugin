@@ -37,7 +37,7 @@ public enum BarColorMode
 public sealed class MeterElementToggles
 {
     public bool Rank, Crest, Spec, Primary, Total, Share, Imagine, ImagineCooldown, LeaderFlag;
-    public bool ClassName, AbilityScore, IllusionBreak, VoiceIcon;
+    public bool ClassName, AbilityScore, IllusionBreak, VoiceIcon, Debuffs;
     public VerticalBarMode VerticalBar;
     public BarColorMode BarColor;
     public MeterLabelStyle BarLabelStyle;
@@ -54,7 +54,7 @@ public sealed class MeterElementToggles
         Rank = true, Crest = true, Spec = true, VerticalBar = VerticalBarMode.Hp, MainBarIsHp = false, SpineWidth = 3f,
         BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
-        ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true,
+        ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true, Debuffs = true,
         ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight,
     };
 
@@ -71,7 +71,7 @@ public sealed class MeterElementToggles
     public readonly record struct Resolved(
         bool Rank, bool Crest, bool Spec, bool ClassName, bool AbilityScore, bool IllusionBreak,
         bool Primary, bool Total, bool Share, bool Imagine, bool ImagineCooldown,
-        bool LeaderFlag, bool VoiceIcon);
+        bool LeaderFlag, bool VoiceIcon, bool Debuffs);
 
     /// <summary>Final visibility = user toggle AND (List only) the width-collapse guard.</summary>
     // Note: VerticalBar/MainBarIsHp/ImagineSize/ImaginePosition are NOT in Resolved — callers read them
@@ -93,7 +93,8 @@ public sealed class MeterElementToggles
             Imagine:         Imagine,
             ImagineCooldown: Imagine && ImagineCooldown,
             LeaderFlag:      LeaderFlag,
-            VoiceIcon:       VoiceIcon);
+            VoiceIcon:       VoiceIcon,
+            Debuffs:         Debuffs);
     }
 
     /// <summary>
@@ -126,6 +127,7 @@ public sealed class MeterElementToggles
         d.AbilityScore    = cfg.Get($"{prefix}.show.abilityScore",    defaults.AbilityScore);
         d.IllusionBreak   = cfg.Get($"{prefix}.show.illusionBreak",   defaults.IllusionBreak);
         d.VoiceIcon       = cfg.Get($"{prefix}.show.voiceIcon",       defaults.VoiceIcon);
+        d.Debuffs         = cfg.Get($"{prefix}.show.debuffs",         defaults.Debuffs);
         d.ImagineSize     = (ImagineSize)cfg.Get($"{prefix}.imagine.size",     (int)defaults.ImagineSize);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
         return d;
@@ -152,6 +154,7 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.show.abilityScore",    AbilityScore);
         cfg.Set($"{prefix}.show.illusionBreak",   IllusionBreak);
         cfg.Set($"{prefix}.show.voiceIcon",       VoiceIcon);
+        cfg.Set($"{prefix}.show.debuffs",         Debuffs);
         cfg.Set($"{prefix}.imagine.size",         (int)ImagineSize);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);
     }
