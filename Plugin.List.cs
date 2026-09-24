@@ -138,6 +138,7 @@ public sealed partial class Plugin
             RowBorder        = TalkBorderFor(id),
             SelfAccent       = _selfAccentSlot.Value,
             HpFraction       = toggles.VerticalBar == VerticalBarMode.Dps ? cur : frac,
+            HpShieldFraction = toggles.VerticalBar == VerticalBarMode.Hp ? HpShieldFractionFor(id, frac) : 0f,
             CrestTexture     = crest,
             CrestUv          = crestUv,
             PrimaryValue     = FormatAmount(perSec),
@@ -238,6 +239,19 @@ public sealed partial class Plugin
         foreach (var m in _services.PartyRoster.Members)
             if (m.CharId == charId) return !m.IsOnline;
         return false;
+    }
+
+    // Shield overlay fraction for the vertical HP spine (VerticalBarMode.Hp only): current shield / maxHp,
+    // clamped to [0,1] AND to the HP fraction so the grey band drawn OVER the green fill never rises past it.
+    // Shield + maxHp come from the combat vitals cache (framework reads AttrShieldList 60050 into
+    // EntityVitals.Shield). 0 when there is no shield, no maxHp, or the entity is unknown — the framework then
+    // renders the spine byte-identical to a shield-less row.
+    private float HpShieldFractionFor(EntityId id, float hpFrac)
+    {
+        var v = _services.CombatLookup.GetVitals(id);
+        if (v.MaxHp <= 0 || v.Shield <= 0) return 0f;
+        float shieldFrac = Mathf.Clamp01((float)v.Shield / v.MaxHp);
+        return Mathf.Min(shieldFrac, hpFrac);
     }
 
     private float HpFractionFor(EntityId id)
