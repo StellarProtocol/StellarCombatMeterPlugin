@@ -97,9 +97,16 @@ public sealed partial class Plugin
             ToggleRow("settings.toggle.illusionBreak", () => t.IllusionBreak, v => t.IllusionBreak = v),
             ToggleRow("settings.toggle.voiceIcon",         () => t.VoiceIcon,     v => t.VoiceIcon = v),
             // Party-mode 2×2 debuff block (spec 2026-09-24). Party-focus only, so it is hidden on the List
-            // tab (_settingsTab 0); List rows never read Debuffs.
+            // tab (_settingsTab 0); List rows never read Debuffs. The "Configure debuffs…" button opens
+            // the debuff config panel (Plugin.DebuffConfig.cs) — the selection it edits is a single,
+            // view-mode-independent DebuffSelection, so the button sits beside the toggle regardless of
+            // which of the two party toggle sets (t) is currently rendering.
             new ConditionalElement(() => _settingsTab != 0,
-                ToggleRow("settings.toggle.debuffs", () => t.Debuffs, v => t.Debuffs = v)),
+                new ColumnElement(new HudElement[]
+                {
+                    ToggleRow("settings.toggle.debuffs", () => t.Debuffs, v => t.Debuffs = v),
+                    DebuffConfigureRow(),
+                }, Gap: 3f)),
 
             new SpacerElement(Height: 10f),
             new TextElement(() => _loc.T("settings.appearance.autoStyled"), MutedCol),
@@ -120,6 +127,15 @@ public sealed partial class Plugin
             ? new RowElement(new HudElement[] { new SpacerElement(Width: 8f), toggle, text }, Gap: 8f)
             : new RowElement(new HudElement[] { toggle, text }, Gap: 8f);
     }
+
+    // Opens the debuff config panel (Plugin.DebuffConfig.cs) — indented under the "Show debuffs" toggle it
+    // sits beneath, matching ToggleRow's indent inset.
+    private HudElement DebuffConfigureRow()
+        => new RowElement(new HudElement[]
+        {
+            new SpacerElement(Width: 8f),
+            new ButtonElement(() => _loc.T("settings.debuffs.configure"), ToggleDebuffConfig, Width: 170f),
+        }, Gap: 6f);
 
     private HudElement ImagineShowRow(MeterElementToggles t)
         => new RowElement(new HudElement[]

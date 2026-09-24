@@ -37,6 +37,7 @@ public sealed partial class Plugin : IStellarPlugin
     private IWindowControl _skillBreakdownWindow = null!;
     private IWindowControl _snapshotWindow = null!;
     private IWindowControl _settingsWindow = null!;
+    private IWindowControl _debuffConfigWindow = null!;
     private IHotkeyAction _toggleAction = null!;
     private IHotkeyAction _historyAction = null!;
     private IHotkeyAction _resetAction = null!;
@@ -187,6 +188,7 @@ public sealed partial class Plugin : IStellarPlugin
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
         _filter   = (FilterMode) _prefs.Get("scope",  (int)FilterMode.Party);
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
+        _debuffSelection = DebuffSelection.Load(_prefs);   // party-focus debuff strip selection (Plugin.Debuffs.cs)
         InitUploadPolicy();  // SP1: load/migrate the 8 upload-policy cells + cache the hot-path bools
         InitReplay();      // Replay R1: load pref + create capture instance
         InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
@@ -269,6 +271,7 @@ public sealed partial class Plugin : IStellarPlugin
 
         _settingsWindow = BuildAndRegisterSettings();
         _archiveSettingsWindow = BuildAndRegisterArchiveSettings();
+        _debuffConfigWindow = BuildAndRegisterDebuffConfig();
         _rowMenuWindow = RegisterRowMenuWindow();
         RegisterHotkeys();
         RegisterLauncher();
@@ -337,6 +340,7 @@ public sealed partial class Plugin : IStellarPlugin
         _toggleAction.Dispose();
         DisposeLauncher();
         _rowMenuWindow.Remove();
+        _debuffConfigWindow.Remove();
         _settingsWindow.Remove();
         _snapshotWindow.Remove();
         _skillBreakdownWindow.Remove();
