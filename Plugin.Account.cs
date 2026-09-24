@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -33,32 +34,21 @@ public sealed partial class Plugin
         return string.IsNullOrWhiteSpace(v) ? LogUploader.DefaultApiBase : v!.TrimEnd('/');
     }
 
-    private IWindowControl _accountWindow = null!;
     private string _linkCode = string.Empty;
     private string _linkStatus = string.Empty;
 
-    private IWindowControl BuildAndRegisterAccount()
-        => _services.Windows.Register(new WindowRegistration(
-            new WindowSpec(
-                Id:          "combatmeter.account",
-                Title:       _loc.T("header.linkToSite"),   // baked at registration; rebuilt on LanguageChanged
-                DefaultRect: new WindowRect(900f, 120f, 360f, 250f),
-                Category:    WindowCategory.Tools,
-                Style:       WindowPanelStyle.GlassMenu)
-            { StartVisible = false, Closable = true, Draggable = true,
-              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
-                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
-            BuildAccountRoot(),
-            OnClose: () => _accountWindow.SetVisible(false)));
-
-    private void ToggleAccount() => _accountWindow.SetVisible(!_accountWindow.IsShown);
-
-    private HudElement BuildAccountRoot()
-        => new ColumnElement(new HudElement[]
+    // Account → "Link to site" is a SECTION at the bottom of the uploads Settings window
+    // (Plugin.SettingsArchive.cs), not its own window: the launcher exposes CombatMeter's config through
+    // one ⚙ Settings tile, and account binding is upload-related so it belongs with the upload policy
+    // (owner 2026-09-17). Returns the rows so BuildAutoArchiveSettingsRoot can AddRange them after the
+    // Discord section, mirroring DiscordSectionRows(). Re-localizes for free: the settings window is
+    // rebuilt on LanguageChanged (Plugin.Localization.cs), which re-runs this builder.
+    private List<HudElement> AccountSectionRows()
+        => new List<HudElement>
         {
+            new SeparatorElement(),
             new TextElement(() => _loc.T("account.linkTitle"), Emphasis: true),
             new TextElement(() => _loc.T("account.linkHelp"), MutedCol),
-            new SeparatorElement(),
             new RowElement(new HudElement[]
             {
                 new TextElement(() => _loc.T("account.code"), MutedCol, Width: 54f),
@@ -70,7 +60,7 @@ public sealed partial class Plugin
                 new ButtonElement(() => _loc.T("account.link"), SubmitLinkCode),
             }, Gap: 8f),
             new TextElement(() => _linkStatus, MutedCol),
-        }, Gap: 6f);
+        };
 
     private void OnSubmitLinkCode(string val)
     {
@@ -128,6 +118,6 @@ public sealed partial class Plugin
     private void SetLinkStatus(string s)
     {
         _linkStatus = s;
-        try { _accountWindow.MarkDirty(); } catch { /* refresh is best-effort */ }
+        try { _archiveSettingsWindow.MarkDirty(); } catch { /* refresh is best-effort */ }
     }
 }

@@ -268,11 +268,10 @@ public sealed partial class Plugin : IStellarPlugin
         _snapshotWindow = RegisterSnapshotWindow();
 
         _settingsWindow = BuildAndRegisterSettings();
-        _accountWindow = BuildAndRegisterAccount();
         _archiveSettingsWindow = BuildAndRegisterArchiveSettings();
         _rowMenuWindow = RegisterRowMenuWindow();
-
         RegisterHotkeys();
+        RegisterLauncher();
     }
 
     private void RegisterHotkeys()
@@ -336,6 +335,7 @@ public sealed partial class Plugin : IStellarPlugin
         _resetAction.Dispose();
         _historyAction.Dispose();
         _toggleAction.Dispose();
+        DisposeLauncher();
         _rowMenuWindow.Remove();
         _settingsWindow.Remove();
         _snapshotWindow.Remove();

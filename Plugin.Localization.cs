@@ -21,7 +21,6 @@ public sealed partial class Plugin
         RebuildWindow(ref _skillBreakdownWindow, RegisterSkillBreakdownWindow);
         RebuildWindow(ref _snapshotWindow, RegisterSnapshotWindow);
         RebuildWindow(ref _settingsWindow, BuildAndRegisterSettings);
-        RebuildWindow(ref _accountWindow, BuildAndRegisterAccount);
         RebuildWindow(ref _archiveSettingsWindow, BuildAndRegisterArchiveSettings);
 
         // Context-menu items baked their labels at Register-time; re-register under the new language.
