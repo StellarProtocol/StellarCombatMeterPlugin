@@ -58,7 +58,14 @@ public sealed partial class Plugin
     {
         if (i >= r.Count) return DebuffSlot.None;
         var e = r.At(i);
-        object? icon = _services.GameAssets.LoadBuffIcon(e.BaseId, out var uv);   // async; null until loaded (framework caches the handle)
+        UvRect uv;
+        // Imagine-lockout debuffs (e.g. Time Stasis) show the SOURCE Battle-Imagine card instead of the raw
+        // debuff icon — same as the CooldownBar plugin (DebuffAttribution): BuffTable.SkillId -> is that skill
+        // a Battle Imagine? If so, load the imagine art. Otherwise the debuff's own icon.
+        int skillId = _getBuffFn?.Invoke(e.BaseId)?.SkillId ?? 0;
+        object? icon = skillId > 0 && _services.ResonanceData.GetImagineForSkill(skillId) is { } img
+            ? _services.GameAssets.LoadImagineIcon(img.SkillId, out uv)              // imagine-lockout -> imagine card
+            : _services.GameAssets.LoadBuffIcon(e.BaseId, out uv);                   // normal debuff icon
         return new DebuffSlot(icon, uv, e.Stacks, e.RemainFraction, Present: true);
     }
 }
