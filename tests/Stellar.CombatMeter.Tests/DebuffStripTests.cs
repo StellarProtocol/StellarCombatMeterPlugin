@@ -80,4 +80,17 @@ public class DebuffStripTests
         var r = DebuffStrip.Build(buffs, Table((10,true,true)), Array.Empty<int>(), nowMs:0);
         Assert.Equal(5, r.E0.Stacks);
     }
+
+    [Fact]
+    public void Same_create_time_preserves_input_order()
+    {
+        // Regression: kept.Sort is unstable (introsort); an AoE applying several debuffs in the
+        // same tick must not have its icon order flicker between Build() calls. Use OrderBy
+        // (documented-stable) so ties preserve input order.
+        var buffs = new[] { Buff(10,1,100,1000,1), Buff(11,1,100,1000,2) };
+        var t = Table((10,true,true),(11,true,true));
+        var r = DebuffStrip.Build(buffs, t, Array.Empty<int>(), nowMs:0);
+        Assert.Equal(10, r.E0.BaseId);
+        Assert.Equal(11, r.E1.BaseId);
+    }
 }

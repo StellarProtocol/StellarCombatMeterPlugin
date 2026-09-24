@@ -44,10 +44,10 @@ public static class DebuffStrip
             kept.Add(b);
         }
         if (kept.Count == 0) return DebuffStripResult.Empty;
-        kept.Sort((x, y) => x.CreateTimeMs.CompareTo(y.CreateTimeMs));   // stable FIFO
-        int count = Math.Min(kept.Count, MaxCells);
-        int overflow = kept.Count - count;
-        DebuffEntry E(int i) => i < count ? ToEntry(kept[i], nowMs) : default;
+        var ordered = kept.OrderBy(b => b.CreateTimeMs).ToList();   // stable FIFO (Enumerable.OrderBy is documented-stable; List.Sort is not)
+        int count = Math.Min(ordered.Count, MaxCells);
+        int overflow = ordered.Count - count;
+        DebuffEntry E(int i) => i < count ? ToEntry(ordered[i], nowMs) : default;
         return new DebuffStripResult(E(0), E(1), E(2), E(3), count, overflow);
     }
 
