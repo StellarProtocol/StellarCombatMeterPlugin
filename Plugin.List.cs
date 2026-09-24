@@ -93,7 +93,9 @@ public sealed partial class Plugin
         if (!_barAnim.TryGetValue(id, out var cur)) cur = target;
         cur = Mathf.Lerp(cur, target, 0.18f);
         _barAnim[id] = cur;
-        return AssembleRow(row, rank, elapsed, vis, toggles);
+        var rowData = AssembleRow(row, rank, elapsed, vis, toggles);
+        ResolveDebuffs(id, vis.Debuffs, ref rowData);
+        return rowData;
     }
 
     // Assembles the MeterRowData value. Extracted to keep BuildRowData under 50 LoC (STELLAR0002).
@@ -122,7 +124,7 @@ public sealed partial class Plugin
         var (imagine0, imagine1) = ResolveImagines(id, id == self);
         var gaugeColor = GaugeColorFor(id);   // role or class colour — see Plugin.GaugeColor.cs
         var hpColor    = HpColor();
-        var rowData = new MeterRowData
+        return new MeterRowData
         {
             Id               = id,
             Rank             = $"{rank}.",
@@ -170,8 +172,6 @@ public sealed partial class Plugin
             Imagine0         = imagine0,
             Imagine1         = imagine1,
         };
-        ResolveDebuffs(id, vis.Debuffs, ref rowData);
-        return rowData;
     }
 
     // Illusion-Breaking Strength = attr 11440 (AttrSeasonStrength). Read per row via the framework's cheap
