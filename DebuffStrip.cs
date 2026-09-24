@@ -21,7 +21,7 @@ public readonly record struct DebuffStripResult(
 }
 
 /// <summary>
-/// Pure builder for a member's party-focus debuff strip: filter (IsDebuff + has-icon − denylist), stable
+/// Pure builder for a member's party-focus debuff strip: filter (IsDebuff + Visible!=0 + has-icon − denylist), stable
 /// FIFO order by CreateTimeMs, cap 4 + overflow, remaining-duration fraction. Unity-free + testable.
 /// </summary>
 public static class DebuffStrip
@@ -37,13 +37,7 @@ public static class DebuffStrip
         if (buffs == null || buffs.Count == 0) return DebuffStripResult.Empty;
         var kept = new List<ActiveBuff>(buffs.Count);
         foreach (var b in buffs)
-        {
-            if (denylist.Contains(b.BaseId)) continue;
-            var info = getBuff(b.BaseId);
-            if (info is not { IsDebuff: true } bi) continue;
-            if (string.IsNullOrEmpty(bi.IconPath)) continue;
-            kept.Add(b);
-        }
+            if (Passes(b.BaseId, getBuff, denylist)) kept.Add(b);
         if (kept.Count == 0) return DebuffStripResult.Empty;
         StableSortByCreateTime(kept);
         // Renderer sacrifices the 4th cell for "+N" whenever there's overflow, so reserve it here too —
@@ -55,6 +49,27 @@ public static class DebuffStrip
         var e2 = 2 < count ? ToEntry(kept[2], nowMs) : default;
         var e3 = 3 < count ? ToEntry(kept[3], nowMs) : default;
         return new DebuffStripResult(e0, e1, e2, e3, count, overflow);
+    }
+
+    /// <summary>True if any of <paramref name="buffs"/> is a displayable debuff (used by the party pre-pass to
+    /// decide whether to reserve the debuff column group-wide). Early-exits; allocation-free.</summary>
+    public static bool HasAny(IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff, IReadOnlyCollection<int> denylist)
+    {
+        if (buffs == null) return false;
+        foreach (var b in buffs)
+            if (Passes(b.BaseId, getBuff, denylist)) return true;
+        return false;
+    }
+
+    // The single filter predicate shared by Build and HasAny: a real debuff (BuffType 0), not a hidden
+    // internal marker (BuffTable.Visible 0), with a display icon, and not on the tunable denylist.
+    private static bool Passes(int baseId, Func<int, BuffInfo?> getBuff, IReadOnlyCollection<int> denylist)
+    {
+        if (denylist.Contains(baseId)) return false;
+        var info = getBuff(baseId);
+        if (info is not { IsDebuff: true } bi) return false;
+        if (bi.Visible == 0) return false;   // hidden internal marker (never shown in the game UI)
+        return !string.IsNullOrEmpty(bi.IconPath);
     }
 
     // In-place insertion sort by CreateTimeMs: stable (only shifts on strictly-greater, so equal-time

@@ -109,4 +109,26 @@ public class DebuffStripTests
         Assert.Equal(10, r.E0.BaseId);
         Assert.Equal(11, r.E1.BaseId);
     }
+
+    [Fact]
+    public void Visible_zero_debuff_is_excluded()
+    {
+        var buffs = new[] { Buff(10, 1, 0, 1000, 1), Buff(11, 1, 0, 1000, 2) };
+        System.Func<int, BuffInfo?> t = id => id == 10
+            ? new BuffInfo(10, "B10", "", "path/x", default, true, 0, Visible: 0)   // hidden internal marker
+            : new BuffInfo(11, "B11", "", "path/x", default, true, 0, Visible: 2);  // shown
+        var r = DebuffStrip.Build(buffs, t, System.Array.Empty<int>(), nowMs: 0);
+        Assert.Equal(1, r.Count);
+        Assert.Equal(11, r.E0.BaseId);
+    }
+
+    [Fact]
+    public void HasAny_reflects_a_visible_debuff()
+    {
+        var buffs = new[] { Buff(11, 1, 0, 1000, 1) };
+        System.Func<int, BuffInfo?> shown  = id => new BuffInfo(id, "B", "", "path/x", default, true, 0, Visible: 2);
+        System.Func<int, BuffInfo?> hidden = id => new BuffInfo(id, "B", "", "path/x", default, true, 0, Visible: 0);
+        Assert.True(DebuffStrip.HasAny(buffs, shown, System.Array.Empty<int>()));
+        Assert.False(DebuffStrip.HasAny(buffs, hidden, System.Array.Empty<int>()));
+    }
 }

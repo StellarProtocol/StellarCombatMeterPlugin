@@ -20,10 +20,15 @@ public sealed partial class Plugin
     // method group on every call.
     private Func<int, BuffInfo?>? _getBuffFn;
 
+    // Group-level reservation: true when ANY party member has a displayable debuff. Set once per
+    // party-focus rebuild (Plugin.PartyFocus.cs). Keeps the debuff column reserved on ALL rows (uniform
+    // bars) only while debuffs exist somewhere — so out of combat there is no empty reserved gap.
+    private bool _partyHasDebuff;
+
     private void ResolveDebuffs(EntityId id, bool show, ref MeterRowData row)
     {
-        row.ShowDebuffs = show;
-        if (!show) { row.DebuffOverflow = 0; return; }
+        row.ShowDebuffs = show && _partyHasDebuff;
+        if (!row.ShowDebuffs) { row.DebuffOverflow = 0; return; }
         var buffs = _services.CombatLookup.BuffsFor(id);
         _getBuffFn ??= _services.GameData.Combat.GetBuff;
         var r = DebuffStrip.Build(buffs, _getBuffFn, DebuffDenylist, _services.CombatSnapshot.ServerNowMs);
