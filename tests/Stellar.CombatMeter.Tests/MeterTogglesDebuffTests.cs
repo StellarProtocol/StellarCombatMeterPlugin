@@ -17,4 +17,13 @@ public class MeterTogglesDebuffTests
         t.Debuffs = false;
         Assert.False(t.Resolve(collapse: false, widthNow: 1000f).Debuffs);
     }
+
+    [Fact]
+    public void Debuffs_never_shown_on_list_collapse()
+    {
+        var t = MeterElementToggles.Defaults();
+        t.Debuffs = true;
+        Assert.False(t.Resolve(collapse: true,  widthNow: 2000f).Debuffs);   // List
+        Assert.True (t.Resolve(collapse: false, widthNow: 2000f).Debuffs);   // party-focus
+    }
 }

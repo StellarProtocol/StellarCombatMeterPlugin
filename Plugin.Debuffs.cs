@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Domain.GameData;
 using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
@@ -14,12 +16,17 @@ public sealed partial class Plugin
     // measured in-game (the "tune it in-game" knob from the spec).
     private static readonly HashSet<int> DebuffDenylist = new();
 
+    // Hoisted once so ResolveDebuffs (~200 calls/sec at raid-20) doesn't allocate a new delegate from the
+    // method group on every call.
+    private Func<int, BuffInfo?>? _getBuffFn;
+
     private void ResolveDebuffs(EntityId id, bool show, ref MeterRowData row)
     {
         row.ShowDebuffs = show;
         if (!show) { row.DebuffOverflow = 0; return; }
         var buffs = _services.CombatLookup.BuffsFor(id);
-        var r = DebuffStrip.Build(buffs, _services.GameData.Combat.GetBuff, DebuffDenylist, _services.CombatSnapshot.ServerNowMs);
+        _getBuffFn ??= _services.GameData.Combat.GetBuff;
+        var r = DebuffStrip.Build(buffs, _getBuffFn, DebuffDenylist, _services.CombatSnapshot.ServerNowMs);
         row.Debuff0 = ToSlot(r, 0);
         row.Debuff1 = ToSlot(r, 1);
         row.Debuff2 = ToSlot(r, 2);

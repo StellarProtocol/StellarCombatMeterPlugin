@@ -53,14 +53,30 @@ public class DebuffStripTests
     [Fact]
     public void Caps_at_four_and_reports_overflow()
     {
+        // 6 kept debuffs: the renderer sacrifices the 4th cell for "+N" whenever there's overflow, so
+        // Build reserves it too — count is 3 (not 4), overflow is 3 (not 2), and E3 is left default.
         var buffs = new List<ActiveBuff>();
         for (int i = 0; i < 6; i++) buffs.Add(Buff(10+i, 1, i, 1000, i));
         var rows = new List<(int,bool,bool)>();
         for (int i = 0; i < 6; i++) rows.Add((10+i, true, true));
         var r = DebuffStrip.Build(buffs, Table(rows.ToArray()), Array.Empty<int>(), nowMs:0);
+        Assert.Equal(3, r.Count);
+        Assert.Equal(3, r.Overflow);
+        Assert.Equal(12, r.E2.BaseId); // 3rd kept is the 3rd-oldest (E0=10, E1=11, E2=12)
+    }
+
+    [Fact]
+    public void Exactly_four_shows_all_no_overflow()
+    {
+        // Exactly MaxCells kept debuffs: no overflow, so all four cells render (none sacrificed for "+N").
+        var buffs = new List<ActiveBuff>();
+        for (int i = 0; i < 4; i++) buffs.Add(Buff(10+i, 1, i, 1000, i));
+        var rows = new List<(int,bool,bool)>();
+        for (int i = 0; i < 4; i++) rows.Add((10+i, true, true));
+        var r = DebuffStrip.Build(buffs, Table(rows.ToArray()), Array.Empty<int>(), nowMs:0);
         Assert.Equal(4, r.Count);
-        Assert.Equal(2, r.Overflow);
-        Assert.Equal(13, r.E3.BaseId); // 4th kept is the 4th-oldest
+        Assert.Equal(0, r.Overflow);
+        Assert.Equal(13, r.E3.BaseId);
     }
 
     [Fact]
@@ -84,9 +100,9 @@ public class DebuffStripTests
     [Fact]
     public void Same_create_time_preserves_input_order()
     {
-        // Regression: kept.Sort is unstable (introsort); an AoE applying several debuffs in the
-        // same tick must not have its icon order flicker between Build() calls. Use OrderBy
-        // (documented-stable) so ties preserve input order.
+        // Regression: List.Sort is unstable (introsort); an AoE applying several debuffs in the
+        // same tick must not have its icon order flicker between Build() calls. Build uses an
+        // in-place insertion sort (stable by construction) so ties preserve input order.
         var buffs = new[] { Buff(10,1,100,1000,1), Buff(11,1,100,1000,2) };
         var t = Table((10,true,true),(11,true,true));
         var r = DebuffStrip.Build(buffs, t, Array.Empty<int>(), nowMs:0);

@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Linq;   // still needed: denylist.Contains(...) below (IReadOnlyCollection<int> has no member Contains)
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Domain.GameData;
 
@@ -29,6 +29,7 @@ public static class DebuffStrip
     /// <summary>Maximum debuff cells rendered per member.</summary>
     public const int MaxCells = 4;
 
+    /// <summary>Filters, orders and caps a member's live buffs into the up-to-four debuff strip (4th cell reserved for the overflow "+N" whenever the kept count exceeds <see cref="MaxCells"/>).</summary>
     public static DebuffStripResult Build(
         IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff,
         IReadOnlyCollection<int> denylist, long nowMs)
@@ -44,11 +45,34 @@ public static class DebuffStrip
             kept.Add(b);
         }
         if (kept.Count == 0) return DebuffStripResult.Empty;
-        var ordered = kept.OrderBy(b => b.CreateTimeMs).ToList();   // stable FIFO (Enumerable.OrderBy is documented-stable; List.Sort is not)
-        int count = Math.Min(ordered.Count, MaxCells);
-        int overflow = ordered.Count - count;
-        DebuffEntry E(int i) => i < count ? ToEntry(ordered[i], nowMs) : default;
-        return new DebuffStripResult(E(0), E(1), E(2), E(3), count, overflow);
+        StableSortByCreateTime(kept);
+        // Renderer sacrifices the 4th cell for "+N" whenever there's overflow, so reserve it here too —
+        // otherwise the last kept debuff is silently dropped without ever showing in the overflow count.
+        int count = kept.Count <= MaxCells ? kept.Count : MaxCells - 1;
+        int overflow = kept.Count - count;
+        var e0 = 0 < count ? ToEntry(kept[0], nowMs) : default;
+        var e1 = 1 < count ? ToEntry(kept[1], nowMs) : default;
+        var e2 = 2 < count ? ToEntry(kept[2], nowMs) : default;
+        var e3 = 3 < count ? ToEntry(kept[3], nowMs) : default;
+        return new DebuffStripResult(e0, e1, e2, e3, count, overflow);
+    }
+
+    // In-place insertion sort by CreateTimeMs: stable (only shifts on strictly-greater, so equal-time
+    // entries keep input order) and allocation-free — List.Sort is unstable, LINQ OrderBy allocates.
+    // Fine for the tiny per-member kept list on this ~200/sec hot path (raid-20).
+    private static void StableSortByCreateTime(List<ActiveBuff> kept)
+    {
+        for (int i = 1; i < kept.Count; i++)
+        {
+            var cur = kept[i];
+            int j = i - 1;
+            while (j >= 0 && kept[j].CreateTimeMs > cur.CreateTimeMs)
+            {
+                kept[j + 1] = kept[j];
+                j--;
+            }
+            kept[j + 1] = cur;
+        }
     }
 
     private static DebuffEntry ToEntry(in ActiveBuff b, long nowMs)

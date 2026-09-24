@@ -94,7 +94,7 @@ public sealed class MeterElementToggles
             ImagineCooldown: Imagine && ImagineCooldown,
             LeaderFlag:      LeaderFlag,
             VoiceIcon:       VoiceIcon,
-            Debuffs:         Debuffs);
+            Debuffs:         Debuffs && !collapse);
     }
 
     /// <summary>
