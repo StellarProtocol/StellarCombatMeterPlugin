@@ -549,29 +549,28 @@ public sealed partial class Plugin : IStellarPlugin
     // Steady HP-bar colour — independent of the fraction. The spine shows HP by length, not by hue.
     private ColorRgba HpColor() => _hpSlot.Value;
 
+    // Class line for a party member or self — the same PLAYABLE class ResolveProfessionId shows (never a
+    // Battle Imagine transform's "Lucy"/"Natsu"). Non-party, non-self rows keep an empty line.
     private string GetClassLine(EntityId id)
     {
         long charId = id.Value >> 16;
+        bool isSelf = id == _services.CombatSnapshot.LocalEntityId;
+        bool inRoster = false;
         foreach (var m in _services.PartyRoster.Members)
-        {
-            if (m.CharId != charId) continue;
-            if (m.Profession > 0)
-            {
-                var partyProf = _services.GameData.Combat.GetProfession(m.Profession);
-                if (partyProf is { Name: { Length: > 0 } pname }) return pname;
-                return $"Class {m.Profession}";
-            }
-            break;
-        }
+            if (m.CharId == charId) { inRoster = m.Profession > 0; break; }
 
-        if (id == _services.CombatSnapshot.LocalEntityId)
+        if (inRoster || isSelf)
         {
-            var profId = _services.PlayerState.Profession;
+            var profId = ResolveProfessionId(id);
             if (profId > 0)
             {
                 var prof = _services.GameData.Combat.GetProfession(profId);
                 if (prof is { Name: { Length: > 0 } name }) return name;
+                return $"Class {profId}";
             }
+        }
+        if (isSelf)
+        {
             var level = _services.PlayerState.Level;
             if (level > 0) return $"Lv {level}";
         }

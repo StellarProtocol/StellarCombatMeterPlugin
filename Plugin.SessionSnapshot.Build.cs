@@ -70,7 +70,8 @@ public sealed partial class Plugin
 
     private string ResolveSnapProfession(EntitySnapshot snap)
     {
-        var profId = (int)SnapAttr(snap, AttrProfessionId);
+        // Base class, never a Battle Imagine transform (attr 220 raw can read Lucy/Natsu at bank time).
+        var profId = PlayableClass.ResolveActorProfession(snap);
         if (profId <= 0) return "";
         var prof = _services.GameData.Combat.GetProfession(profId);
         return prof is { Name: { Length: > 0 } n } ? n : $"Class {profId}";
