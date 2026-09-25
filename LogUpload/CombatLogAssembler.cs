@@ -367,11 +367,10 @@ internal sealed partial class CombatLogAssembler
         for (var i = 0; i < snap.AttrIds.Length; i++)
             if (snap.AttrIds[i] == AttrLevel) { level = (int)snap.AttrValues[i]; break; }
 
-        // ProfessionId from attributes (AttrProfessionId = 220).
-        const int AttrProfessionId = 220;
-        var professionId = 0;
-        for (var i = 0; i < snap.AttrIds.Length; i++)
-            if (snap.AttrIds[i] == AttrProfessionId) { professionId = (int)snap.AttrValues[i]; break; }
+        // The BASE class, never a Battle Imagine transform (PlayableClass.ResolveActorProfession). Drives the
+        // reported ProfessionId AND the loadout/equipment lookups below; the raw attr 220 value still
+        // rides in Attributes and the class-span timeline is uploaded untouched.
+        var professionId = PlayableClass.ResolveActorProfession(snap);
 
         // Uid: the high 48 bits of EntityId.Value encode the CharId (per Plugin.cs GetClassLine).
         long? uid = entityId.IsPlayer ? (entityId.Value >> 16) : (long?)null;
