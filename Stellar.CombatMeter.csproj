@@ -118,7 +118,7 @@
          Display only — NO capture/archive/stage/run-identity/upload behaviour is touched. Requires the
          framework build that adds MeterRowData.Debuff0..3/DebuffOverflow/ShowDebuffs + DebuffSlot + the
          2×2 renderer (Abstractions >= 2.10.0; referenced here as 2.10.0-dev until the framework releases). -->
-    <Version>2.14.1</Version>
+    <Version>2.14.2</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-

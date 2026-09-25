@@ -13,27 +13,42 @@ public sealed partial class Plugin
     // combat event populates a card.
     private bool _iconsWarmed;
 
+    // Last PLAYABLE class shown per entity (EntityId.Value) — what a transformed row keeps showing while
+    // every live source reads the Battle Imagine transform. Display only; never feeds capture/upload.
+    private readonly System.Collections.Generic.Dictionary<long, int> _lastShownClass = new();
+
+    // The row's class for display (name, crest, role colour, Class bar colour) — always a PLAYABLE class,
+    // never a Battle Imagine transform (owner 2026-09-25: show the original class; PlayableClass).
     private int ResolveProfessionId(EntityId id)
     {
         long charId = id.Value >> 16;
         // 1. Real profession from the roster (SocialSync). A sparsely-synced party slot
-        //    (FastSync hp/position only, no SocialSync) carries Profession 0 — skip it.
+        //    (FastSync hp/position only, no SocialSync) carries Profession 0.
+        int roster = 0;
         foreach (var m in _services.PartyRoster.Members)
         {
-            if (m.CharId == charId && m.Profession > 0) return m.Profession;
+            if (m.CharId == charId) { roster = m.Profession; break; }
         }
-        // 2. Self: the live player-state profession.
-        if (id == _services.CombatSnapshot.LocalEntityId && _services.PlayerState.Profession > 0)
+        // 2. Self: the framework's live class (the container's curProfessionId — a transform does not
+        //    touch it), then attr 220 (which DOES flip to the transform id while transformed).
+        int live = 0, attr = 0;
+        if (id == _services.CombatSnapshot.LocalEntityId)
         {
-            return _services.PlayerState.Profession;
+            live = _services.Loadout.LiveState?.ProfessionId ?? 0;
+            attr = _services.PlayerState.Profession;
         }
+        _lastShownClass.TryGetValue(id.Value, out var sticky);
+        var prof = PlayableClass.ResolveDisplayProfession(0, roster, live, attr);
         // 3. Fallback — derive the parent profession from the CAST-INFERRED sub-profession (spec),
         //    the same source that resolves the row's spec name. A sub-profession id encodes its parent
         //    as <ProfessionId>_00_<SpecIndex> (ProfessionSpecs), i.e. parent = subId / 10000. Without
         //    this, a party member whose SocialSync profession never arrived (open-world / freshly-joined
         //    party) rendered the DPS-red default bar + a blank crest even though their spec — and thus
         //    their class — was already known from their casts (owner-reported red/iconless meter).
-        return RoleClassifier.ParentProfession(ResolveSpec(id));
+        //    Evaluated lazily — only when no direct source is playable.
+        if (prof == 0) prof = PlayableClass.ResolveDisplayProfession(sticky, RoleClassifier.ParentProfession(ResolveSpec(id)));
+        if (prof != 0 && prof != sticky) _lastShownClass[id.Value] = prof;
+        return prof;
     }
 
     // Update-tick hook. First warms the cache once the profession table is

@@ -68,4 +68,29 @@ public static class PlayableClass
             if (snap.AttrIds[i] == AttrProfessionId) { attr220 = (int)snap.AttrValues[i]; break; }
         return ResolveBaseProfession(attr220, snap.ClassSpanProf);
     }
+
+    /// <summary>
+    /// The class the LIVE meter shows for a row (name, crest, role colour, Class bar colour): the first
+    /// playable of <paramref name="candidates"/> (the caller orders them by trust — party roster, the
+    /// framework's live class, attr 220, the cast-inferred spec's parent); when none is playable (every
+    /// source reads the transform), the entity's last playable class seen (<paramref name="sticky"/>);
+    /// otherwise 0 = unknown. So a transformed player keeps their real class on screen instead of
+    /// flipping to "Lucy" / a DPS-red role for the transform's duration.
+    /// </summary>
+    public static int ResolveDisplayProfession(int sticky, params int[] candidates)
+    {
+        foreach (var c in candidates)
+            if (IsPlayable(c)) return c;
+        return IsPlayable(sticky) ? sticky : 0;
+    }
+
+    /// <summary>Drops non-playable ids (transforms) from an archived row's played-class list, keeping
+    /// play order — "Shield Knight · Natsu" reads "Shield Knight".</summary>
+    public static List<int> PlayableOnly(IReadOnlyList<int> professionIds)
+    {
+        var outList = new List<int>(professionIds.Count);
+        foreach (var p in professionIds)
+            if (IsPlayable(p)) outList.Add(p);
+        return outList;
+    }
 }

@@ -480,7 +480,8 @@ public sealed partial class Plugin
     {
         if (frozen != null)
         {
-            var profs = ClassesPlayedInWindow(frozen, startMs, endMs);
+            // Battle Imagine transforms are not classes (owner 2026-09-25) — "Shield Knight · Natsu" → "Shield Knight".
+            var profs = PlayableClass.PlayableOnly(ClassesPlayedInWindow(frozen, startMs, endMs));
             if (profs.Count > 0)
             {
                 var line = ProfessionDisplayName(profs[0]);

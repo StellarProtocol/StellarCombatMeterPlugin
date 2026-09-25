@@ -114,7 +114,7 @@ public sealed partial class Plugin
                 if (string.IsNullOrEmpty(a.Name)) a.Name = string.IsNullOrEmpty(kv.Value.Name) ? kv.Key.Value.ToString() : kv.Value.Name!;
                 if (kv.Value.FightPoint > a.Fp) a.Fp = kv.Value.FightPoint;
                 { var ibs = SnapAttr(kv.Value, AttrSeasonStrengthId); if (ibs > a.Ibs) a.Ibs = ibs; }   // IBS: MAX across entries (attr 11440 froze 2204 in one entry, 2504 in another → take current/buffed)
-                if (a.FrozenProf == 0) { var fp = (int)SnapAttr(kv.Value, AttrProfessionId); if (fp > 0) a.FrozenProf = fp; }
+                if (a.FrozenProf == 0) { var fp = PlayableClass.ResolveActorProfession(kv.Value); if (fp > 0) a.FrozenProf = fp; }   // base class, never a Battle Imagine transform
                 if (a.Spec == 0 && kv.Value.SpecId > 0) a.Spec = (int)kv.Value.SpecId;   // frozen authoritative spec
                 if (e.Stats.TryGetValue(kv.Key, out var s))
                 {
