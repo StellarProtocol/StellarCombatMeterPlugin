@@ -119,7 +119,11 @@ public sealed partial class Plugin
     private void ApplyAttrRanges(EncounterHistoryEntry entry)
     {
         var self = _services.CombatSnapshot.LocalEntityId;
-        var prof = _services.PlayerState.Profession;
+        // The REAL class, never a Battle Imagine transform (owner 2026-09-25): attr 220 reads Lucy/Natsu
+        // while transformed, and a run banked then would ship only the transform's few seconds of stats
+        // and skip the real class's live gear overlay. Transform samples stay in their own pile (capture
+        // untouched) — only the pile that ships changes. Same resolution the meter row shows.
+        var prof = ResolveProfessionId(self);
         if (prof != 0 && _attrRange.Has(prof) && entry.Entities.TryGetValue(self, out var snap))
             WriteRangeToSnapshot(snap, _attrRange.Base(prof), _attrRange.Peaks(prof));
 
@@ -134,7 +138,7 @@ public sealed partial class Plugin
         // frozen exactly as captured. Loadouts is in capture order (LoadoutCapture.Snapshot), so a
         // single forward scan finds it.
         var lastActiveIndex = -1;
-        var activeProfession = _services.PlayerState.Profession;
+        var activeProfession = prof;
         if (activeProfession != 0)
             for (var i = 0; i < entry.Loadouts.Count; i++)
                 if (entry.Loadouts[i].ProfessionId == activeProfession) lastActiveIndex = i;
