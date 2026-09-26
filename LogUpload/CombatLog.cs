@@ -177,7 +177,12 @@ internal sealed record Actor(
     IReadOnlyList<long[]>? ClassSpans = null,
     // Deep-Slumber Psychoscope snapshot at archive (Phase 3, 2026-08-19) — SELF ONLY, read live at
     // archive time. Null for every non-local actor and when the container had not resolved.
-    DeepSlumberEntry? DeepSlumber = null);
+    DeepSlumberEntry? DeepSlumber = null,
+    // Talent-derived spec timeline (spec upload design 2026-09-26): [specId, startMs, endMs] triples in the SAME time
+    // base as ClassSpans, for EVERY player actor whose spec the framework probed from its talent root buff
+    // (ICombatSpec.TryGetTalentSpec / CombatEvent.SpecChanged.FromTalent). A cast-inferred spec never appears here.
+    // Null/omitted when the actor had no talent-derived spec this run.
+    IReadOnlyList<long[]>? SpecSpans = null);
 
 /// <summary>Self-only per-item instance detail, mirroring the game's Item Detail popup.
 /// Rolls are RESOLVED at capture (attr id + display value + 0-100 percentile) so consumers

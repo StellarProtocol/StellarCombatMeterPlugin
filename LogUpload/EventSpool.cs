@@ -45,7 +45,8 @@ internal sealed class EventSpool
 
     /// <summary>Events whose CombatEvent case has no wire mapping since the last Rotate (forward-compat
     /// net). Read it BEFORE <see cref="Rotate"/> — rotating starts a fresh segment and zeroes the counter.
-    /// EntityAttributesChanged is handled before the converter and never counts here.</summary>
+    /// EntityAttributesChanged, SpecChanged and EntityBuffsSeeded are handled before the converter and never count
+    /// here.</summary>
     internal int SkippedUnknownEvents { get; private set; }
 
     internal int CastRows { get; private set; }
@@ -56,7 +57,9 @@ internal sealed class EventSpool
     /// or a LIVE <see cref="CombatEvent.BuffChanged"/> row — NEVER for a cast row (<see cref="CastRows"/>), a
     /// buff/sheet KEYFRAME row (<see cref="AddBuffKeyframe"/>/<see cref="AddSheetKeyframe"/>), or a plugin-DERIVED
     /// sheet row (<see cref="AddSheetRow"/> — D10's cooldown ratio): all of those are capture-channel rows that must
-    /// never force an archive/upload (final review C1).</summary>
+    /// never force an archive/upload (final review C1). Nor for an <c>EntityBuffsSeeded</c> snapshot, a
+    /// <c>SpecChanged</c>, or the expiry of a seed-only buff (spec upload design 2026-09-26 — 2.14.2 never saw those, so
+    /// counting them would change the retain-only decision).</summary>
     internal int GameEventRows { get; private set; }
 
     /// <summary>True until this segment has its keyframe. Plugin.SheetCapture's tick asks this once per
@@ -129,20 +132,45 @@ internal sealed class EventSpool
             return;
         }
 
+        // Framework ≥ 2.11.0 events (spec upload design 2026-09-26 item 3) — handled, never "unknown", and NEITHER
+        // writes a spool row nor touches GameEventRows, so the archive/upload decision is exactly 2.14.2's.
+        if (evt is CombatEvent.SpecChanged) return;          // feeds Plugin.SpecSpans (OnCombatEvent), not the spool
+        if (evt is CombatEvent.EntityBuffsSeeded seed) { _liveBuffs.Seed(IdString(seed.TargetId), seed.Buffs); return; }
+
         var wire = CombatLogEventConverter.Convert(evt, _owners);
         if (wire is null) { SkippedUnknownEvents++; return; }
-        if (evt is CombatEvent.BuffChanged b)
-        {
-            AddBuffKeyframe(b.TimestampMs, self);            // snapshot of what was live BEFORE this change (phase 2)
-            var live = new LiveBuff((BuffEvent)wire, b.FirerId, b.TargetId);
-            _liveBuffs.Apply(live);
-            RouteBuff(live, self);                           // ROUTE, never drop (spec § 6.8 owner resolution inside)
-            GameEventRows++;                                 // a REAL live buff change — archive-decision gate
-            return;
-        }
+        if (evt is CombatEvent.BuffChanged b) { AddBuffRow(b, (BuffEvent)wire, self); return; }
         _dmg.Add(wire);
         GameEventRows++;                                     // a REAL converted dmg/skill row — archive-decision gate
     }
+
+    /// <summary>One LIVE buff delta. The first delta of a SEEDED buff (item 4) is reshaped to what 2.10 emitted for the
+    /// same wire traffic — 2.10 had never held it, so its first delta was an Applied and its expiry was never
+    /// emitted; the row itself is still captured either way.</summary>
+    private void AddBuffRow(CombatEvent.BuffChanged b, BuffEvent row, EntityId self)
+    {
+        if (_liveBuffs.TakeSeeded(row.Tgt, row.Uuid))
+        {
+            if (b.Kind == BuffChangeKind.Removed) { AddSeededRemoval(row, b); return; }
+            if (b.Kind == BuffChangeKind.Refreshed) row = row with { Kind = "applied" };
+        }
+        AddBuffKeyframe(b.TimestampMs, self);            // snapshot of what was live BEFORE this change (phase 2)
+        var live = new LiveBuff(row, b.FirerId, b.TargetId);
+        _liveBuffs.Apply(live);
+        RouteBuff(live, self);                           // ROUTE, never drop (spec § 6.8 owner resolution inside)
+        GameEventRows++;                                 // a REAL live buff change — archive-decision gate
+    }
+
+    /// <summary>The expiry of a buff first known from a seed (item 4): 2.14.2 never saw this row, so it goes to the
+    /// DISK-ONLY buffx track (captured — doctrine — but never uploaded), is NOT a game event (never decides an archive)
+    /// and does not open the segment's keyframe. It still clears any live row the uuid held.</summary>
+    private void AddSeededRemoval(BuffEvent row, CombatEvent.BuffChanged b)
+    {
+        _liveBuffs.Apply(new LiveBuff(row, b.FirerId, b.TargetId));
+        _buffx.Add(row);
+    }
+
+    private static string IdString(EntityId id) => id.Value.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>Seal all four tracks into a segment and start a fresh one. Main thread; O(1) apart from the
     /// last batch hand-off (its serialize+gzip+write runs on the thread pool, awaited via the segment's

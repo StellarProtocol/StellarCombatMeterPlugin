@@ -27,8 +27,8 @@ public sealed partial class Plugin
 
     private void OnCombatEvent(CombatEvent evt)
     {
-        // SP1: capture every event into the log buffer (runs even when the meter display is paused).
-        MaybeCaptureForLog(evt);
+        MaybeCaptureForLog(evt);   // SP1: every event into the log spool (runs even when the meter is paused)
+        if (evt is CombatEvent.SpecChanged sc) { ObserveSpecChanged(sc); return; }   // talent spec timeline — tracking, through pause
 
         // PAUSE = numbers stop, TRACKING CONTINUES (owner ruling 2026-08-14). The always-on capture
         // channels live past the DamageDealt narrowing below, in ObserveAlwaysOnCapture

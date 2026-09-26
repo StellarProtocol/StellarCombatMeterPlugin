@@ -52,6 +52,14 @@ internal sealed class EntitySnapshot
     // carries BOTH specs' signature skills and cannot. 0 = no spec observed this run / old entry.
     public long SpecId;
 
+    // Talent-derived spec timeline (spec upload design 2026-09-26), baked in at archive from SpecSpanTracker exactly
+    // like ClassSpan* above: SpecSpanId[i]/SpecSpanStart[i]/SpecSpanEnd[i] = one [specId, startMs, endMs] span, same
+    // time base as ClassSpan*. Players only; empty when no talent spec was probed. Not persisted (same-session only,
+    // matching ClassSpan*) — so an old build reading a new history file is unaffected.
+    public long[] SpecSpanId    = System.Array.Empty<long>();
+    public long[] SpecSpanStart = System.Array.Empty<long>();
+    public long[] SpecSpanEnd   = System.Array.Empty<long>();
+
     public int[] GearSlots   = System.Array.Empty<int>();
     public int[] GearItemIds = System.Array.Empty<int>();
 

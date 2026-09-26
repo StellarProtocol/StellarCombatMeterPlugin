@@ -118,7 +118,25 @@
          Display only — NO capture/archive/stage/run-identity/upload behaviour is touched. Requires the
          framework build that adds MeterRowData.Debuff0..3/DebuffOverflow/ShowDebuffs + DebuffSlot + the
          2×2 renderer (Abstractions >= 2.10.0; referenced here as 2.10.0-dev until the framework releases). -->
-    <Version>2.14.2</Version>
+    <!-- 2.15.0: TALENT-SPEC UPLOAD (owner-approved design docs/superpowers/specs/2026-09-26-combatmeter-spec-upload-design.md,
+         items 1-5; evidence docs/recon/spec-from-public-wire-data.md). REQUIRES FRAMEWORK >= 2.11.0 (Abstractions
+         2.11.0: ICombatSpec.TryGetTalentSpec, CombatEvent.SpecChanged, CombatEvent.EntityBuffsSeeded) - on an older
+         framework those types do not exist and the plugin cannot load, so the registry manifest's
+         minModSystemVersion MUST be 2.11.0 at release. Player-language changelog bullet:
+           * "Your party's specs (e.g. Smite vs Lifebind) are now sent with your logs when the game tells us for sure,
+              and a player who switched class no longer keeps showing their old spec."
+         (1) per player actor "specSpans": [[specId, startMs, endMs], ...] - talent-derived periods only
+             (SpecSpanTracker, event-driven off SpecChanged, seeded at run start from TryGetTalentSpec, frozen per
+             archive like classSpans, same ServerNowMs time base, omitted when empty);
+         (2) the sticky last-known spec is served only while spec/10000 is the entity's current playable class;
+         (3) SpecChanged / EntityBuffsSeeded are handled (never "unrecognized"), write no spool row and never touch
+             GameEventRows - the "No events captured" retain-only decision is exactly 2.14.2's;
+         (4) uploaded buff rows are unchanged vs 2.14.2: a seeded buff's first Refreshed uploads as `applied`, its
+             expiry (a Removed 2.10 never emitted) goes to the disk-only buffx track;
+         (5) LiveBuffSet: per-target seed replacement, O(1) insertion-ordered eviction, bounded seed marks.
+         No archive-engine / Clear() / OnSceneChanged / run-identity / verdict / Rotate-Discard change.
+         Rollback-safe: specSpans are not persisted to history (same-session only, like classSpans). -->
+    <Version>2.15.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
@@ -153,8 +171,15 @@
          .localfeed/Stellar.Abstractions.2.10.0-dev.nupkg (same local-feed + nuget.org restore-source
          situation as the 2.8.0-dev bump above). MUST be flipped from "2.10.0-dev" to plain "2.10.0" once the
          framework 2.10.0 release publishes; the registry manifest's minimum framework must be raised to
-         2.10.0 at that same release. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.9.0" />
+         2.10.0 at that same release.
+         2.11.0-dev bump (2.15.0 talent-spec upload): requires framework 2.11.0's ICombatSpec.TryGetTalentSpec +
+         CombatEvent.SpecChanged + CombatEvent.EntityBuffsSeeded (framework main 27f4545, StellarResonanceModSystem
+         #98), NOT yet published - packed from that commit into the devkit's .localfeed as
+         Stellar.Abstractions.2.11.0-dev.nupkg (same local-feed + nuget.org restore-source situation as above; plugin
+         CI stays red until the release). MUST be flipped to plain "2.11.0" once framework 2.11.0 publishes (purge
+         ~/.nuget/packages/stellar.abstractions/2.11.0-dev AND /2.11.0 first); the registry manifest's minimum
+         framework becomes 2.11.0 at that same release. -->
+    <PackageReference Include="Stellar.Abstractions" Version="2.11.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
