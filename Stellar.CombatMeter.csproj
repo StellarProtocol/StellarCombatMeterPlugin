@@ -179,7 +179,7 @@
          CI stays red until the release). MUST be flipped to plain "2.11.0" once framework 2.11.0 publishes (purge
          ~/.nuget/packages/stellar.abstractions/2.11.0-dev AND /2.11.0 first); the registry manifest's minimum
          framework becomes 2.11.0 at that same release. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.11.0-dev" />
+    <PackageReference Include="Stellar.Abstractions" Version="2.11.0" />
     <PackageReference Include="Stellar.PluginContracts" Version="2.0.0" />
     <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.0.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
