@@ -26,7 +26,7 @@ namespace Stellar.CombatMeter.LogUpload;
 internal sealed class LiveBuffSet
 {
     internal const int MaxEntries = 4096;
-    internal const int MaxSeedTargets = 1024;
+    internal const int MaxSeedTargets = 256;   // worst case ~256 × ~150 uuids — well under 1 MB of marks
 
     private readonly Dictionary<(string tgt, int uuid), LinkedListNode<LiveBuff>> _live = new();
     private readonly LinkedList<LiveBuff> _order = new();                    // oldest apply/refresh first
@@ -60,7 +60,7 @@ internal sealed class LiveBuffSet
     internal void Seed(string tgt, IReadOnlyList<ActiveBuff> buffs)
     {
         if (buffs.Count == 0) { DropTarget(tgt); return; }
-        var listed = new HashSet<int>();
+        var listed = SeedMarksFor(tgt, buffs.Count);
         for (var i = 0; i < buffs.Count; i++) listed.Add(buffs[i].BuffUuid);
         if (_liveByTarget.TryGetValue(tgt, out var held))
         {
@@ -68,9 +68,23 @@ internal sealed class LiveBuffSet
             foreach (var uuid in held) if (!listed.Contains(uuid)) (gone ??= new List<int>()).Add(uuid);
             if (gone is not null) foreach (var uuid in gone) RemoveLive((tgt, uuid));
         }
-        RemoveSeeded(tgt);
-        if (_seeded.Count >= MaxSeedTargets) RemoveSeeded(_seedOrder.First!.Value.tgt);   // O(1): the oldest seed
-        _seeded[tgt] = _seedOrder.AddLast((tgt, listed));
+    }
+
+    // The (emptied) mark set for a seed of tgt, now the YOUNGEST seed. A re-seed of a held target reuses its set and
+    // node (no allocation, perf review of e86a595); a new target takes the oldest seed's slot when the cap is hit (O(1)).
+    private HashSet<int> SeedMarksFor(string tgt, int capacity)
+    {
+        if (_seeded.TryGetValue(tgt, out var node))
+        {
+            node.Value.uuids.Clear();
+            _seedOrder.Remove(node);
+            _seedOrder.AddLast(node);
+            return node.Value.uuids;
+        }
+        if (_seeded.Count >= MaxSeedTargets) RemoveSeeded(_seedOrder.First!.Value.tgt);
+        var marks = new HashSet<int>(capacity);
+        _seeded[tgt] = _seedOrder.AddLast((tgt, marks));
+        return marks;
     }
 
     /// <summary>True exactly once per seeded (target, uuid): on its first live delta. Consumes the mark.</summary>

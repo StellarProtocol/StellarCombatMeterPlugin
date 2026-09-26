@@ -56,4 +56,26 @@ public class StickySpecClassCheckTests
         var single = new EntitySnapshot { AttrIds = new[] { 220 }, AttrValues = new long[] { 11 } };
         Assert.Equal(11, Plugin.FrozenCurrentClass(single));
     }
+
+    // QA fix round finding 2: a party member whose snapshot carries NO playable class (never an attr 220, and a class
+    // timeline holding only a Battle Imagine transform) must not lose a valid cached spec at archive — the archive
+    // falls back to the LIVE class resolution (roster / attr / last shown class), resolved lazily.
+    [Fact]
+    public void Archive_class_falls_back_to_live_resolution_when_the_snapshot_has_no_playable_class()
+    {
+        var transformedOnly = new EntitySnapshot
+        {
+            ClassSpanProf = new long[] { 14 }, ClassSpanStart = new long[] { 0 }, ClassSpanEnd = new long[] { 10 },
+        };
+        Assert.Equal(0, Plugin.FrozenCurrentClass(transformedOnly));
+        var liveCalls = 0;
+        var cls = Plugin.ArchiveClass(Plugin.FrozenCurrentClass(transformedOnly), () => { liveCalls++; return 11; });
+        Assert.Equal(11, cls);
+        Assert.Equal(1, liveCalls);
+        Assert.Equal(Falconry, Plugin.ResolveStickySpec(0, Falconry, cls));
+
+        // A frozen playable class wins and the live read is skipped entirely.
+        Assert.Equal(13, Plugin.ArchiveClass(13, () => { liveCalls++; return 11; }));
+        Assert.Equal(1, liveCalls);
+    }
 }

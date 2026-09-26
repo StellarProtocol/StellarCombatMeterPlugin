@@ -141,6 +141,26 @@ public sealed class LiveBuffSetSeedTests
         Assert.Single(set.Keyframe(5_000));
     }
 
+    // Perf fix round 6: re-seeding a held target reuses its mark set AND makes it the youngest seed — so a player
+    // re-seeded recently is not the one dropped when the cap is hit.
+    [Fact]
+    public void A_re_seed_makes_the_target_the_youngest_seed()
+    {
+        var set = new LiveBuffSet();
+        for (var i = 0; i < LiveBuffSet.MaxSeedTargets; i++) set.Seed("t" + i, new[] { Seeded(1) });
+        set.Seed("t0", new[] { Seeded(2) });                   // t0 re-seeded → youngest
+        set.Seed("new", new[] { Seeded(3) });                  // full → evicts the oldest: t1, not t0
+        Assert.True(set.TakeSeeded("t0", 2));
+        Assert.False(set.TakeSeeded("t0", 1));                 // the re-seed replaced its marks
+        Assert.False(set.TakeSeeded("t1", 1));
+        Assert.True(set.TakeSeeded("new", 3));
+    }
+
+    // Perf fix round 7: the cap is 256 targets (worst case well under 1 MB of marks).
+    [Fact]
+    public void The_seed_target_cap_is_256()
+        => Assert.Equal(256, LiveBuffSet.MaxSeedTargets);
+
     // Pending marks are bounded too (a town crowd seeds every player in view): past MaxSeedTargets the oldest SEEDED
     // target's marks are dropped.
     [Fact]

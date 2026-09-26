@@ -126,22 +126,27 @@ public sealed partial class Plugin
     // outlive encounter resets and scene changes (that's the whole point).
     // CLASS-CHECKED (spec upload design 2026-09-26 item 2): a cached spec is served only while it belongs to the
     // entity's current playable class — see Plugin.ResolveStickySpec (Plugin.SpecSpans.cs). `knownClass` lets the
-    // archive freeze pass the snapshot's own frozen class (the live entity data may already be torn down); -1 =
-    // resolve it live, and only when the cache is actually consulted.
+    // archive freeze pass the snapshot's own frozen class (the live entity data may already be torn down); 0 = not
+    // known → resolve it live (Plugin.ArchiveClass), and only when the cache is actually consulted.
     private readonly Dictionary<long, int> _lastKnownSpec = new();
 
-    private int StickySpec(EntityId id, int liveSpec, int knownClass = -1)
+    private int StickySpec(EntityId id, int liveSpec, int knownClass = 0)
     {
         long charId = id.Value >> 16;
         if (liveSpec > 0) { _lastKnownSpec[charId] = liveSpec; return liveSpec; }
         if (!_lastKnownSpec.TryGetValue(charId, out var cached)) return 0;
-        return ResolveStickySpec(0, cached, knownClass >= 0 ? knownClass : CurrentPlayableClass(id));
+        return ResolveStickySpec(0, cached, ArchiveClass(knownClass, () => CurrentPlayableClass(id)));
     }
 
     // Sample-only: refresh the sticky spec cache from the live cast-inferred spec. Called each run tick so
     // the cache is populated even when the meter's Spec column is collapsed/off (which otherwise never
     // calls SpecLine → ResolveSpec → StickySpec), so the archive freeze (ApplySpecs) has the real spec.
-    private void SampleSpec(EntityId id) => StickySpec(id, _services.CombatSpec.GetSubProfession(id));
+    // Writes the cache directly — the class-checked read path (StickySpec's fallback) is never needed here.
+    private void SampleSpec(EntityId id)
+    {
+        var live = _services.CombatSpec.GetSubProfession(id);
+        if (live > 0) _lastKnownSpec[id.Value >> 16] = live;
+    }
 
     // Session-persistent name cache, keyed by stable char id. StickyName (the per-encounter snapshot store)
     // clears on scene change, so a party member's name reverts to "Player#<uid>" after you change areas. This

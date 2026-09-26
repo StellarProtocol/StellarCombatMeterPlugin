@@ -17,7 +17,20 @@ namespace Stellar.CombatMeter;
 /// </summary>
 public sealed partial class Plugin
 {
-    private readonly SpecSpanTracker _specSpans = new();
+    // Lazy so the tracker can be handed an instance pin predicate (field initialisers cannot reference instance members).
+    private SpecSpanTracker? _specSpansTracker;
+    private SpecSpanTracker _specSpans => _specSpansTracker ??= new SpecSpanTracker(IsSpecSpanPinned);
+
+    /// <summary>Entities the tracker's size bound must never evict (review of e86a595, finding 1): self, the current
+    /// party roster and the current combatants. Consulted only on the (rare) eviction path.</summary>
+    private bool IsSpecSpanPinned(long entityValue)
+    {
+        var id = new EntityId(entityValue);
+        if (id == _services.CombatSnapshot.LocalEntityId || _stats.ContainsKey(id)) return true;
+        foreach (var m in _services.PartyRoster.Members)
+            if (m.CharId != 0 && m.EntityId.Value == entityValue) return true;
+        return false;
+    }
 
     /// <summary>OnCombatEvent hook (ungated by pause). Players only.</summary>
     private void ObserveSpecChanged(CombatEvent.SpecChanged sc)
@@ -88,6 +101,13 @@ public sealed partial class Plugin
     /// <summary>Pure: the class a FROZEN snapshot's actor was playing at the archive instant, for the archive-time
     /// sticky-spec check — the LAST playable class of its baked class timeline (the snapshot's attr 220 is captured
     /// once, when the snapshot first populates, and predates a later swap), else the reported base class.</summary>
+    /// <summary>Pure: the class the archive-time sticky-spec check uses — the snapshot's frozen class when it has one,
+    /// otherwise the LIVE resolution (roster / self live class / attr 220 / last shown class), evaluated lazily. A party
+    /// member whose snapshot never carried a playable class (no attr 220, only a transform in its class timeline) would
+    /// otherwise lose a valid cached spec (review of e86a595, finding 2).</summary>
+    internal static int ArchiveClass(int frozenClass, System.Func<int> liveClass)
+        => frozenClass > 0 ? frozenClass : liveClass();
+
     internal static int FrozenCurrentClass(EntitySnapshot snap)
     {
         for (var i = snap.ClassSpanProf.Length - 1; i >= 0; i--)
@@ -95,19 +115,20 @@ public sealed partial class Plugin
         return PlayableClass.ResolveActorProfession(snap);
     }
 
-    /// <summary>The entity's current PLAYABLE class for the sticky-spec check: party roster, then self's live class
-    /// (the container's curProfessionId — a transform does not touch it), then attr 220 (cheap single-key read),
-    /// then the last playable class the row showed (a transformed player keeps their real class). Never consults the
-    /// spec itself (no recursion through <c>ResolveProfessionId</c>'s spec-parent fallback).</summary>
+    /// <summary>The entity's current PLAYABLE class for the sticky-spec check, resolved in trust order with EARLY RETURNS
+    /// so later reads are skipped once an earlier source answers (perf review of e86a595): party roster → self's live
+    /// class (the container's curProfessionId — a transform does not touch it) → attr 220 (cheap single-key read) → the
+    /// last playable class the row showed (a transformed player keeps their real class). No per-call allocation. Never
+    /// consults the spec itself (no recursion through <c>ResolveProfessionId</c>'s spec-parent fallback).</summary>
     private int CurrentPlayableClass(EntityId id)
     {
         long charId = id.Value >> 16;
-        int roster = 0;
         foreach (var m in _services.PartyRoster.Members)
-            if (m.CharId == charId) { roster = m.Profession; break; }
-        int live = id == _services.CombatSnapshot.LocalEntityId ? _services.Loadout.LiveState?.ProfessionId ?? 0 : 0;
-        var attr = (int)_services.EntityDetail.GetAttribute(id, AttrProfessionIdForTimeline);
-        _lastShownClass.TryGetValue(id.Value, out var sticky);
-        return PlayableClass.ResolveDisplayProfession(sticky, roster, live, attr);
+            if (m.CharId == charId) { if (PlayableClass.IsPlayable(m.Profession)) return m.Profession; break; }
+        if (id == _services.CombatSnapshot.LocalEntityId
+            && _services.Loadout.LiveState?.ProfessionId is int live && PlayableClass.IsPlayable(live)) return live;
+        var attr = _services.EntityDetail.GetAttribute(id, AttrProfessionIdForTimeline);
+        if (PlayableClass.IsPlayable(attr)) return (int)attr;
+        return _lastShownClass.TryGetValue(id.Value, out var sticky) && PlayableClass.IsPlayable(sticky) ? sticky : 0;
     }
 }

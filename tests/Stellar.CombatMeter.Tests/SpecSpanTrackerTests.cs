@@ -157,6 +157,59 @@ public class SpecSpanTrackerTests
         Assert.Single(t.Spans(SpecSpanTracker.MaxEntities + 5, long.MaxValue));
     }
 
+    // QA fix round (review of e86a595, finding 1 [major]): the bound must never cost the people who matter. Self, the
+    // current party roster and the current combatants are PINNED (never evicted); a town crowd of strangers admitted
+    // after them can only evict other strangers.
+    [Fact]
+    public void Over_the_bound_self_and_party_spans_survive_a_crowd_of_strangers()
+    {
+        const long self = 0x0001_0000_0280, mate = 0x0002_0000_0280;
+        var t = new SpecSpanTracker(id => id == self || id == mate);
+        t.OnSpecChanged(self, Smite, fromTalent: true, 1);
+        t.OnSpecChanged(mate, Falconry, fromTalent: true, 2);
+        for (long i = 0; i < SpecSpanTracker.MaxEntities + 50; i++) t.OnSpecChanged(1_000_000 + i, Concerto, fromTalent: true, 10 + i);
+
+        Assert.Equal(new[] { new long[] { Smite, 1, 100_000 } }, t.Spans(self, 100_000));
+        Assert.Equal(new[] { new long[] { Falconry, 2, 100_000 } }, t.Spans(mate, 100_000));
+        Assert.Equal(SpecSpanTracker.MaxEntities, t.Entities().Count);
+    }
+
+    // Among the unpinned, the victim is the least-recently-CHANGED entity (not the first-seen): a stranger whose spec
+    // changed recently outlives one that has been static since it was first seen.
+    [Fact]
+    public void Eviction_takes_the_least_recently_changed_unpinned_entity()
+    {
+        var t = new SpecSpanTracker();
+        for (long i = 1; i <= SpecSpanTracker.MaxEntities; i++) t.OnSpecChanged(i, Smite, fromTalent: true, i);
+        t.OnSpecChanged(1, Lifebind, fromTalent: true, 10_000);        // entity 1 changes → youngest
+        t.OnSpecChanged(99_999, Smite, fromTalent: true, 10_001);      // full → evicts entity 2, not 1
+        Assert.Equal(2, t.Spans(1, 20_000).Count);
+        Assert.Empty(t.Spans(2, 20_000));
+    }
+
+    // QA finding 4 [nit]: two change points in the same ms (a whole-packet flip reported twice) yield no zero-length span.
+    [Fact]
+    public void Zero_length_spans_are_not_emitted()
+    {
+        var t = new SpecSpanTracker();
+        t.OnSpecChanged(Miyuki, Smite, fromTalent: true, 5_000);
+        t.OnSpecChanged(Miyuki, Lifebind, fromTalent: true, 5_000);
+        Assert.Equal(new[] { new long[] { Lifebind, 5_000, 9_000 } }, t.Spans(Miyuki, 9_000));
+    }
+
+    // Perf finding 10: change points per entity are capped (oldest dropped) so a pathological flip-flopper cannot grow
+    // without bound within one run.
+    [Fact]
+    public void Change_points_per_entity_are_capped_dropping_the_oldest()
+    {
+        var t = new SpecSpanTracker();
+        for (var i = 0; i < SpecSpanTracker.MaxPointsPerEntity + 10; i++)
+            t.OnSpecChanged(Miyuki, i % 2 == 0 ? Smite : Lifebind, fromTalent: true, 1_000 + i);
+        var spans = t.Spans(Miyuki, 1_000_000);
+        Assert.Equal(SpecSpanTracker.MaxPointsPerEntity, spans.Count);
+        Assert.Equal(1_010, spans[0][1]);                              // the 10 oldest points are gone
+    }
+
     [Fact]
     public void WriteSpecSpansToSnapshot_fills_parallel_arrays()
     {

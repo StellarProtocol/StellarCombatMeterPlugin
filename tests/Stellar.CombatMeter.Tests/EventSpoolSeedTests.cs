@@ -124,6 +124,26 @@ public sealed class EventSpoolSeedTests
         Assert.Contains("\"kind\":\"refreshed\"", now.BuffJson);
     }
 
+    // QA fix round finding 3: the SAME entity seeded twice with no disappear in between (e.g. the local player's EnterScene
+    // entity, or a server re-sending an appear for someone already in view). CURRENT BEHAVIOUR, pinned deliberately:
+    // every seed is a complete snapshot and re-marks each listed uuid seed-pending, so the first live delta after the
+    // SECOND seed is again uploaded as `applied`. For a real re-appear / EnterScene this matches 2.10 (its buff cache
+    // had been dropped, so it also said Applied); for a bare re-send without a disappear 2.10 would have said
+    // `refreshed`, so it yields one extra `applied` row for a buff the worker already holds — a harmless restatement
+    // (same uuid, fresh duration), never a lost row, and never a game-event count change (the delta counts either way).
+    [Fact]
+    public async Task A_second_seed_without_a_disappear_re_marks_the_uuid_and_the_next_delta_uploads_as_applied()
+    {
+        var run = await Feed(Seed(Self, Held(7)),
+                             Buff(1000, BuffChangeKind.Refreshed, 7, Self),
+                             Seed(Self, Held(7)),
+                             Buff(2000, BuffChangeKind.Refreshed, 7, Self));
+        var kinds = System.Text.RegularExpressions.Regex.Matches(run.BuffJson, "\"kind\":\"(\\w+)\"")
+                    .Select(m => m.Groups[1].Value).ToArray();
+        Assert.Equal(new[] { "applied", "applied" }, kinds);
+        Assert.Equal(2, run.Seg.Counts.GameEventRows);
+    }
+
     // (e) Neither new event is an "unrecognized combat event" — the forward-compat counter behind the per-segment
     // "[CombatMeter.SP1] Skipped N unrecognized" warning stays at zero, and SpecChanged writes no row.
     [Fact]
