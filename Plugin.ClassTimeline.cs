@@ -173,13 +173,15 @@ public sealed partial class Plugin
     // Freezes the authoritative cast-inferred spec per entity into its snapshot (mirrors ApplyClassSpans).
     // Additive — touches NO verdict/run-id/latch/stage logic (archive-flow invariants preserved). The
     // run spec cache (SampleSpec, run tick) keeps this correct even on a scene-change archive where the
-    // live spec service is already torn down.
+    // live spec service is already torn down. The sticky fallback is class-checked against the snapshot's own frozen
+    // class (spec upload design 2026-09-26 item 2), and the talent spec timeline is baked alongside (item 1).
     private void ApplySpecs(EncounterHistoryEntry entry)
     {
         foreach (var (id, snap) in entry.Entities)
         {
-            var sub = ResolveSpec(id);
+            var sub = StickySpec(id, _services.CombatSpec.GetSubProfession(id), FrozenCurrentClass(snap));
             if (sub > 0) snap.SpecId = sub;
         }
+        ApplySpecSpans(entry);
     }
 }

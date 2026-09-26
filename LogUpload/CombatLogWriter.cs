@@ -230,6 +230,7 @@ internal static partial class CombatLogWriter   // Spec B bucket half: CombatLog
             // Per-entity class detection (2026-08-03): self AND party — unlike modules/loadouts/
             // talents below, NOT gated to isLocal (see Actor.ClassSpans doc).
             if (a.ClassSpans is { Count: > 0 } cs) { w.Name("classSpans"); WriteLongTriples(w, cs); }
+            if (a.SpecSpans is { Count: > 0 } ss) { w.Name("specSpans"); WriteLongTriples(w, ss); }   // talent-derived only; omitted when empty (2026-09-26)
             w.Name("gear"); WriteIntArrays(w, a.Gear);
             w.Name("skills"); WriteIntArrays(w, a.Skills);
             w.Name("fashion"); WriteFashion(w, a.Fashion);

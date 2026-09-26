@@ -299,28 +299,6 @@ internal sealed partial class CombatLogAssembler
         return actors;
     }
 
-    /// <summary>Snapshot sparse peak arrays → [attrId, peakValue][] for upload; null when empty.</summary>
-    internal static IReadOnlyList<long[]>? BuildActorAttrPeaks(EntitySnapshot snap)
-    {
-        if (snap.AttrPeakIds.Length == 0) return null;
-        var peaks = new long[snap.AttrPeakIds.Length][];
-        for (var i = 0; i < snap.AttrPeakIds.Length; i++)
-            peaks[i] = new long[] { snap.AttrPeakIds[i], snap.AttrPeakValues[i] };
-        return peaks;
-    }
-
-    /// <summary>Snapshot's parallel ClassSpan* arrays (baked in by <c>Plugin.ApplyClassSpans</c> at
-    /// archive) → [professionId,startMs,endMs][] for upload; null when empty (single-class actor — no
-    /// timeline needed). Populated for EVERY player actor, self AND party alike.</summary>
-    internal static IReadOnlyList<long[]>? BuildActorClassSpans(EntitySnapshot snap)
-    {
-        if (snap.ClassSpanProf.Length == 0) return null;
-        var spans = new long[snap.ClassSpanProf.Length][];
-        for (var i = 0; i < snap.ClassSpanProf.Length; i++)
-            spans[i] = new long[] { snap.ClassSpanProf[i], snap.ClassSpanStart[i], snap.ClassSpanEnd[i] };
-        return spans;
-    }
-
     private Actor SnapToActor(EntityId entityId, EntitySnapshot snap, long localEntityIdValue,
         IReadOnlyList<CapturedLoadout> runLoadouts, DeepSlumberState? deepSlumber)
     {
@@ -403,7 +381,8 @@ internal sealed partial class CombatLogAssembler
             TalentNodes:  talentNodes,
             AttrPeaks:    BuildActorAttrPeaks(snap),
             ClassSpans:   BuildActorClassSpans(snap),
-            DeepSlumber:  slumber);
+            DeepSlumber:  slumber,
+            SpecSpans:    BuildActorSpecSpans(snap));
     }
 
     /// <summary>
