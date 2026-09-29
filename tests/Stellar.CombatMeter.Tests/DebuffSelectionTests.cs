@@ -105,13 +105,13 @@ public class DebuffSelectionTests
     [Fact]
     public void Load_from_an_empty_config_section_applies_the_supplied_defaults()
     {
-        // Absent keys → the caller-supplied new-install defaults. The debuff tab pre-checks the 3 imagine lockouts.
+        // Absent keys → the caller-supplied new-install defaults. The debuff tab pre-checks the imagine lockouts.
         var loaded = DebuffSelection.Load(
-            new FakeConfigSection(), "status.debuff", DebuffSelection.DefaultChecked, DebuffTrackMode.ShowOnlySelected, false);
+            new FakeConfigSection(), "status.debuff", DefaultTrackedEffects.Debuffs, DebuffTrackMode.ShowOnlySelected, false);
         Assert.Equal(DebuffTrackMode.ShowOnlySelected, loaded.Mode);
         Assert.False(loaded.ShowHidden);
-        Assert.Equal(DebuffSelection.DefaultChecked.Length, loaded.Selected.Count);
-        foreach (var id in DebuffSelection.DefaultChecked) Assert.True(loaded.IsSelected(id));
+        Assert.Equal(DefaultTrackedEffects.Debuffs.Length, loaded.Selected.Count);
+        foreach (var id in DefaultTrackedEffects.Debuffs) Assert.True(loaded.IsSelected(id));
 
         // The buff tab defaults empty.
         var buffs = DebuffSelection.Load(

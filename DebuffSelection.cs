@@ -23,19 +23,13 @@ public sealed class DebuffSelection
 {
     private readonly HashSet<int> _selected = new();
 
-    /// <summary>Out-of-the-box checked set for a NEW install (owner 2026-09-24): the three imagine-lockout
-    /// debuffs whose cells show the source Battle-Imagine card — Mechanical Failure, Element Stasis, Time Stasis.
-    /// Applied by <see cref="Load"/> (not the bare model) together with <see cref="DebuffTrackMode.ShowOnlySelected"/>
-    /// so a fresh install shows exactly these and none of the ~8000 internal buff/debuff markers.</summary>
-    public static readonly int[] DefaultChecked = { 2110049, 2110050, 2110056 };
-
     /// <summary>How <see cref="_selected"/> is interpreted. A bare model defaults to
     /// <see cref="DebuffTrackMode.ShowAllExceptSelected"/>; <see cref="Load"/> supplies the product default
     /// (<see cref="DebuffTrackMode.ShowOnlySelected"/>) for a fresh install.</summary>
     public DebuffTrackMode Mode { get; set; } = DebuffTrackMode.ShowAllExceptSelected;
 
     /// <summary>When true, effects with no display name (icon-only rows) are also eligible. Bare-model default
-    /// false; <see cref="Load"/> supplies the product default (true).</summary>
+    /// false; <see cref="Load"/> supplies the product default (<see cref="DefaultTrackedEffects.ShowHidden"/>).</summary>
     public bool ShowHidden { get; set; }
 
     /// <summary>The checked debuff base ids. Read-only view over the persisted set.</summary>

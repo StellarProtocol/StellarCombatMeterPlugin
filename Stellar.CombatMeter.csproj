@@ -136,7 +136,18 @@
          (5) LiveBuffSet: per-target seed replacement, O(1) insertion-ordered eviction, bounded seed marks.
          No archive-engine / Clear() / OnSceneChanged / run-identity / verdict / Rotate-Discard change.
          Rollback-safe: specSpans are not persisted to history (same-session only, like classSpans). -->
-    <Version>2.15.0</Version>
+    <!-- 2.16.0: FIELD FIGHTS NO LONGER BORROW A DUNGEON'S IDENTITY + DEFAULT BUFFS & DEBUFFS LISTS (owner-tested on
+         MAIN 2026-09-29 as 2.15.0+cb2ef92; owner: "release both combatmeter+cooldownbar").
+         (1) 9ac79cc: a FIELD archive (no run id latched AND SceneTable SceneType != 2) stamps LevelUuid 0, no
+             difficulty/start/defeated, and a verdict only from a settlement fresh to that fight - it can no longer
+             upload as a fake clear under the next dungeon's run id (Plugin.FieldArchive.cs ResolveArchiveStamp).
+             Every other archive is stamped exactly as before (5000-case equivalence test). Field fights go back to
+             the designed "Field fight (no run id) - not uploaded" path.
+         (2) cb2ef92: new-install defaults for Buffs & Debuffs (DefaultTrackedEffects.cs) - Debuffs = the 4 imagine
+             lockouts, Buffs = every Potion + Cuisine buff, both "show only checked". Read-only defaults: a saved
+             selection always wins; a tab the user never saved picks up the new defaults.
+         Requires no framework change and no minModSystemVersion bump (stays 2.11.0). -->
+    <Version>2.16.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
