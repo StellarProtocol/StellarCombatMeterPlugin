@@ -38,7 +38,7 @@ public sealed partial class Plugin
 
     // The active tab's selection + its persistence prefix (each tab owns an independent mode/checked/show-hidden).
     private DebuffSelection ActiveSel => _dcTab == 1 ? _buffSelection : _debuffSelection;
-    private string ActiveSelPrefix => _dcTab == 1 ? "status.buff" : "status.debuff";
+    private string ActiveSelPrefix => _dcTab == 1 ? DefaultTrackedEffects.BuffPrefix : DefaultTrackedEffects.DebuffPrefix;
 
     // Materialise the full buff/debuff catalog from the game table once it is loaded (rebuilds only while empty).
     private void EnsureEffectCatalog()

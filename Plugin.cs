@@ -188,10 +188,9 @@ public sealed partial class Plugin : IStellarPlugin
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
         _filter   = (FilterMode) _prefs.Get("scope",  (int)FilterMode.Party);
         _viewMode = (ViewMode)   _prefs.Get("mode",   (int)ViewMode.List);
-        // Per-tab party status-effect selections (Plugin.Debuffs.cs). Debuffs default: show-only-checked with the
-        // 3 imagine lockouts pre-checked; Buffs default: show-only-checked, empty (the user opts buffs in).
-        _debuffSelection = DebuffSelection.Load(_prefs, "status.debuff", DebuffSelection.DefaultChecked, DebuffTrackMode.ShowOnlySelected, defaultShowHidden: false);
-        _buffSelection   = DebuffSelection.Load(_prefs, "status.buff",   System.Array.Empty<int>(),      DebuffTrackMode.ShowOnlySelected, defaultShowHidden: false);
+        // Per-tab party status-effect selections (Plugin.Debuffs.cs); new-install defaults live in DefaultTrackedEffects.
+        _debuffSelection = DefaultTrackedEffects.LoadDebuffs(_prefs);
+        _buffSelection   = DefaultTrackedEffects.LoadBuffs(_prefs);
         InitUploadPolicy();  // SP1: load/migrate the 8 upload-policy cells + cache the hot-path bools
         InitReplay();      // Replay R1: load pref + create capture instance
         InitAutoArchive(); // Auto-archive Part B: load wipe/boss/idle/stage prefs into the engine
