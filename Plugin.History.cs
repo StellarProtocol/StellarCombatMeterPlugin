@@ -170,8 +170,8 @@ public sealed partial class Plugin
             // Drive the marker off the run-scoped clear LATCH (_clearedThisRun), not the momentary live
             // settlement: a fast single-boss floor in a multi-floor dungeon can have the framework WIPE
             // LastOutcome/LastSettlement before this empty run-end archive fires (vault-floor P0), which
-            // would otherwise leave the verdict blank and drop the clear as skip-empty.
-            var verdict = ResolveVerdict(fresh, _services.Dungeon.LastOutcome, _clearedThisRun);
+            // would otherwise leave the verdict blank and drop the clear as skip-empty (field: FieldArchive.cs).
+            var verdict = CurrentArchiveStamp(fresh).Verdict;
             if (!ShouldBankEmptyClearMarker(reason, verdict, _clearMarkerBanked))
             {
                 LogArchiveOutcome(reason, "skip-empty", 0, 0);
@@ -344,13 +344,10 @@ public sealed partial class Plugin
         EnsurePartyMembersTracked(_services.PartyRoster.Members, _stats);
         var settlement = _services.Dungeon.LastSettlement;
         var freshSettlement = IsFreshKill(settlement, _settlementAtCombatStart) ? settlement : null;
-        // Run-scoped clear latch (vault-floor P0, run sea/qyvCSXteqC): the framework can WIPE
-        // LastOutcome/LastSettlement (next floor's run-id) before this always-firing run-end archive banks
-        // the outgoing floor. Prefer the LIVE fresh settlement; fall back to the latched one so the clear's
-        // pass-time/score still ship, and let the latch drive the verdict (freshSettlement stays live so a
-        // never-cleared run is unaffected). _clearedSettlement is only ever set together with
-        // _clearedThisRun, so the fallback can never invent a clear for a partial run.
-        var clearSettlement = freshSettlement ?? _clearedSettlement;
+        // Run identity (id/difficulty/start/defeated/settlement/verdict) incl. the vault-floor clear-latch
+        // fallback + the FIELD-archive scrub, resolved in ONE place: ResolveArchiveStamp (Plugin.FieldArchive.cs).
+        var stamp = CurrentArchiveStamp(freshSettlement);
+        var clearSettlement = stamp.Settlement;
         var entry = new EncounterHistoryEntry
         {
             SceneName        = _lastSceneName,
@@ -365,16 +362,16 @@ public sealed partial class Plugin
             Loadouts         = LoadoutSnapshot(),
             PartyType        = _services.PartySnapshot.PartyType,
             MemberCount      = _stats.Count,
-            LevelUuid        = _lastRunId != 0 ? _lastRunId : _services.Dungeon.CurrentRunId,
+            LevelUuid        = stamp.LevelUuid,
             PartyId          = AutoArchive.RelaunchMarker.ResolvePartyId(
                                    _lastTeamId, _services.PartySnapshot.PartyId, _relaunchPartyFallback),
             PassTime         = clearSettlement?.PassTimeSeconds ?? 0,
             MasterModeScore  = clearSettlement?.MasterModeScore ?? 0,
             TotalScore       = clearSettlement?.TotalScore ?? 0,
-            DifficultyLevel  = Math.Max(_difficultyAtCombatStart, _services.Dungeon.CurrentDifficulty),
-            DungeonStartMs   = LatchRunStartMs(_lastRunStartMs, _services.Dungeon.RunTimerStartMs),
-            Result           = ResolveVerdict(freshSettlement, _services.Dungeon.LastOutcome, _clearedThisRun),
-            Defeated         = _services.Dungeon.LastDefeatedCount,
+            DifficultyLevel  = stamp.DifficultyLevel,
+            DungeonStartMs   = stamp.DungeonStartMs,
+            Result           = stamp.Verdict,
+            Defeated         = stamp.Defeated,
             Trigger          = ResolveTriggerTag(reason),
             StageBosses      = ResolveCurrentStageBosses(),
             FallbackBossConfigId = _bossMonsterInfo?.Id ?? 0,
