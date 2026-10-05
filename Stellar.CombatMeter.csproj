@@ -147,7 +147,12 @@
              lockouts, Buffs = every Potion + Cuisine buff, both "show only checked". Read-only defaults: a saved
              selection always wins; a tab the user never saved picks up the new defaults.
          Requires no framework change and no minModSystemVersion bump (stays 2.11.0). -->
-    <Version>2.16.0</Version>
+    <!-- 2.16.1: BUFFS & DEBUFFS TOOLTIP TIMER READS LIKE COOLDOWNBAR (owner-tested on MAIN 2026-10-05; owner: "now merge
+         via pr and release"). The click-tooltip countdown printed raw seconds ("1519s" on a 30-min potion);
+         CountdownLabel.Format now uses CooldownBar's tile-label format (>999 s -> "25m", >=10 s -> "48s", <10 s ->
+         "9.4s"). The re-eaten-buff vanish itself was a FRAMEWORK fix (2.19.0); this plugin needs no newer framework,
+         so minModSystemVersion stays 2.11.0. -->
+    <Version>2.16.1</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
