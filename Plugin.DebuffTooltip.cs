@@ -36,13 +36,13 @@ public sealed partial class Plugin
         return 1f - Math.Clamp(rem / (float)e.DurationMs, 0f, 1f);
     }
 
-    // Live countdown label ("48s"), recomputed each frame; empty for a permanent effect or once expired.
+    // Live countdown label ("25m" / "48s" / "9.4s" — CooldownBar's format), recomputed each frame; empty for a
+    // permanent effect or once expired.
     private string TipSeconds(int i)
     {
         var e = _tipEntries[i];
         if (e.DurationMs <= 0) return "";
-        long rem = e.ExpireMs - _services.CombatSnapshot.ServerNowMs;
-        return rem <= 0 ? "" : $"{(rem + 999) / 1000}s";
+        return CountdownLabel.Format(e.ExpireMs - _services.CombatSnapshot.ServerNowMs);
     }
 
     private IWindowControl _debuffTip = null!;
