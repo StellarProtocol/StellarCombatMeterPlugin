@@ -141,4 +141,39 @@ public class DebuffStripTests
         Assert.Equal(777, r.E0.SourceSkillId);   // skill-sourced -> carried
         Assert.Equal(0,   r.E1.SourceSkillId);   // non-skill source -> 0
     }
+
+    // SAFETY NET (owner 2026-10-05): an expired potion stayed on the meter forever because the framework kept a buff
+    // the server had ended. A timed effect whose timer ran out more than the grace ago can't be active — never show it.
+    [Fact]
+    public void Expired_timed_effect_is_hidden_after_the_grace()
+    {
+        var t = Table((2033179, false, true));
+        var buffs = new[] { Buff(2033179, 1, create: 1_000, dur: 600_000, uuid: 1) };   // expires at 601_000
+        var sel = new DebuffSelection();
+
+        Assert.Equal(1, DebuffStrip.Build(buffs, t, sel, sel, nowMs: 601_000).Count);                       // just ended
+        Assert.Equal(1, DebuffStrip.Build(buffs, t, sel, sel, nowMs: 601_000 + DebuffStrip.ExpiredGraceMs).Count);
+        Assert.Equal(0, DebuffStrip.Build(buffs, t, sel, sel, nowMs: 601_001 + DebuffStrip.ExpiredGraceMs).Count);
+        Assert.Empty(DebuffStrip.BuildAll(buffs, t, sel, sel, nowMs: 700_000));                               // tooltip too
+    }
+
+    [Fact]
+    public void Permanent_effect_is_never_hidden_as_expired()
+    {
+        var t = Table((2110056, true, true));
+        var buffs = new[] { Buff(2110056, 1, create: 1_000, dur: 0, uuid: 1) };
+        var sel = new DebuffSelection();
+
+        Assert.Equal(1, DebuffStrip.Build(buffs, t, sel, sel, nowMs: long.MaxValue / 2).Count);
+    }
+
+    [Fact]
+    public void Effect_without_a_create_time_is_never_hidden_as_expired()
+    {
+        var t = Table((2033179, false, true));
+        var buffs = new[] { Buff(2033179, 1, create: 0, dur: 600_000, uuid: 1) };
+        var sel = new DebuffSelection();
+
+        Assert.Equal(1, DebuffStrip.Build(buffs, t, sel, sel, nowMs: 1_791_000_000_000).Count);
+    }
 }
