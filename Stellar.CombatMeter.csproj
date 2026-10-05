@@ -152,7 +152,11 @@
          CountdownLabel.Format now uses CooldownBar's tile-label format (>999 s -> "25m", >=10 s -> "48s", <10 s ->
          "9.4s"). The re-eaten-buff vanish itself was a FRAMEWORK fix (2.19.0); this plugin needs no newer framework,
          so minModSystemVersion stays 2.11.0. -->
-    <Version>2.16.1</Version>
+    <!-- 2.16.2: EXPIRED BUFFS/DEBUFFS NEVER STAY ON THE BLOCK (owner 2026-10-05: an expired potion stayed on the meter
+         forever under framework 2.19.0). DebuffStrip drops a timed effect whose timer ran out more than
+         ExpiredGraceMs (2 s) ago; permanent effects and effects without a create time are never hidden. Safety net
+         beside the framework 2.19.1 root fix; needs no newer framework (minModSystemVersion stays 2.11.0). -->
+    <Version>2.16.2</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-

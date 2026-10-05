@@ -40,6 +40,9 @@ public static class DebuffStrip
     public const int MaxCells = 4;
     /// <summary>Hard cap on visible cells (2 rows × 6 columns).</summary>
     public const int MaxCellsCap = 12;
+    /// <summary>How long past its timer a timed effect may still show (server/clock jitter) before it is treated
+    /// as gone. Safety net for an effect whose removal never reached us (owner 2026-10-05: a stuck expired potion).</summary>
+    public const long ExpiredGraceMs = 2_000;
 
     /// <summary>Filters, orders and caps a member's live buffs+debuffs into up to <paramref name="maxCells"/>
     /// cells (the LAST cell is reserved for the overflow "+N" whenever the kept count exceeds it). Each kind is
@@ -48,7 +51,7 @@ public static class DebuffStrip
         IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff,
         DebuffSelection debuffSel, DebuffSelection buffSel, long nowMs, int maxCells = MaxCells)
     {
-        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel);
+        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel, nowMs);
         if (kept.Count == 0) return DebuffStripResult.Empty;
         int cap = maxCells < 1 ? 1 : (maxCells > MaxCellsCap ? MaxCellsCap : maxCells);
         // The renderer sacrifices the LAST cell for "+N" whenever there's overflow, so reserve it here too —
@@ -66,23 +69,28 @@ public static class DebuffStrip
         IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff,
         DebuffSelection debuffSel, DebuffSelection buffSel, long nowMs)
     {
-        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel);
+        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel, nowMs);
         var result = new List<DebuffEntry>(kept.Count);
         foreach (var k in kept) result.Add(ToEntry(k, nowMs));
         return result;
     }
 
-    // Filter to the kept (ActiveBuff, isBuff) pairs and stably order them by CreateTimeMs.
+    // Filter to the kept (ActiveBuff, isBuff) pairs and stably order them by CreateTimeMs. A timed effect whose timer
+    // ran out more than ExpiredGraceMs ago is dropped: it cannot still be active, whatever the live set says.
     private static List<(ActiveBuff b, bool isBuff)> KeptSorted(
-        IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff, DebuffSelection debuffSel, DebuffSelection buffSel)
+        IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff, DebuffSelection debuffSel, DebuffSelection buffSel,
+        long nowMs)
     {
         var kept = new List<(ActiveBuff, bool)>(buffs?.Count ?? 0);
         if (buffs == null || buffs.Count == 0) return kept;
         foreach (var b in buffs)
-            if (Passes(b.BaseId, getBuff, debuffSel, buffSel, out var isBuff)) kept.Add((b, isBuff));
+            if (!IsExpired(b, nowMs) && Passes(b.BaseId, getBuff, debuffSel, buffSel, out var isBuff)) kept.Add((b, isBuff));
         StableSortByCreateTime(kept);
         return kept;
     }
+
+    private static bool IsExpired(in ActiveBuff b, long nowMs)
+        => b.DurationMs > 0 && b.CreateTimeMs > 0 && nowMs > b.CreateTimeMs + b.DurationMs + ExpiredGraceMs;   // no create time = unknown, keep
 
     // Filter predicate: a buff OR debuff whose name/icon pass its OWN selection (debuffs → debuffSel, buffs →
     // buffSel). Outputs the kind (isBuff = NOT a debuff) so the strip can colour the tile.
