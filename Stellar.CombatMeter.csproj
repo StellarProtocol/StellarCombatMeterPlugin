@@ -156,6 +156,7 @@
          forever under framework 2.19.0). DebuffStrip drops a timed effect whose timer ran out more than
          ExpiredGraceMs (2 s) ago; permanent effects and effects without a create time are never hidden. Safety net
          beside the framework 2.19.1 root fix; needs no newer framework (minModSystemVersion stays 2.11.0). -->
+    <!-- 2.17.0: Korean (한국어) catalog; ko needs framework ≥ 2.21.0 (set via registry minModSystemVersion at release). -->
     <Version>2.17.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
