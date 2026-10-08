@@ -156,7 +156,7 @@
          forever under framework 2.19.0). DebuffStrip drops a timed effect whose timer ran out more than
          ExpiredGraceMs (2 s) ago; permanent effects and effects without a create time are never hidden. Safety net
          beside the framework 2.19.1 root fix; needs no newer framework (minModSystemVersion stays 2.11.0). -->
-    <Version>2.16.2</Version>
+    <Version>2.17.0</Version>
     <Deterministic>true</Deterministic>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <!-- Build-time release-channel stamp (registry CI sets -p:StellarChannel=testing for its testing-
@@ -226,6 +226,7 @@
     <EmbeddedResource Include="Lang/th.json" LogicalName="Stellar.CombatMeter.Lang.th.json" />
     <EmbeddedResource Include="Lang/id.json" LogicalName="Stellar.CombatMeter.Lang.id.json" />
     <EmbeddedResource Include="Lang/fil.json" LogicalName="Stellar.CombatMeter.Lang.fil.json" />
+    <EmbeddedResource Include="Lang/ko.json" LogicalName="Stellar.CombatMeter.Lang.ko.json" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="tests/**/*.cs" />
