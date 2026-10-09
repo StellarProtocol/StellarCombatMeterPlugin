@@ -283,30 +283,30 @@ public sealed partial class Plugin : IStellarPlugin
     private void RegisterHotkeys()
     {
         _toggleAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.toggle", "Toggle CombatMeter", new KeyBinding(StellarKeyCode.F9)),
+            new HotkeyAction("combatmeter.toggle", _loc.T("hotkey.toggle"), new KeyBinding(StellarKeyCode.F9)),
             callback: () => _mainWindow.SetVisible(!_mainWindow.IsShown));
 
         _historyAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.history-toggle", "Toggle CombatMeter history",
+            new HotkeyAction("combatmeter.history-toggle", _loc.T("hotkey.history"),
                 new KeyBinding(StellarKeyCode.F9, ModifierKeys.Shift)),
             callback: ToggleHistory);
 
         // Action hotkeys for the meter's header controls. Unbound by default (SuggestedDefault: null) so they
         // never collide with game keys out of the box — they appear in Settings → Hotkeys for the user to bind.
         _resetAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.reset", "Reset CombatMeter", null), callback: Clear);
+            new HotkeyAction("combatmeter.reset", _loc.T("hotkey.reset"), null), callback: Clear);
         _archiveAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.archive", "Archive CombatMeter encounter", null), callback: ManualArchive);
+            new HotkeyAction("combatmeter.archive", _loc.T("hotkey.archive"), null), callback: ManualArchive);
         _pauseAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.pause", "Pause / resume CombatMeter", null), callback: TogglePause);
+            new HotkeyAction("combatmeter.pause", _loc.T("hotkey.pause"), null), callback: TogglePause);
         _modeAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.mode", "Cycle CombatMeter metric (DPS/HPS/Taken)", null), callback: CycleMetric);
+            new HotkeyAction("combatmeter.mode", _loc.T("hotkey.mode"), null), callback: CycleMetric);
         _partyFocusAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.party-focus", "Toggle CombatMeter Party-focus view", null), callback: ToggleViewMode);
+            new HotkeyAction("combatmeter.party-focus", _loc.T("hotkey.partyFocus"), null), callback: ToggleViewMode);
         // Unbound by default (SuggestedDefault: null) so it never clashes with the game's own Ctrl+I voice
         // toggle out of the box — the user binds it in Settings → Hotkeys.
         _voiceCycleAction = _services.Hotkeys.DeclareAction(
-            new HotkeyAction("combatmeter.voice-cycle", "Cycle team voice mode", null), callback: CycleOwnVoiceMode);
+            new HotkeyAction("combatmeter.voice-cycle", _loc.T("hotkey.voiceCycle"), null), callback: CycleOwnVoiceMode);
     }
 
     public void Dispose()
