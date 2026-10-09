@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
-using Stellar.Abstractions.Domain.GameData;
 using Stellar.Abstractions.Services;
 using UnityEngine;
 
@@ -295,10 +294,12 @@ public sealed partial class Plugin
     // only (see CaptureSpec) — blank until a spec-defining skill is observed, falling back to the class name.
     // The wire talent_id turned out to be a tier id (=1), not the spec; the AOI loadout carries both specs'
     // skills so it can't disambiguate either — leaving combat casts as the only authoritative source.
+    // The displayed text is i18n (Plugin.SpecLabel.cs): JP UI language shows the JP spec name, every other
+    // language the game's English spec name — see SpecLabel.
     private string SpecLine(EntityId id)
     {
         var sub = ResolveSpec(id);
-        if (sub != 0 && ProfessionSpecs.Name(sub) is { Length: > 0 } n) return n;
+        if (sub != 0 && SpecLabel(sub) is { Length: > 0 } n) return n;
         return GetClassLine(id);
     }
 }

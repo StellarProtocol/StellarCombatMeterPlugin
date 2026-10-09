@@ -25,12 +25,16 @@ public sealed partial class Plugin
         _historyIconPng = LoadHistoryIconPng();
 
         // Settings tile → the uploads/auto-archive Settings window (gear icon reused from the header).
-        // "CombatMeter" is the plugin brand, kept identical across locales (like the meter's own window
-        // title), so it needs no TitleProvider. Title also doubles as the stable pinned-state identity.
+        // Title stays the fixed literal "CombatMeter" — the stable pin-identity key (ILauncher.cs:49-50) —
+        // so a pinned tile survives a language change. "CombatMeter" is the plugin brand and every catalog
+        // keeps it identical (see settings.window.title / settings.appearance.title); launcher.settings.title
+        // mirrors that for TitleProvider's live-localized DISPLAY text, even though the value itself never
+        // changes per-locale today.
         _settingsLauncherEntry = _services.Launcher.Register(new LauncherEntry(
             "CombatMeter", IconPng: _settingsGearPng, IconKey: null, OnOpen: ToggleArchiveSettings)
         {
             ShouldShow = () => _services.ClientState.Phase == GamePhase.World,
+            TitleProvider = () => _loc.T("launcher.settings.title"),
         });
 
         // History tile → the history window. Display title is the localized "Combat History"

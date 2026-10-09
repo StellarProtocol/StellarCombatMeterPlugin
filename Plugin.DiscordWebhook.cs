@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using Stellar.Abstractions.Domain;
-using Stellar.Abstractions.Domain.GameData;
 using Stellar.CombatMeter.LogUpload;
 
 namespace Stellar.CombatMeter;
@@ -150,7 +149,10 @@ public sealed partial class Plugin
             var color = role == Role.Healer ? new UnityEngine.Color32(52, 211, 153, 255)   // emerald
                       : role == Role.Tank ? new UnityEngine.Color32(56, 189, 248, 255)     // cyan/blue
                       : new UnityEngine.Color32(233, 69, 69, 255);                          // dps crimson
-            string cls = (spec != 0 ? ProfessionSpecs.Name(spec) : null)
+            // EnglishSpecLabel (Plugin.SpecLabel.cs), not the UI-language-aware SpecLabel: this card
+            // posts to Discord and must read in English regardless of the poster's Stellar UI
+            // language (owner 2026-10-09).
+            string cls = (spec != 0 ? EnglishSpecLabel(spec) : null)
                          ?? _services.GameData.Combat.GetProfession(parent)?.Name
                          ?? role.ToString();
             var icon = LoadCardIcon(parent, out int iconW, out int iconH);
