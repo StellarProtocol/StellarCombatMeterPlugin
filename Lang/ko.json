@@ -92,6 +92,7 @@
   "history.pickSession": "왼쪽에서 세션을 선택하세요.",
   "history.scene.numbered": "씬 {0}",
   "history.window.title": "전투 기록",
+  "launcher.settings.title": "CombatMeter",
   "list.col.dmg": "피해",
   "list.col.heal": "치유",
   "list.col.taken": "받은 피해",

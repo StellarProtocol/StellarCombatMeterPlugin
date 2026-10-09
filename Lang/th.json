@@ -92,6 +92,7 @@
   "history.pickSession": "เลือกเซสชันทางซ้าย",
   "history.scene.numbered": "ซีน {0}",
   "history.window.title": "ประวัติการต่อสู้",
+  "launcher.settings.title": "CombatMeter",
   "list.col.dmg": "DMG",
   "list.col.heal": "HEAL",
   "list.col.taken": "TAKEN",
