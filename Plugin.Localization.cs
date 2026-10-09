@@ -15,6 +15,10 @@ public sealed partial class Plugin
 {
     private void OnLanguageChanged()
     {
+        // Plugin.SpecLabel.cs's on-screen spec label cache is keyed by (sub, language), but drop it
+        // outright on every live switch anyway so a stale entry can never survive past this frame.
+        _specLabelCache.Clear();
+
         // Re-register every window that carries a localized title (main window's title is the "CombatMeter"
         // brand, and the row-menu title is empty — neither needs it). Rect + visibility are preserved.
         RebuildWindow(ref _historyWindow, RegisterHistoryWindow);
