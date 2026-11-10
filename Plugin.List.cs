@@ -90,7 +90,11 @@ public sealed partial class Plugin
         EntityId id = row.Id;
         var target = (float)row.BarFraction;
         if (!_barAnim.TryGetValue(id, out var cur)) cur = target;
-        cur = Mathf.Lerp(cur, target, 0.18f);
+        // 0.33/step at the ~5 Hz row refresh ≈ the old 0.18/step at 10 Hz (1 − 0.82² ≈ 0.33), so the bar animates
+        // at the same speed. Snap once within ~1 px: an asymptotic lerp otherwise keeps nudging the bar (and
+        // re-meshing it) for seconds after the value stopped moving (raid perf 2026-11-10).
+        cur = Mathf.Lerp(cur, target, BarLerpPerRefresh);
+        if (Mathf.Abs(cur - target) < 1f / DisplayQuantize.BarSteps) cur = target;
         _barAnim[id] = cur;
         var rowData = AssembleRow(row, rank, elapsed, vis, toggles);
         ResolveDebuffs(id, vis.Debuffs, MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
@@ -109,7 +113,9 @@ public sealed partial class Plugin
         EntityId id = row.Id;
         EntityId self = _services.CombatSnapshot.LocalEntityId;
         _barAnim.TryGetValue(id, out var cur);
-        var frac = HpFractionFor(id);
+        // Displayed fractions snap to ~1 px steps (DisplayQuantize) so sub-pixel HP/bar moves don't redraw the row.
+        cur = DisplayQuantize.Fraction(cur, DisplayQuantize.BarSteps);
+        var frac = DisplayQuantize.Fraction(HpFractionFor(id), DisplayQuantize.BarSteps);
         object? crest = LoadCrest(id, out var crestUv);
         double dur = elapsed >= 1d ? elapsed : 1d;
         long perSec = (long)(row.Value / dur);
@@ -264,7 +270,7 @@ public sealed partial class Plugin
         var v = _services.CombatLookup.GetVitals(id);
         if (v.MaxHp <= 0 || v.Shield <= 0) return 0f;
         float shieldFrac = Mathf.Clamp01((float)v.Shield / v.MaxHp);
-        return Mathf.Min(shieldFrac, hpFrac);
+        return DisplayQuantize.Fraction(Mathf.Min(shieldFrac, hpFrac), DisplayQuantize.BarSteps);
     }
 
     private float HpFractionFor(EntityId id)
