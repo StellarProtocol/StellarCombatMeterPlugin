@@ -15,9 +15,11 @@ public sealed partial class Plugin
 
     // The grid auto-follows the live party size: a 20-player raid renders the 2×2 four-group grid; a 5-player
     // party (and solo) renders a single full-width group of 5. Nested ConditionalElement (retained-mode) flips
-    // branch visibility per poll; the window height follows via Plugin.PartyFocusHeight().
+    // branch visibility per poll; the window height follows via Plugin.PartyFocusHeight(). Prebuild (fw 2.30.0): the
+    // other size's grid is built in the background, so a 5↔20 switch (joining a raid) doesn't build it in one frame.
     private HudElement BuildPartyFocusBody()
-        => new ConditionalElement(() => IsRaid20View, BuildFourGroupGrid(), BuildGroupColumn(0));
+        => new ConditionalElement(() => IsRaid20View, BuildFourGroupGrid(), BuildGroupColumn(0))
+            { Prebuild = true, PrebuildName = "cm.partyGrid" };
 
     private HudElement BuildFourGroupGrid() => new ColumnElement(new HudElement[]
     {

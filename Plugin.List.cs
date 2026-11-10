@@ -44,10 +44,12 @@ public sealed partial class Plugin
                 OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default));
         }
         // Empty → caption; else the scroll. Fill:true so the scroll grows with the (resizable) window height.
+        // Prebuild (fw 2.30.0): the rows' branch is built in the background while the list is still empty (the window
+        // pre-build's fill, or an open before combat), so the first combat tick doesn't build 20 meter rows in one frame.
         return new ConditionalElement(() => _listEmpty,
             new TextElement(() => _loc.T(_listEmptyCaptionKey), MutedCol),
             new ScrollElement(new ListElement(() => _listRows.Count, slots), ListScrollHeight),
-            Fill: true);
+            Fill: true) { Prebuild = true, PrebuildName = "cm.listRows" };
     }
 
     private void RebuildListRows()

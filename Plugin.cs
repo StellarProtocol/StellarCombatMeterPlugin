@@ -265,7 +265,11 @@ public sealed partial class Plugin : IStellarPlugin
               // In-world meter HUD: draw only in the World phase, and hide behind blocking overlays (old
               // AutoHideBehindGameMenus == Blocking) and behind any menu incl. the line-selector (AnyMenu).
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World
-                                && (_services.ClientState.UiState & (GameUIState.Blocking | GameUIState.AnyMenu)) == 0 },
+                                && (_services.ClientState.UiState & (GameUIState.Blocking | GameUIState.AnyMenu)) == 0,
+              // fw 2.30.0 pre-build: a hidden meter (F9 / persisted hide) is built at login and filled off-screen in the world,
+              // so showing it no longer mounts 20 meter rows in the open frame (121 ms). Hidden-safe: RebuildSnapshots
+              // skips a hidden window, so the fill reads the empty row caches; the body Conditionals prebuild their rows.
+              Prebuild = true },
             BuildMainRoot()));
 
         _historyWindow = RegisterHistoryWindow();
