@@ -201,6 +201,7 @@ public sealed partial class Plugin : IStellarPlugin
         _historyPrefs = _services.Config.GetSection("history");
         LoadHistory();
         LoadActiveRunMarker();   // read the persisted mid-relaunch marker (null on a clean session) — Plugin.RelaunchMarker.cs
+        StartArchiveWarmup();    // JIT + BouncyCastle warm-up on a worker thread, so the first archive (often the inline boss cut, inside a combat-event batch) is not cold — Plugin.ArchivePerf.cs
 
         RegisterColours();
         BuildWindows();
@@ -314,6 +315,7 @@ public sealed partial class Plugin : IStellarPlugin
         _loc.LanguageChanged -= OnLanguageChanged;   // i18n P1 live-switch handler
         CaptureModeGeometry(); PersistPrefs();   // remember the active view's size/position across reloads
         DisposeLogUpload();    // SP1: clear the event buffer
+        FlushHistoryWrites();  // let a just-queued per-run history write land (Plugin.ArchivePerf.cs)
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;

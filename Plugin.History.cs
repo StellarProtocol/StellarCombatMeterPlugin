@@ -224,7 +224,7 @@ public sealed partial class Plugin
         if (entry.Result == "kill") _clearMarkerBanked = true;
         _history.Add(entry);
         foreach (var evicted in TrimToCapacity(_history, HistoryRetention)) { _uploadStatus.Forget(evicted); ForgetReUpload(evicted); DeleteHistoryFile(evicted); }   // unroot + delete evicted runs
-        WriteHistoryFile(entry);   // persist THIS run's per-run file (a user/scene event, not a hot-path frame)
+        WriteHistoryFile(entry);   // per-run file: serialised here, disk write queued off-thread (the inline boss cut runs this inside a combat-event batch)
 
         var summaryFired = FinalizeAndMaybeUploadReplay(entry, replayUpperCapServerMs);
         LogArchiveOutcome(reason, summaryFired ? "banked+upload" : "banked", entry.Stats.Count, entry.CombatDurationMs,
