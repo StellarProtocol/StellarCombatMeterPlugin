@@ -92,10 +92,9 @@ public sealed partial class Plugin
         EntityId id = row.Id;
         var target = (float)row.BarFraction;
         if (!_barAnim.TryGetValue(id, out var cur)) cur = target;
-        // 0.33/step at the ~5 Hz row refresh ≈ the old 0.18/step at 10 Hz (1 − 0.82² ≈ 0.33), so the bar animates
-        // at the same speed. Snap once within ~1 px: an asymptotic lerp otherwise keeps nudging the bar (and
-        // re-meshing it) for seconds after the value stopped moving (raid perf 2026-11-10).
-        cur = Mathf.Lerp(cur, target, BarLerpPerRefresh);
+        // 0.18 per ~10 Hz row refresh. Snap once within ~1 px: an asymptotic lerp otherwise keeps nudging the bar
+        // (and re-meshing it) for seconds after the value stopped moving (raid perf 2026-11-10).
+        cur = Mathf.Lerp(cur, target, 0.18f);
         if (Mathf.Abs(cur - target) < 1f / DisplayQuantize.BarSteps) cur = target;
         _barAnim[id] = cur;
         var rowData = AssembleRow(row, rank, elapsed, vis, toggles);

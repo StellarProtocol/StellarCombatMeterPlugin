@@ -48,33 +48,14 @@ public sealed partial class Plugin
         RebuildSnapshots();
     }
 
-    // Main meter rows refresh at ~5 Hz, not every ~10 Hz tick (raid perf 2026-11-10: a 20-player fight changed
-    // ~108 UI graphics/frame, the meter's rows among the top). Only the DISPLAY is throttled — combat events still
-    // accumulate in full on every event, and the history/breakdown/snapshot windows keep the 10 Hz tick. The bar
-    // lerp (Plugin.List.cs BarLerpPerRefresh) is scaled to this rate so the animation speed is unchanged. A window
-    // that was hidden refreshes on its first shown tick, so opening it never shows stale rows.
-    private const float MainRowsIntervalS = 0.2f;
-    private const float BarLerpPerRefresh = 0.33f;
-    private float _mainRowsLastAt = float.NegativeInfinity;
-    private bool  _mainRowsShownLastTick;
-
-    private bool MainRowsDue()
-    {
-        var now = UnityEngine.Time.unscaledTime;
-        // The tick lands on frame boundaries (≥0.1 s apart), so allow a frame of slack or 2 ticks could miss 0.2 s.
-        var due = !_mainRowsShownLastTick || now - _mainRowsLastAt >= MainRowsIntervalS - 0.03f;
-        _mainRowsShownLastTick = true;
-        if (due) _mainRowsLastAt = now;
-        return due;
-    }
-
-    // Rebuild the visible window's row snapshot (throttled to ~10 Hz; the main meter's rows to ~5 Hz via
-    // MainRowsDue), so the element Funcs read cached rows (no per-poll service scan / formatting). Only the shown
-    // window pays.
+    // Rebuild the visible window's row snapshot (throttled to ~10 Hz), so the element Funcs read cached rows
+    // (no per-poll service scan / formatting). Only the shown window pays. The main meter's rows stay at this
+    // ~10 Hz: a separate ~5 Hz main-row throttle was tried for raid perf (2026-11-10) and read as too sluggish —
+    // the redraw saving now comes from DisplayQuantize (sub-pixel changes collapse to the same value, so the
+    // framework skips the rebind) plus the bar lerp's 1 px settle in Plugin.List.cs.
     private void RebuildSnapshots()
     {
-        if (!_mainWindow.IsShown) _mainRowsShownLastTick = false;
-        else if (MainRowsDue())
+        if (_mainWindow.IsShown)
         {
             CaptureModeGeometry();
             if (_viewMode == ViewMode.PartyFocus)
