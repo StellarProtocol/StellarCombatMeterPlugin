@@ -201,6 +201,7 @@ public sealed partial class Plugin : IStellarPlugin
         _historyPrefs = _services.Config.GetSection("history");
         LoadHistory();
         LoadActiveRunMarker();   // read the persisted mid-relaunch marker (null on a clean session) — Plugin.RelaunchMarker.cs
+        StartArchiveWarmup();    // JIT + BouncyCastle warm-up on a worker thread, so the first archive (often the inline boss cut, inside a combat-event batch) is not cold — Plugin.ArchivePerf.cs
 
         RegisterColours();
         BuildWindows();
@@ -264,7 +265,11 @@ public sealed partial class Plugin : IStellarPlugin
               // In-world meter HUD: draw only in the World phase, and hide behind blocking overlays (old
               // AutoHideBehindGameMenus == Blocking) and behind any menu incl. the line-selector (AnyMenu).
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World
-                                && (_services.ClientState.UiState & (GameUIState.Blocking | GameUIState.AnyMenu)) == 0 },
+                                && (_services.ClientState.UiState & (GameUIState.Blocking | GameUIState.AnyMenu)) == 0,
+              // fw 2.30.0 pre-build: a hidden meter (F9 / persisted hide) is built at login and filled off-screen in the world,
+              // so showing it no longer mounts 20 meter rows in the open frame (121 ms). Hidden-safe: RebuildSnapshots
+              // skips a hidden window, so the fill reads the empty row caches; the body Conditionals prebuild their rows.
+              Prebuild = true },
             BuildMainRoot()));
 
         _historyWindow = RegisterHistoryWindow();
@@ -314,6 +319,7 @@ public sealed partial class Plugin : IStellarPlugin
         _loc.LanguageChanged -= OnLanguageChanged;   // i18n P1 live-switch handler
         CaptureModeGeometry(); PersistPrefs();   // remember the active view's size/position across reloads
         DisposeLogUpload();    // SP1: clear the event buffer
+        FlushHistoryWrites();  // let a just-queued per-run history write land (Plugin.ArchivePerf.cs)
         _services.CombatEvents.CombatEventOccurred -= OnCombatEvent;
         _services.Framework.Update                 -= OnUpdate;
         _services.ClientState.SceneChanged         -= OnSceneChanged;
@@ -349,71 +355,6 @@ public sealed partial class Plugin : IStellarPlugin
         _skillBreakdownWindow.Remove();
         _historyWindow.Remove();
         _mainWindow.Remove();
-    }
-
-    // Snapshot-rebuild throttle. The window bindings poll at the framework's capped cadence (~10 Hz), so there
-    // is no point rebuilding the row snapshots (which allocate display strings) every 60 fps frame — rebuild at
-    // the same ~10 Hz the bindings consume. The bar-fraction lerp lives in BuildRowData and so steps at this
-    // cadence too, which matches what the bindings can actually show.
-    private const float SnapshotIntervalS = 0.1f;
-    private float _snapshotAccum;
-
-    private void OnUpdate(float deltaTime)
-    {
-        DrainPortraitAcks();
-        DrainSocialCatchup();
-        EnsureReadyCheckSubscribed();
-        TickRowMenuPlace();
-        TickDebuffTipPlace();   // Plugin.DebuffTooltip.cs — re-assert cursor rect after destroy-on-hide remount
-        PumpClassIcons();
-        PumpDungeonIcon();
-        TickEntitySnapshots(deltaTime);
-        TickReadyCheckCooldown(deltaTime);
-        TickReadyCheckResult(deltaTime);
-        TickReadyCheck(deltaTime);
-        TickReplayCapture(deltaTime);
-        TickReplayDiagnostics(deltaTime);
-        _snapshotAccum += deltaTime;
-        if (_snapshotAccum < SnapshotIntervalS) return;
-        _snapshotAccum = 0f;
-        PersistUploadStateIfDirty();   // re-persist history after an async upload settled its Done/Failed phase
-        DrainDiscordPendingPosts();    // Discord webhook: resolve a link-wait post once its deadline/link lands
-        DrainContentKindsNotice();     // surface a manual content-list refresh result (Notifications is main-thread only)
-        DetectSelfImagineCasts();   // ~10 Hz: LocalCooldowns begin-advance = self imagine cast (pre-combat capable)
-        PollRunBoundary();           // Plugin.RunBoundary.cs — BEFORE TrackClearLatch (bank OLD run first)
-        TrackClearLatch();           // ~10 Hz: run-scoped clear latch — UNCONDITIONAL. DO NOT move inside
-                                     // TickAutoArchiveTriggers or behind the _autoArchive.Enabled gate: the kill
-                                     // latch MUST track even in manual-only mode so a MANUAL archive of a cleared
-                                     // run still reads "kill" (owner design 2026-08-06). Headless-untestable —
-                                     // this call-order guarantee has no unit test; this comment IS the guard.
-        TickBossStatus();            // ~10 Hz: boss kill-state poll — ALWAYS-ON, runs with the MASTER
-                                     // Auto-archive toggle OFF too (owner ruling 2026-08-14). DO NOT move
-                                     // it back inside TickAutoArchiveTriggers — see Plugin.BossDetection.cs.
-        TickRelaunchMarker();        // mid-relaunch recovery (Plugin.RelaunchMarker.cs): ~30 s marker heartbeat + stale-marker clear
-        TickAutoArchiveTriggers();   // ~10 Hz trigger poll (auto-archive spec Part B)
-        TickRunUploadQueue();        // drains the run-level "Upload all" queue, one segment at a time
-        TickLoadoutCapture();        // ~10 Hz: per-class loadout accumulator (poll profession + run-boundary reset)
-        RebuildSnapshots();
-    }
-
-    // Rebuild the visible window's row snapshot (throttled to ~10 Hz), so the element Funcs read cached rows
-    // (no per-poll service scan / formatting). Only the shown window pays.
-    private void RebuildSnapshots()
-    {
-        if (_mainWindow.IsShown)
-        {
-            CaptureModeGeometry();
-            if (_viewMode == ViewMode.PartyFocus)
-            {
-                // Follow a live 5↔20 size switch: re-fit the window when the party size changes.
-                if (_lastViewWas20 != IsRaid20View) { _lastViewWas20 = IsRaid20View; RefreshPartyFocusHeight(); }
-                RebuildPartyFocusRows();
-            }
-            else RebuildListRows();
-        }
-        if (_historyWindow.IsShown) RebuildHistorySnapshots();
-        if (_skillBreakdownWindow.IsShown) RebuildSkillRows();
-        if (_snapshotWindow.IsShown) RebuildSnapshotRows();
     }
 
     private void Clear()
@@ -483,56 +424,6 @@ public sealed partial class Plugin : IStellarPlugin
         _prefs.Set("listX", _listX); _prefs.Set("listY", _listY);
         _prefs.Set("partyX", _partyX); _prefs.Set("partyY", _partyY); _prefs.Set("partyW", _partyW);
         _prefs.Save();
-    }
-
-    // Capture the live window rect into the active view's remembered geometry (so a mode switch can restore it)
-    // + track the current width for the List collapse breakpoints.
-    private void CaptureModeGeometry()
-    {
-        var r = _mainWindow.Rect;
-        if (r.Width <= 0f) return;
-        _listWidthNow = r.Width;
-        if (_viewMode == ViewMode.PartyFocus) { _partyX = r.X; _partyY = r.Y; _partyW = r.Width; }
-        else { _listW = r.Width; _listH = r.Height; _listX = r.X; _listY = r.Y; }
-    }
-
-    // Move/resize the window to the active view's remembered geometry (on mode switch). Party-focus is a fixed
-    // structure → fixed size; List restores the user's resized size.
-    private void ApplyModeSize()
-    {
-        var rect = _viewMode == ViewMode.PartyFocus
-            ? new WindowRect(_partyX, _partyY, _partyW > 0 ? _partyW : PartyFocusW, PartyFocusHeight())
-            : new WindowRect(_listX, _listY, _listW > 0 ? _listW : ListWidth, _listH > 0 ? _listH : ListHeight);
-        _mainWindow.SetRect(rect);
-    }
-
-    // Party-focus window height: base grid height (20-player 4×5 vs 5-player single group), SCALED for the
-    // current player-tile size, + any open inline menu (so the grid is never squeezed). Follows the live party
-    // size; RefreshPartyFocusHeight re-applies it. The per-row growth mirrors the framework row-height formula
-    // (max(MeterRowHeight 48, DebuffBlockPx + 6); DebuffBlockPx = tilePx*2 + gap 2) so a Medium/Large tile
-    // auto-fits — owner 2026-09-24: a resized party window "wasn't remembered" because this height was a fixed
-    // constant that ignored the tile size, so every mode switch / menu toggle snapped it back and clipped the
-    // enlarged grid. Vertical rows: 20-player stacks two 5-slot quadrants (10), 5-player is one group (5).
-    private float PartyFocusHeight()
-    {
-        int rows = IsRaid20View ? MeterAggregator.SlotsPerGroup * 2 : MeterAggregator.SlotsPerGroup;
-        float tilePx = MeterElementToggles.TileSizePx((IsRaid20View ? Party20Toggles : Party5Toggles).TileSize);
-        float extraPerRow = tilePx * 2f + 8f - 48f;   // 0 at Small (48px rows), +12 Medium, +24 Large
-        if (extraPerRow < 0f) extraPerRow = 0f;
-        return (IsRaid20View ? PartyFocusH : PartyFocus5H)
-               + rows * extraPerRow
-               + (_mainMenuOpen ? MainMenuPanelH : 0f);
-    }
-
-    // Re-apply the party-focus window height in place (keep current pos + width) when a menu opens/closes.
-    // Uses the LIVE rect, not the remembered _partyX/_partyY, so toggling a menu never teleports a
-    // window the user has dragged. No-op outside party-focus (List mode reflows via its Fill scroll).
-    private void RefreshPartyFocusHeight()
-    {
-        if (_viewMode != ViewMode.PartyFocus || _mainWindow is null) return;
-        var r = _mainWindow.Rect;
-        if (r.Width <= 0f) return;
-        _mainWindow.SetRect(new WindowRect(r.X, r.Y, r.Width, PartyFocusHeight()));
     }
 
     // ----- shared identity / colour helpers (ColorRgba — fed to MeterRowData; gauges: Plugin.GaugeColor.cs) -----

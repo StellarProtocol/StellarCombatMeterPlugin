@@ -65,7 +65,9 @@ public sealed partial class Plugin
         // Imagine-sourced effects (e.g. Time Stasis, Tina's Blessing) show the SOURCE Battle-Imagine card instead
         // of the raw icon — same intent as CooldownBar. IsBuff tints the tile green (buff) vs red (debuff).
         object? icon = ResolveDebuffIcon(e.BaseId, e.SourceSkillId, out uv);
-        return new DebuffSlot(icon, uv, e.Stacks, e.RemainFraction, Present: true, IsBuff: e.IsBuff);
+        // Time-left snapped to 1 px of foot bar (DisplayQuantize.Remain): these fills were the #1 changed graphic per
+        // frame in the 2026-11-10 raid log — a continuously shrinking fraction re-meshed every tile on every refresh.
+        return new DebuffSlot(icon, uv, e.Stacks, DisplayQuantize.Remain(e.RemainFraction), Present: true, IsBuff: e.IsBuff);
     }
 
     // Icon for an effect: the source Battle-Imagine card for an imagine-sourced one (via the live source skill, then

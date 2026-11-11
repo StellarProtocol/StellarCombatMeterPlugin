@@ -191,11 +191,11 @@ public sealed partial class Plugin
         string? upJson = phase == UploadPhase.Idle
             ? null
             : HistoryStore.SerializeUploadState(new HistoryStore.UploadStateRecord(e.LevelUuid, e.ArchivedAtMs, phase, _uploadStatus.UrlFor(e)));
-        _services.Data.Write(HistoryContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs), HistoryContainer.Serialize(entryJson, upJson));
+        QueueHistoryWrite(HistoryContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs), HistoryContainer.Serialize(entryJson, upJson));   // disk write off-thread, ordered (Plugin.ArchivePerf.cs)
     }
 
     private void DeleteHistoryFile(EncounterHistoryEntry e)
-        => _services.Data.Delete(HistoryContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
+        => QueueHistoryDelete(HistoryContainer.ContainerName(e.LevelUuid, e.ArchivedAtMs));
 
     // Empty the legacy config history section (one final write) — after migration, so settings saves no
     // longer re-serialize megabytes of history. Left as empty arrays rather than removed keys for clarity.
