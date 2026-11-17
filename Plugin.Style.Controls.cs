@@ -39,9 +39,10 @@ public sealed partial class Plugin
 
     // One option of a choice group (accent on) — or, with `color`, a kind chip (Debuffs red / Buffs green). Hugs its
     // label (+ 9 px each side); the label never changes, and the window is rebuilt on a language change, so the width is
-    // stable. Optional `enabled` → recessed while the parent setting is off.
+    // stable. Optional `enabled` → recessed while the parent setting is off. `padX` narrows a crowded group — pass the
+    // same value to every chip of that group so they stay alike.
     private HudElement ChoiceChip(Func<string> label, Func<bool> active, Action onClick, Func<bool>? enabled = null,
-        Func<ColorRgba>? color = null)
+        Func<ColorRgba>? color = null, float padX = ChipPadX)
     {
         var hover = new HoverFlag();
         bool En() => enabled == null || enabled();
@@ -53,7 +54,7 @@ public sealed partial class Plugin
             : Over(TextColor() with { A = ChipOffAlpha + H() }, PanelColor());
         ColorRgba Label() => !En() ? DisabledLabel(PanelColor()) : active() ? Readable(Hue(), Fill()) : MutedColor();
         return ChipShell(new TextElement(label, Color: () => Label(), NoWrap: true, FontSize: 12) { Bold = true },
-            Fill, hover, () => { if (En()) onClick(); }, padX: ChipPadX);
+            Fill, hover, () => { if (En()) onClick(); }, padX: padX);
     }
 
     private HudElement ChipShell(HudElement label, Func<ColorRgba> fill, HoverFlag hover, Action onClick, float padX)

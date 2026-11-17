@@ -69,12 +69,15 @@ public sealed partial class Plugin
     private HudElement LookRowPanel() => SectionPanel(() => _loc.T("cfg.look.row"), () => _loc.T("cfg.look.row.hint"),
         LookToggleRow("rank", "settings.toggle.rank", () => LookT.Rank, v => LookT.Rank = v),
         LookToggleRow("crest", "settings.toggle.crest", () => LookT.Crest, v => LookT.Crest = v),
-        // "Name line" merges the two old toggles (Spec name, Class name) — no config migration: Spec = spec only,
-        // Class = class only, Both = both. A config with both off (possible before) simply shows no chip lit.
+        // "Class/Spec" merges the two old toggles (Spec name, Class name) — no config migration: Off = neither,
+        // Spec = spec only, Class = class only, Both = both, so every saved combination lights exactly one chip.
+        // Four chips + label + "?" crowd the 323 px column (id/fil/th at the SDL 7.5/12.5/8 px budget), so the group
+        // uses a 6 px chip pad instead of 9; the chips still hug their (per-language, rebuild-stable) labels.
         SettingRow(() => _loc.T("cfg.look.nameLine"), false,
-            ChoiceChip(() => _loc.T("cfg.look.nameLine.spec"),  () => LookT.Spec && !LookT.ClassName, () => SetNameLine(true, false)),
-            ChoiceChip(() => _loc.T("cfg.look.nameLine.class"), () => !LookT.Spec && LookT.ClassName, () => SetNameLine(false, true)),
-            ChoiceChip(() => _loc.T("cfg.look.nameLine.both"),  () => LookT.Spec && LookT.ClassName,  () => SetNameLine(true, true)),
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.off"),   () => !LookT.Spec && !LookT.ClassName, () => SetNameLine(false, false), padX: NameLineChipPad),
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.spec"),  () => LookT.Spec && !LookT.ClassName,  () => SetNameLine(true, false),  padX: NameLineChipPad),
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.class"), () => !LookT.Spec && LookT.ClassName,  () => SetNameLine(false, true),  padX: NameLineChipPad),
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.both"),  () => LookT.Spec && LookT.ClassName,   () => SetNameLine(true, true),   padX: NameLineChipPad),
             LookHelp("nameLine", "cfg.look.nameLine")),
         LookToggleRow("abilityScore", "settings.toggle.abilityScore", () => LookT.AbilityScore, v => LookT.AbilityScore = v),
         // Indented under Ability score as in the prototype, but NOT recessed when it is off: the row shows Illusion-Break
@@ -92,6 +95,8 @@ public sealed partial class Plugin
             LookChoice("common.medium", () => LookT.TileSize == TileSize.Medium, () => LookT.TileSize = TileSize.Medium, () => _lookView != 0),
             LookChoice("common.large",  () => LookT.TileSize == TileSize.Large,  () => LookT.TileSize = TileSize.Large,  () => _lookView != 0),
             LookHelp("tileSize", "settings.tile.size")));
+
+    private const float NameLineChipPad = 6f;
 
     private void SetNameLine(bool spec, bool cls) { LookT.Spec = spec; LookT.ClassName = cls; PersistToggles(); }
 
