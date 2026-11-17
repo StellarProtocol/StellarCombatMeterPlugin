@@ -25,7 +25,8 @@ public sealed partial class Plugin
     private IWindowControl _rowMenuWindow = null!;
     private readonly List<EntityMenuItem> _rowMenuItems = new(MaxRowMenuItems);
     private readonly bool[] _rowMenuDanger = new bool[MaxRowMenuItems];      // red label (Kick / Leave)
-    private readonly string[] _rowMenuIcon = NewTexts(MaxRowMenuItems);      // muted glyph ("" = empty slot)
+    private readonly byte[]?[] _rowMenuIconPng = new byte[]?[MaxRowMenuItems];   // cached PNG per slot (reference-stable)
+    private readonly List<EntityMenuItem> _rowMenuDangerScratch = new(MaxRowMenuItems);   // reused by the destructive-last sort
     private readonly HoverFlag[] _rowMenuHover = NewHoverFlags(MaxRowMenuItems);
     private string _rowMenuName = "";
     private object? _rowMenuCrest;
@@ -86,19 +87,32 @@ public sealed partial class Plugin
         ShowRowMenuAtCursor();
     }
 
-    // Once per open (never per refresh): mark the destructive items red and give them the "✕" glyph. Matched by the
-    // label the meter registered them with (Plugin.TeamActions.cs registers with _loc.T of these keys, re-registered on a
-    // language change, so the strings match). Other items keep an empty icon slot — the prototype's ✉ ♛ 🔇 ⚑ glyphs are
-    // emoji / symbol code points the game font can't be trusted to draw (SDL §6), so no glyph beats a blank box.
+    // Once per open (never per refresh): move the destructive items (Kick / Leave) to the end, keeping the order of the
+    // rest, then give every slot its red flag and icon. The meter's own items get their pre-drawn glyph at the exact size
+    // for the UI scale (Plugin.RowMenuIcons.cs); another plugin's item uses the IconPng it registered, else the generic dot.
+    // PNG glyphs, not text — the prototype's ✉ ♛ 🔇 ⚑ are code points the game font can't be trusted to draw (SDL §6).
     private void ClassifyRowMenuItems()
     {
-        string kick = _loc.T("menu.kickFromParty"), leave = _loc.T("menu.leaveParty");
+        _rowMenuDangerScratch.Clear();
+        int keep = 0;
+        for (int r = 0; r < _rowMenuItems.Count; r++)
+        {
+            var item = _rowMenuItems[r];
+            OwnRowMenuIconStem(item.Label, out bool danger);
+            if (danger) _rowMenuDangerScratch.Add(item); else _rowMenuItems[keep++] = item;
+        }
+        _rowMenuItems.RemoveRange(keep, _rowMenuItems.Count - keep);
+        _rowMenuItems.AddRange(_rowMenuDangerScratch);
+
+        int sizeIdx = RowMenuIconSizeIndex();
         for (int i = 0; i < MaxRowMenuItems; i++)
         {
             _rowMenuHover[i].On = false;   // a slot's hover never carries over to the next open
-            bool danger = i < _rowMenuItems.Count && (_rowMenuItems[i].Label == kick || _rowMenuItems[i].Label == leave);
+            if (i >= _rowMenuItems.Count) { _rowMenuDanger[i] = false; _rowMenuIconPng[i] = null; continue; }
+            var stem = OwnRowMenuIconStem(_rowMenuItems[i].Label, out bool danger);
             _rowMenuDanger[i] = danger;
-            _rowMenuIcon[i] = danger ? "✕" : "";
+            _rowMenuIconPng[i] = stem != null ? RowMenuIconPng(stem, sizeIdx)
+                               : _rowMenuItems[i].IconPng ?? RowMenuIconPng("generic", sizeIdx);
         }
     }
 
@@ -195,20 +209,23 @@ public sealed partial class Plugin
         return PopoverShell(RowMenuPad, RowMenuItemGap, rows);
     }
 
-    // One 28 px item: a rounded row whose fill shows only on hover (Tile), a 16 px muted icon slot, then the label
-    // (red for a destructive item). Labels are read from the item snapshot taken at open — no per-refresh formatting.
+    // One 28 px item: a rounded row whose fill shows only on hover (Tile), a 16 px icon, a 9 px gap, then the label (red
+    // for a destructive item). Icon + label are read from the snapshot taken at open — no per-refresh formatting. The icon
+    // is Live (reference compare per refresh, the arrays are cached) because one pooled slot shows a different item's
+    // glyph on each open. White glyphs are tinted Muted; the destructive ones are drawn red already, so no tint.
     private HudElement RowMenuItem(int idx)
     {
         var hover = _rowMenuHover[idx];
         ColorRgba Danger() => Readable(ProblemText, Menu.MenuBackground);
         return new BubbleElement(new SelectableElement(new RowElement(new HudElement[]
             {
-                new SpacerElement(0f, RowMenuItemH),
-                new TextElement(() => _rowMenuIcon[idx], Color: () => _rowMenuDanger[idx] ? Danger() : MutedColor(),
-                    Width: 16f, Align: TextAlign.Center, NoWrap: true),
+                new SpacerElement(0f, RowMenuItemH),   // zero-width height strut; Gap 0 so it adds no left inset
+                new ImageElement(() => _rowMenuIconPng[idx], (int)RowMenuIconUnits, (int)RowMenuIconUnits)
+                    { Live = true, Tint = () => _rowMenuDanger[idx] ? null : MutedColor() },
+                new SpacerElement(9f, 0f),
                 new CellElement(new TextElement(() => idx < _rowMenuItems.Count ? _rowMenuItems[idx].Label : "",
                     Color: () => _rowMenuDanger[idx] ? Danger() : TextColor(), NoWrap: true) { Ellipsize = true }, Weight: 1f),
-            }, Gap: 8f),
+            }, Gap: 0f),
             OnClick: () => InvokeRowMenuItem(idx)) { Bare = true, OnHover = over => hover.On = over })
         {
             FillColorFn = () => hover.On ? Fade(TileColor()) : Transparent,
