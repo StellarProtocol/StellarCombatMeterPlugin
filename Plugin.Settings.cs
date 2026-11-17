@@ -10,6 +10,8 @@ namespace Stellar.CombatMeter;
 // the CURRENT instance through LookT live, so one set of rows serves all three views (no rebuild on a switch).
 // Changes persist to the "combatmeter" config section; BuildRowData reads them on the next refresh tick.
 // Left column ROW + BATTLE IMAGINE, right column BARS + NUMBERS + METER WINDOW; every row ends in a "?".
+// ⚠️ Adding/removing a row here → update the row counts in Plugin.SettingsWindow.cs (LookLeftRows / LookRightRows): the
+// fixed window height is computed from them, and a column taller than that pushes the footer out of the window.
 public sealed partial class Plugin
 {
     private int _lookView;   // 0 = List, 1 = Party (5), 2 = Party (20) — the EDITING strip

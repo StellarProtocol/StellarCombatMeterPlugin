@@ -27,8 +27,20 @@ internal enum SettingsTab { Look = 0, Effects = 1, Archive = 2, Uploads = 3, Acc
 public sealed partial class Plugin
 {
     private const float SettingsWindowW = 720f;
-    private const float SettingsWindowH = 728f;
-    // 728 − 32 title bar − 2 × 12 GlassMenu body padding.
+    // The window is sized for the Look tab, the tallest tab (the only one with a footer under its columns). Every Look
+    // panel is SectionPanel rows → its height follows from the row counts (Plugin.Settings.cs, keep them in step):
+    // padding + caption + rows × (28 px row + 6 px gap), panels 8 px apart in the column.
+    private const int LookLeftPanels = 2, LookLeftRows = 8 + 4;           // ROW 8 · BATTLE IMAGINE 4
+    private const int LookRightPanels = 3, LookRightRows = 6 + 3 + 2;     // BARS 6 · NUMBERS 3 · METER WINDOW 2
+    private const float LookPanelChromeH = 2f * PanelPadY + CaptionHeight;
+    private const float LookColLeftH  = LookLeftPanels  * LookPanelChromeH + LookLeftRows  * (SettingRowH + PanelGap) + (LookLeftPanels  - 1) * SettingsGap;
+    private const float LookColRightH = LookRightPanels * LookPanelChromeH + LookRightRows * (SettingRowH + PanelGap) + (LookRightPanels - 1) * SettingsGap;
+    private const float LookColH = LookColLeftH > LookColRightH ? LookColLeftH : LookColRightH;
+    // 728 was laid out (and seen in game with the footer's bottom padding) when the taller Look column was 496 px (the
+    // left one). A column growing past that grows the window by the same amount: the Foreground row (c9af53d) made the
+    // right column 510 and clipped the footer at 728. Fixed height on every tab still (rule 14) — the others gain slack.
+    private const float SettingsWindowH = 728f + (LookColH - 496f);
+    // Window height − 32 title bar − 2 × 12 GlassMenu body padding.
     private const float SettingsBodyH = SettingsWindowH - 32f - 24f;
     // 720 − 24 padding − the 1 px height strut.
     private const float SettingsMainW = SettingsWindowW - 24f - 1f;
