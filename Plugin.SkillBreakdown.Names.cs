@@ -20,12 +20,13 @@ public sealed partial class Plugin
         [2031104] = "Lucky Strike (Lance)",   // BuffTable "Lance - Luck" / NameDesign 骑枪-幸运 — Wind Knight lance proc
     };
 
-    private readonly Dictionary<int, (string Name, bool BuffIcon)> _sourceNames = new();
+    // IconId: the id whose icon the row shows — the id itself, or the parent skill for a SkillEffectTable sub-hit.
+    private readonly Dictionary<int, (string Name, bool BuffIcon, int IconId)> _sourceNames = new();
     private bool _gameTextHooked;
 
     private string ResolveSkillName(int skillId) => SourceName(skillId).Name;
 
-    private (string Name, bool BuffIcon) SourceName(int id)
+    private (string Name, bool BuffIcon, int IconId) SourceName(int id)
     {
         if (_sourceNames.TryGetValue(id, out var cached)) return cached;
         var text = _services.GameText;
@@ -33,13 +34,22 @@ public sealed partial class Plugin
 
         var skill = _services.GameData.Combat.GetSkill(id);
         var buff = _services.GameData.Combat.GetBuff(id);
-        var name = SourceNameResolver.Resolve(id, skill?.Name, buff?.Name, SkillNameOverrides, text);
+        var name = SourceNameResolver.Resolve(id, skill?.Name, buff?.Name, SkillNameOverrides, text,
+            EffectParentSkillFn, GameSkillNameFn);   // neither skill nor buff → SkillEffectTable sub-hit → parent skill
+        int iconId = id;
+        if (skill == null && buff == null && SkillEffectParentSkill(id) is > 0 and var parent
+            && _services.GameData.Combat.GetSkill(parent) != null)
+            iconId = parent;
         if (name == null)
         {
             if (text.IsReady) LogUnresolvedSkillName(id);   // before Ready every unnamed buff would log
-            name = "#" + id;
+            var raw = (Name: "#" + id, BuffIcon: buff != null && skill == null, IconId: id);
+            // SkillEffectTable not loaded yet: don't latch "#id" for a non-skill/non-buff id — the next rebuild retries.
+            if (skill == null && buff == null && !SkillEffectTableReady) return raw;
+            _sourceNames[id] = raw;
+            return raw;
         }
-        var entry = (name, skill == null && buff != null);
+        var entry = (name, skill == null && buff != null, iconId);
         _sourceNames[id] = entry;
         return entry;
     }

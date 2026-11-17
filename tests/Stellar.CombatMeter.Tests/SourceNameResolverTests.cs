@@ -76,6 +76,49 @@ public sealed class SourceNameResolverTests
         Assert.Null(SourceNameResolver.Resolve(998, null, null, Overrides, Text()));
     }
 
+    // SkillEffectTable sub-hits (230501 → SkillId 2305, 230401 → 2304) — neither skill nor buff ids.
+    private static readonly Func<int, int> EffectParent = id => id switch { 230501 => 2305, 230401 => 2304, 230601 => 2234, _ => 0 };
+    private static readonly Func<int, string?> GameSkill = id => id switch
+    {
+        2305 => "场地标记01",          // placeholder skill name → English design name
+        2304 => "灵魂乐手ATK_04",      // CN-only name the English table knows as unnamed
+        2234 => "Radiance Barrage",
+        _ => null,
+    };
+
+    private static FakeGameText EffectText()
+    {
+        var t = Text();
+        t.Rows[(GameTextKind.Skill, 2305)] = (null, "Soul Musician Air Attack");
+        t.Rows[(GameTextKind.Skill, 2304)] = (null, "Soul Musician ATK_04");
+        return t;
+    }
+
+    [Theory]
+    [InlineData(230501, "Soul Musician Air Attack (230501)")]
+    [InlineData(230401, "Soul Musician ATK_04 (230401)")]
+    [InlineData(230601, "Radiance Barrage (230601)")]   // a real parent name still carries the sub-hit's id
+    public void SkillEffectId_ShowsParentSkillNameWithOriginalId(int id, string expected)
+        => Assert.Equal(expected, SourceNameResolver.Resolve(id, null, null, Overrides, EffectText(), EffectParent, GameSkill));
+
+    [Fact]
+    public void UnknownId_StillNull_WithEffectLookup()
+    {
+        Assert.Null(SourceNameResolver.Resolve(998, null, null, Overrides, EffectText(), EffectParent, GameSkill));
+        Assert.Null(SourceNameResolver.Resolve(230501, null, null, Overrides, EffectText()));   // no lookup passed
+        Assert.Null(SourceNameResolver.Resolve(230501, null, null, Overrides, EffectText(), _ => 9999, GameSkill)); // parent unknown
+    }
+
+    [Fact]
+    public void EffectLookup_DoesNotChangeRealSkillOrBuffNames()
+    {
+        var t = EffectText();
+        Assert.Equal("Burn", SourceNameResolver.Resolve(4501, null, "Burn", Overrides, t, EffectParent, GameSkill));
+        Assert.Equal("Radiance Barrage", SourceNameResolver.Resolve(2234, "Radiance Barrage", null, Overrides, t, EffectParent, GameSkill));
+        Assert.Equal("Firmament Fall-child buff (2203291)",
+            SourceNameResolver.Resolve(2203291, null, "Buff 2203291", Overrides, t, EffectParent, GameSkill));
+    }
+
     [Fact]
     public void NotReady_UnnamedBuffFallsThrough_RealNameStillWins()
     {

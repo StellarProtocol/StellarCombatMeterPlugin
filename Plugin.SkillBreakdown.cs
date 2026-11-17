@@ -47,6 +47,7 @@ public sealed partial class Plugin
         public string Label, Sub, Total, Rate, Hits;   // Label = "#1 Skill"
         public float Share;
         public int SkillId;
+        public int IconId;      // SkillId, or the parent skill for a SkillEffectTable sub-hit (SourceName)
         public bool BuffIcon;   // id is a buff, not a skill → LoadBuffIcon (SourceName)
     }
 
@@ -137,7 +138,7 @@ public sealed partial class Plugin
     private object? SkillIconTex(int slot)
     {
         int i = SkillRowAt(slot);
-        int id = i >= 0 ? _skillRows[i].SkillId : 0;
+        int id = i >= 0 ? _skillRows[i].IconId : 0;
         if (id <= 0) return null;
         // A buff-sourced row (sub-buff, damage zone, proc) has no skill row → its icon is the buff's.
         return _skillRows[i].BuffIcon
@@ -222,6 +223,7 @@ public sealed partial class Plugin
             {
                 Label = $"#{i + 1} {ResolveSkillName(rows[i].Key)}",
                 BuffIcon = SourceName(rows[i].Key).BuffIcon,
+                IconId = SourceName(rows[i].Key).IconId,
                 Sub = _loc.TFormat("skill.sub.share", pct, critPct, luckPct),
                 Total = FormatAmount(value),
                 Rate = FormatAmount(ComputeArchivedDps(value, durationMs)),
@@ -246,6 +248,7 @@ public sealed partial class Plugin
             {
                 Label = $"#{i + 1} {ResolveSkillName(r.SkillId)}",
                 BuffIcon = SourceName(r.SkillId).BuffIcon,
+                IconId = SourceName(r.SkillId).IconId,
                 Sub = _loc.TFormat("skill.sub.takenShare", sum > 0 ? 100f * r.Total / sum : 0f, FormatAmount(r.TopHit)),
                 Total = FormatAmount(r.Total),
                 Rate = FormatAmount(ComputeArchivedDps(r.Total, durationMs)),
