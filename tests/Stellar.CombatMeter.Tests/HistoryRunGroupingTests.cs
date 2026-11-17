@@ -187,6 +187,31 @@ public class HistoryRunGroupingTests
         seen.Sort();
         Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, seen);
     }
+
+    // REGRESSION (3.0.0 hub, 2026-11-17): the hub + ⋯ History cards counted ARCHIVES (_history.Count, which
+    // retention caps), so a full history read "100 runs saved" while the History header said "19 runs saved".
+    // The cards now use CountRuns, which must equal the header's grouped-row count for every shape: multi-archive
+    // runs, a reused levelUuid split by its start, and field fights (uuid 0) that never group.
+    [Fact]
+    public void CountRuns_matches_the_grouped_row_count_not_the_archive_count()
+    {
+        const long reused = 31250736096477184L;
+        var history = new List<Plugin.EncounterHistoryEntry>
+        {
+            EntryS(reused, 1786724439000L, 4000, 1_000),   // run A fight
+            EntryS(reused, 1786724439000L, 0,    6_000),   // run A tail
+            EntryS(reused, 1786724439000L, 0,    7_000),   // run A scene-exit tail
+            Entry(0, 3000, 20_000),                        // field fight
+            Entry(0, 2000, 30_000),                        // another field fight (must not merge)
+            EntryS(reused, 1786726952000L, 5000, 60_000),  // run B (reused uuid, later start)
+            EntryS(reused, 1786726952000L, 0,    66_000),  // run B tail
+        };
+
+        Assert.Equal(4, Plugin.CountRuns(history));
+        Assert.Equal(Plugin.GroupByRun(history).Count, Plugin.CountRuns(history));
+        Assert.NotEqual(history.Count, Plugin.CountRuns(history));
+        Assert.Equal(0, Plugin.CountRuns(new List<Plugin.EncounterHistoryEntry>()));
+    }
 }
 
 /// <summary>

@@ -130,10 +130,7 @@ public sealed partial class Plugin
         var groups = new Dictionary<(long uuid, long startS), List<int>>();
         for (var i = history.Count - 1; i >= 0; i--)      // newest first, so runs come out newest first
         {
-            var uuid = history[i].LevelUuid;
-            // (levelUuid, dungeonStartMs/1000) — the server's run identity; a reused levelUuid stays split
-            // by its per-run start. Field fight (uuid==0): unique negative key => never grouped.
-            var key = uuid != 0 ? (uuid, history[i].DungeonStartMs / 1000) : (-(long)(i + 1), 0L);
+            var key = RunKey(history, i);
             if (!groups.TryGetValue(key, out var list)) { list = new List<int>(); groups[key] = list; order.Add(key); }
             list.Add(i);
         }
@@ -145,6 +142,45 @@ public sealed partial class Plugin
             runs.Add(new RunGroup(PrimarySegment(history, idxs), idxs.ToArray()));
         }
         return runs;
+    }
+
+    // (levelUuid, dungeonStartMs/1000) — the server's run identity; a reused levelUuid stays split by its per-run start.
+    // Field fight (uuid==0): unique negative key => never grouped. Shared by GroupByRun and CountRuns so the hub /
+    // ⋯ card count can never drift from the History list.
+    private static (long uuid, long startS) RunKey(IReadOnlyList<EncounterHistoryEntry> history, int i)
+    {
+        var uuid = history[i].LevelUuid;
+        return uuid != 0 ? (uuid, history[i].DungeonStartMs / 1000) : (-(long)(i + 1), 0L);
+    }
+
+    /// <summary>Number of runs <see cref="GroupByRun"/> would produce, without building the groups — the
+    /// "N runs saved" figure the History header shows.</summary>
+    internal static int CountRuns(IReadOnlyList<EncounterHistoryEntry> history)
+    {
+        var seen = new HashSet<(long uuid, long startS)>();
+        for (var i = 0; i < history.Count; i++) seen.Add(RunKey(history, i));
+        return seen.Count;
+    }
+
+    // ----- saved-run count for the hub card + the HUD ⋯ History card -----
+    // Those cards used _history.Count — the ARCHIVE count, which is what retention caps — so a full history read
+    // "100 runs saved" while the History header (grouped runs) said "19 runs saved · keeps 100". Both now show the
+    // grouped run count. Polled every refresh, so it re-counts only when the history changed: the same
+    // (count, first, last) dirty key as RebuildHistorySnapshots covers archive (new last), eviction (new first),
+    // delete (count) and clear (count 0) — no allocation on an unchanged poll (Plugin-Performance-Rules §2).
+    private int _srCount = -1, _savedRunCount;
+    private EncounterHistoryEntry? _srFirst, _srLast;
+
+    private int SavedRunCount()
+    {
+        var first = _history.Count > 0 ? _history[0] : null;
+        var last  = _history.Count > 0 ? _history[^1] : null;
+        if (_history.Count != _srCount || !ReferenceEquals(first, _srFirst) || !ReferenceEquals(last, _srLast))
+        {
+            _savedRunCount = CountRuns(_history);
+            _srCount = _history.Count; _srFirst = first; _srLast = last;
+        }
+        return _savedRunCount;
     }
 
     /// <summary>The archive a grouped row opens: the one with the longest COMBAT (damage) span, i.e. the

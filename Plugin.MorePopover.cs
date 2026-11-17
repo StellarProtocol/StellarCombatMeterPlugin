@@ -62,7 +62,13 @@ public sealed partial class Plugin
     });
 
     private readonly FmtCache _runsSavedFmt = new();
-    private string HistoryCardStatus() => _runsSavedFmt.Get(_loc.T(PluralKey(_history.Count, "hud.more.runsSavedOne", "hud.more.runsSaved")), _history.Count);
+    // Grouped RUN count (SavedRunCount, Plugin.HistoryWindow.Runs.cs) — the History header's "N runs saved", not the
+    // archive count retention caps. Shared by this card and the hub's History card.
+    private string HistoryCardStatus()
+    {
+        var n = SavedRunCount();
+        return _runsSavedFmt.Get(_loc.T(PluralKey(n, "hud.more.runsSavedOne", "hud.more.runsSaved")), n);
+    }
 
     // ── building blocks ─────────────────────────────────────────────────────────────────────────────────────────────
     // A 56 × 24 choice chip with a centred label (the PARTY SIZE "5" / "20"): ChoiceChip hugs its label, which would make
