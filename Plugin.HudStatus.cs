@@ -38,7 +38,7 @@ public sealed partial class Plugin
             return _archivedFbText;
         }
         var kind = CurrentHudStatusKind();
-        int secs = kind is HudStatusKind.Combat or HudStatusKind.Paused ? (int)EncounterElapsedSeconds() : 0;
+        int secs = kind is HudStatusKind.Combat or HudStatusKind.Paused ? HeaderElapsedSeconds() : 0;
         int players = kind is HudStatusKind.Combat or HudStatusKind.Raid ? HudPlayerCount() : 0;
         int key = (int)kind | (players & 0xff) << 2 | secs << 10;
         string lang = _loc.Language;
@@ -53,6 +53,40 @@ public sealed partial class Plugin
             _                    => "",
         };
         return _hudStatusText;
+    }
+
+    // The header's "m:ss in combat" is a WALL clock for the open encounter: it keeps ticking between hits
+    // (user: "why does it freeze from the last hit?"). It deliberately does NOT reuse
+    // EncounterElapsedSeconds() (last hit − start): that one stays the DPS-row divisor and the archive /
+    // upload durations are separate again (ComputeDurationMs) — only this status line changes.
+    // While paused it holds the value seen when the pause began. TogglePause lives in Plugin.Header.cs, so
+    // the hold is latched lazily on the first paused poll (≤100 ms late at the ~10 Hz refresh) rather than
+    // hooked there. On resume it jumps to the live value — the encounter (and the DPS window) kept running.
+    private int _hudPausedSecs = -1;   // -1 = not latched
+
+    private int HeaderElapsedSeconds()
+    {
+        // Drop the hold on resume AND when the encounter closes (archive/reset while paused), so the next
+        // encounter never inherits a stale frozen value.
+        if (!_paused || !_combatActive) _hudPausedSecs = -1;
+        else if (_hudPausedSecs >= 0) return _hudPausedSecs;
+        // ServerNowMs: the SAME clock domain the encounter stamps are compared against elsewhere
+        // (TickAutoArchiveTriggers: now − _lastDamageMs; the manual-start path stamps _combatStartMs from it).
+        long ms = HeaderElapsedMs(_combatActive, _combatStartMs, _lastDamageMs, _services.CombatSnapshot.ServerNowMs);
+        int secs = (int)(ms / 1000);
+        if (_paused && _combatActive) _hudPausedSecs = secs;
+        return secs;
+    }
+
+    /// <summary>Pure: the header timer in ms = now − start while the encounter is open, never below the
+    /// last-hit span (so it can't run backwards vs. the old value if ServerNowMs lags an event timestamp,
+    /// or reads 0 before the server clock syncs). 0 when no encounter is open.</summary>
+    internal static long HeaderElapsedMs(bool combatActive, long startMs, long lastDamageMs, long nowMs)
+    {
+        if (!combatActive || startMs == 0) return 0;
+        long end = lastDamageMs > startMs ? lastDamageMs : startMs;
+        if (nowMs > end) end = nowMs;
+        return end - startMs;
     }
 
     // m:ss (minutes keep counting past an hour: "61:05"). Only called when the shown second changes.
