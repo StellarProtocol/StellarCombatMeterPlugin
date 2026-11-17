@@ -9,7 +9,7 @@ using Resolution = Stellar.Abstractions.Domain.Resolution;
 namespace Stellar.CombatMeter;
 
 // Right-click row context menu — a cursor-positioned house popover (approved redesign 2026-11-17 §2): 200 wide, caption =
-// class crest + bold name, then 28 px rounded item rows (hover = Tile fill) with a muted 16 px icon slot; destructive
+// class crest + bold name, then 28 px rounded item rows (hover = Tile fill) with a 16 px icon in the label's colour; destructive
 // items (Kick from Party, Leave Party) in red #ff8a8b. Items other plugins contribute via IEntityContextMenu render in the
 // same style. Dismisses on click-outside or Escape (no Close button); clicking an item runs it and closes.
 public sealed partial class Plugin
@@ -209,23 +209,26 @@ public sealed partial class Plugin
         return PopoverShell(RowMenuPad, RowMenuItemGap, rows);
     }
 
-    // One 28 px item: a rounded row whose fill shows only on hover (Tile), a 16 px icon, a 9 px gap, then the label (red
-    // for a destructive item). Icon + label are read from the snapshot taken at open — no per-refresh formatting. The icon
-    // is Live (reference compare per refresh, the arrays are cached) because one pooled slot shows a different item's
-    // glyph on each open. White glyphs are tinted Muted; the destructive ones are drawn red already, so no tint.
+    // One 28 px item: a rounded row whose fill shows only on hover (Tile), 10 px pad, a 16 px icon, a 9 px gap, then the
+    // label (red for a destructive item). Icon + label are read from the snapshot taken at open — no per-refresh
+    // formatting. The icon is Live (reference compare per refresh, the arrays are cached) because one pooled slot shows a
+    // different item's glyph on each open. White glyphs (ours, the generic dot, and other plugins' IconPng — the
+    // IEntityContextMenu contract is a flat white glyph) are tinted the LABEL's Text colour, so the icon is as bright as
+    // its label and tracks the theme; the destructive ones are drawn red already, so no tint.
+    // Gap MUST be 0.01f, not 0: RowElement Gap 0 means the DEFAULT 8 px RowGap, which put 8 px of extra left inset and
+    // 8 + 9 + 8 = 25 px between icon and label. The 9 px gap spacer also carries the 28 px row height (no separate strut).
     private HudElement RowMenuItem(int idx)
     {
         var hover = _rowMenuHover[idx];
         ColorRgba Danger() => Readable(ProblemText, Menu.MenuBackground);
         return new BubbleElement(new SelectableElement(new RowElement(new HudElement[]
             {
-                new SpacerElement(0f, RowMenuItemH),   // zero-width height strut; Gap 0 so it adds no left inset
                 new ImageElement(() => _rowMenuIconPng[idx], (int)RowMenuIconUnits, (int)RowMenuIconUnits)
-                    { Live = true, Tint = () => _rowMenuDanger[idx] ? null : MutedColor() },
-                new SpacerElement(9f, 0f),
+                    { Live = true, Tint = () => _rowMenuDanger[idx] ? null : TextColor() },
+                new SpacerElement(9f, RowMenuItemH),   // the icon→label gap + the row's 28 px height strut
                 new CellElement(new TextElement(() => idx < _rowMenuItems.Count ? _rowMenuItems[idx].Label : "",
                     Color: () => _rowMenuDanger[idx] ? Danger() : TextColor(), NoWrap: true) { Ellipsize = true }, Weight: 1f),
-            }, Gap: 0f),
+            }, Gap: 0.01f),
             OnClick: () => InvokeRowMenuItem(idx)) { Bare = true, OnHover = over => hover.On = over })
         {
             FillColorFn = () => hover.On ? Fade(TileColor()) : Transparent,
