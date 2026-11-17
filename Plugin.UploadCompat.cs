@@ -58,9 +58,9 @@ public sealed partial class Plugin
         if (minPluginVer is null) return;
         _uploadFloorMin = minPluginVer;
         if (!UploadCompat.IsBelowFloor(CurrentPluginVersion, minPluginVer)) return;
-        _compatMessage = string.IsNullOrEmpty(message)
-            ? $"Your CombatMeter is out of date — update via the Stellar launcher to keep uploading your runs (min {minPluginVer})."
-            : message;
+        // An empty server message leaves this null: the banner / settings line then show the LOCALIZED default
+        // (hud.banner.outOfDate), resolved on the main thread — this callback runs on the thread pool.
+        _compatMessage = string.IsNullOrEmpty(message) ? null : message;
         _uploadBelowFloor = true;   // set LAST: the banner reads this as the ready flag
         _services.Log.Warning(
             $"[CombatMeter.SP1] plugin {CurrentPluginVersion ?? "?"} is below the server upload floor {minPluginVer} " +
@@ -78,9 +78,23 @@ public sealed partial class Plugin
     /// on the next launch, and the sticky settings line + the withhold stay regardless.</summary>
     internal void DismissCompatNotice() => _compatDismissed = true;
 
-    /// <summary>The warning text for the meter banner + the settings line (server-owned copy, ⚠-prefixed).</summary>
-    internal string UploadFloorNoticeLine =>
-        "⚠ " + (_compatMessage
-            ?? "This CombatMeter is out of date — update via the launcher to keep uploading"
-               + (_uploadFloorMin is { } m ? $" (needs {m}+)." : "."));
+    /// <summary>The meter banner text: the server's own message when it sent one, else the localized default. No ⚠
+    /// prefix — the amber strip already reads as a warning, and a BOLD ⚠ is an unproven glyph (SDL §6). No allocation
+    /// per poll.</summary>
+    internal string CompatBannerText() => _compatMessage ?? _loc.T("hud.banner.outOfDate");
+
+    /// <summary>The ⚠-prefixed warning line for the upload settings — composed only when its source string changes (a
+    /// new server message or a language switch), never per refresh.</summary>
+    internal string UploadFloorNoticeLine
+    {
+        get
+        {
+            string src = CompatBannerText();
+            if (!ReferenceEquals(src, _noticeLineSrc)) { _noticeLineSrc = src; _noticeLine = "⚠ " + src; }
+            return _noticeLine;
+        }
+    }
+
+    private string? _noticeLineSrc;
+    private string _noticeLine = "";
 }

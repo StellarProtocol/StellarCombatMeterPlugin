@@ -16,6 +16,7 @@ public sealed partial class Plugin
         DrainSocialCatchup();
         EnsureReadyCheckSubscribed();
         TickRowMenuPlace();
+        TickMorePopover();      // Plugin.MorePopover.cs — re-assert the anchored rect after remount; close with the meter
         TickDebuffTipPlace();   // Plugin.DebuffTooltip.cs — re-assert cursor rect after destroy-on-hide remount
         PumpClassIcons();
         PumpDungeonIcon();

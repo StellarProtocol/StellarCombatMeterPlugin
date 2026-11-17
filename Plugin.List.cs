@@ -15,7 +15,10 @@ public sealed partial class Plugin
     private readonly List<MeterRowData> _listRows = new(MaxListRows);
     private readonly Dictionary<EntityId, float> _barAnim = new();
     private bool _listEmpty = true;
-    private string _listEmptyCaptionKey = "list.empty.waiting";   // catalog key; resolved via _loc at draw time so it live-switches
+    private string _listEmptyCaptionKey = EmptyWaitingKey;   // catalog key; resolved via _loc at draw time so it live-switches
+    private const string EmptyWaitingKey = "hud.empty.waiting";
+    // Gap between meter rows (prototype ~3 px). The rounded row element sets no gap of its own.
+    private const float MeterRowGap = 3f;
 
     // Per-mode element toggle instances — lazy-loaded from config so they never touch the Plugin.cs constructor.
     // Task 8 settings panel will expose accessors to mutate/persist these.
@@ -39,24 +42,31 @@ public sealed partial class Plugin
         for (var i = 0; i < MaxListRows; i++)
         {
             var idx = i;
+            // fw 2.33.0 opt-in house-style row (rounded tile, accent self ring, rounded spine / bar / effect cells).
             slots[i] = new MeterRowElement(
                 () => idx < _listRows.Count ? _listRows[idx] : default,
-                OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default));
+                OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default))
+                { Style = MeterRowStyle.Rounded };
         }
-        // Empty → caption; else the scroll. Fill:true so the scroll grows with the (resizable) window height.
+        // Empty → a recessed box that fills the list area (the meter keeps its size); else the scroll. Fill:true so
+        // both grow with the (resizable) window height.
         // Prebuild (fw 2.30.0): the rows' branch is built in the background while the list is still empty (the window
         // pre-build's fill, or an open before combat), so the first combat tick doesn't build 20 meter rows in one frame.
         return new ConditionalElement(() => _listEmpty,
-            new TextElement(() => _loc.T(_listEmptyCaptionKey), MutedCol),
-            new ScrollElement(new ListElement(() => _listRows.Count, slots), ListScrollHeight),
+            EmptyStateBox(() => _loc.T(_listEmptyCaptionKey), ListEmptyLine),
+            new ScrollElement(new ListElement(() => _listRows.Count, slots) { Gap = MeterRowGap }, ListScrollHeight),
             Fill: true) { Prebuild = true, PrebuildName = "cm.listRows" };
     }
+
+    // Only "Waiting for combat" carries a second line ("The meter starts on the first hit.").
+    private string ListEmptyLine()
+        => ReferenceEquals(_listEmptyCaptionKey, EmptyWaitingKey) ? _loc.T("hud.empty.waitingLine") : "";
 
     private void RebuildListRows()
     {
         _listRows.Clear();
 
-        if (_stats.Count == 0) { _listEmpty = true; _listEmptyCaptionKey = "list.empty.waiting"; return; }
+        if (_stats.Count == 0) { _listEmpty = true; _listEmptyCaptionKey = EmptyWaitingKey; return; }
 
         double elapsed = EncounterElapsedSeconds();
         var rows = _agg.Rows(_metric, elapsed);
@@ -71,14 +81,14 @@ public sealed partial class Plugin
             visible++;
         }
         _listEmpty = visible == 0;
-        if (_listEmpty) _listEmptyCaptionKey = "list.empty.noScope";
+        if (_listEmpty) _listEmptyCaptionKey = "hud.empty.noScope";
     }
 
     private string EmptyMetricCaptionKey() => _metric switch
     {
-        Metric.Hps   => "list.empty.noHealing",
-        Metric.Taken => "list.empty.noTaken",
-        _            => "list.empty.noCombat",
+        Metric.Hps   => "hud.empty.noHealing",
+        Metric.Taken => "hud.empty.noTaken",
+        _            => "hud.empty.noCombat",
     };
 
     // Map an aggregator MeterRow → the framework MeterRowData (the renderer-neutral row snapshot).
@@ -137,7 +147,7 @@ public sealed partial class Plugin
         return new MeterRowData
         {
             Id               = id,
-            Rank             = $"{rank}.",
+            Rank             = SmallNumber(rank),   // cached "1".."100" (no dot in the rounded row, prototype 1a)
             Name             = label,
             ClassName        = vis.ClassName ? GetClassLine(id) : "",
             Spec             = vis.Spec ? SpecLine(id) : "",
@@ -164,7 +174,7 @@ public sealed partial class Plugin
             // Shield on the MAIN bar mirrors the spine's shield, but only in HP mode (0 in DPS mode). Same
             // shield/maxHp value clamped to the bar's HP fraction (owner 2026-09-24).
             BarShieldFraction = toggles.MainBarIsHp ? HpShieldFractionFor(id, frac) : 0f,
-            SharePercent     = $"{row.Share * 100d:F0}%",
+            SharePercent     = SharePercentLabel(row.Share),   // cached "0%".."100%"
             IsSelf           = id == self,
             IsLeader         = IsPartyLeader(id),
             Offline          = IsOffline(id),

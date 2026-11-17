@@ -11,6 +11,7 @@ public sealed partial class Plugin
 {
     private static readonly int GridSize = MeterAggregator.Groups * MeterAggregator.SlotsPerGroup;
     private readonly MeterRowData[] _gridRows = new MeterRowData[GridSize];
+    private int _gridOccupied;   // occupied slots in the last snapshot (the header status "20 players")
     private readonly List<PartyMember> _focusRoster = new();
 
     // The grid auto-follows the live party size: a 20-player raid renders the 2×2 four-group grid; a 5-player
@@ -49,19 +50,21 @@ public sealed partial class Plugin
     private HudElement BuildGroupColumn(int group)
     {
         var children = new HudElement[1 + MeterAggregator.SlotsPerGroup];
-        children[0] = new TextElement(() => _loc.TFormat("partyFocus.group", group + 1), MutedCol, Emphasis: true);
+        children[0] = BuildGroupCaption(group);
         for (var slot = 0; slot < MeterAggregator.SlotsPerGroup; slot++)
         {
             var idx = group * MeterAggregator.SlotsPerGroup + slot;
             children[slot + 1] = new DragSlotElement(
-                new MeterRowElement(() => _gridRows[idx], OnRightClick: () => OnGridSlotRightClick(idx)),
+                // fw 2.33.0 opt-in house-style row; empty slots render as recessed tiles (MeterRowData.IsEmptySlot).
+                new MeterRowElement(() => _gridRows[idx], OnRightClick: () => OnGridSlotRightClick(idx))
+                    { Style = MeterRowStyle.Rounded },
                 Key: idx,
                 OnDrop: OnGridDrop,
                 // Leader-only, Raid20-only, and only an OCCUPIED slot is a drag source (an empty "—" slot
                 // would otherwise spawn a ghost of a blank card). Empty slots remain valid drop TARGETS.
                 CanDrag: () => IsRaid20View && _services.PartySnapshot.IsLeader && _gridRows[idx].Id.IsPlayer);
         }
-        return new ColumnElement(children, Gap: 3f);
+        return new ColumnElement(children, Gap: MeterRowGap);
     }
 
     private void RebuildPartyFocusRows()
@@ -71,20 +74,32 @@ public sealed partial class Plugin
         // Player-tile size for the active party mode — applied to empty/absent slots too so every row in the
         // grid renders at the same height (owner 2026-09-24). Occupied rows read it via BuildRowData.
         float tilePx = MeterElementToggles.TileSizePx((IsRaid20View ? Party20Toggles : Party5Toggles).TileSize);
+        // Empty-slot labels: catalog lookups (cached strings); the invite hint only for the leader of an existing party
+        // (the right-click invite is leader-only, OnGridSlotRightClick).
+        string emptyName = _loc.T("hud.slot.empty");
+        string? emptyHint = PartyExists && _services.PartySnapshot.IsLeader ? _loc.T("hud.slot.inviteHint") : null;
+        int occupied = 0;
         for (var i = 0; i < GridSize; i++)
-            _gridRows[i] = grid[i] is { } row ? BuildRowData(row, i + 1, elapsed, collapse: false) : EmptySlot(i + 1, tilePx);
+        {
+            if (grid[i] is { } row) { _gridRows[i] = BuildRowData(row, i + 1, elapsed, collapse: false); occupied++; }
+            else _gridRows[i] = EmptySlot(i + 1, tilePx, emptyName, emptyHint);
+        }
+        _gridOccupied = occupied;
+        CountGroups();
     }
 
-    // Faint full-height placeholder for an unoccupied raid slot ("N. —", no bar/spine). Carries the same tile
-    // size (DebuffCellSize) as the occupied rows so its height matches; no player ⇒ no debuff block (ShowDebuffs off).
-    private static MeterRowData EmptySlot(int number, float tilePx) => new MeterRowData
+    // Placeholder for an unoccupied slot: the rounded row draws IsEmptySlot as a recessed tile with a faint "N  Empty"
+    // and the optional right-aligned hint (no bar/spine). Carries the same tile size (DebuffCellSize) as the occupied
+    // rows so its height matches; no player ⇒ no debuff block (ShowDebuffs off). Rank = the slot number in its group.
+    private static MeterRowData EmptySlot(int number, float tilePx, string name, string? hint) => new MeterRowData
     {
-        Rank = $"{number}.", Name = "—", Spec = "", ClassName = "", AbilityScore = "",
+        IsEmptySlot = true, EmptyHint = hint,
+        Rank = SmallNumber(number), Name = name, Spec = "", ClassName = "", AbilityScore = "",
         PrimaryValue = "", SecondaryValue = "", SharePercent = "",
         RoleColor = new ColorRgba(0f, 0f, 0f, 0f), HpColor = new ColorRgba(0f, 0f, 0f, 0f),
         HpFraction = 0f, BarFraction = 0f, CrestTexture = null, CrestUv = new UvRect(0f, 0f, 1f, 1f),
         IsSelf = false, Offline = false, ShowSpec = false, ShowSecondary = false, ShowShare = false,
-        ShowDebuffs = false, DebuffCellSize = tilePx,
+        ShowRank = true, ShowDebuffs = false, DebuffCellSize = tilePx,
     };
 
     private void OnGridSlotRightClick(int idx)

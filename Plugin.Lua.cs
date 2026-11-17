@@ -11,10 +11,9 @@ public sealed partial class Plugin
     private const float ReadyCheckCooldownS = 25f;
     private float _readyCheckCooldown;
 
+    // The recessed header button's seconds-left label — a cached number string, polled every refresh (no allocation).
     internal string ReadyCheckLabel()
-        => _readyCheckCooldown > 0f
-            ? $"{(int)Math.Ceiling(_readyCheckCooldown)}"
-            : "";
+        => _readyCheckCooldown > 0f ? SmallNumber((int)Math.Ceiling(_readyCheckCooldown)) : "";
 
     private void TickReadyCheckCooldown(float dt)
     {

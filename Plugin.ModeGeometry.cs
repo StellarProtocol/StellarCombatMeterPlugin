@@ -27,7 +27,7 @@ public sealed partial class Plugin
     }
 
     // Party-focus window height: base grid height (20-player 4×5 vs 5-player single group), SCALED for the
-    // current player-tile size, + any open inline menu (so the grid is never squeezed). Follows the live party
+    // current player-tile size (so the grid is never squeezed). Follows the live party
     // size; RefreshPartyFocusHeight re-applies it. The per-row growth mirrors the framework row-height formula
     // (max(MeterRowHeight 48, DebuffBlockPx + 6); DebuffBlockPx = tilePx*2 + gap 2) so a Medium/Large tile
     // auto-fits — owner 2026-09-24: a resized party window "wasn't remembered" because this height was a fixed
@@ -39,12 +39,12 @@ public sealed partial class Plugin
         float tilePx = MeterElementToggles.TileSizePx((IsRaid20View ? Party20Toggles : Party5Toggles).TileSize);
         float extraPerRow = tilePx * 2f + 8f - 48f;   // 0 at Small (48px rows), +12 Medium, +24 Large
         if (extraPerRow < 0f) extraPerRow = 0f;
-        return (IsRaid20View ? PartyFocusH : PartyFocus5H)
-               + rows * extraPerRow
-               + (_mainMenuOpen ? MainMenuPanelH : 0f);
+        // No menu term any more: the old ▾ inline menu grew the HUD by 72 px; its contents now live in the ⋯ popover, so
+        // the HUD height depends only on the party size and tile size (approved redesign §1).
+        return (IsRaid20View ? PartyFocusH : PartyFocus5H) + rows * extraPerRow;
     }
 
-    // Re-apply the party-focus window height in place (keep current pos + width) when a menu opens/closes.
+    // Re-apply the party-focus window height in place (keep current pos + width) when the party size changes.
     // Uses the LIVE rect, not the remembered _partyX/_partyY, so toggling a menu never teleports a
     // window the user has dragged. No-op outside party-focus (List mode reflows via its Fill scroll).
     private void RefreshPartyFocusHeight()

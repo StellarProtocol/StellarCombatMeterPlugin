@@ -22,12 +22,9 @@ public sealed partial class Plugin : IStellarPlugin
     private const float ListHeight = 360f;   // seeds ~6 visible rows; user-resizable via the ↘ grip
     private const float PartyFocusW = 480f;
     private const float PartyFocusH = 612f;   // 20-player: header + 4×5 grid (menus closed)
-    private const float PartyFocus5H = 330f;  // 5-player: header + single group of 5 (menus closed) — verify in-game
-    // Party-focus is a fixed grid (no Fill/scroll), so the inline Scope/Pause menu (▾) and the metric
-    // dropdown push the grid past the window bottom → overlap. Grow the window by the open panel's height
-    // instead of squeezing the grid. Heights measured from the rendered panels (main ≈69px); rounded up so
-    // a worst case leaves a tiny bottom gap rather than overlapping. Menus are mutually exclusive.
-    private const float MainMenuPanelH   = 72f;   // Scope/party-size row + separator + Pause/Archive/History row + spacer
+    // 5-player: 12 pad + 28 header + 6 gap + 20 caption + 3 + 5 × 48 rows + 4 × 3 gaps + 12 pad = 333 (redesign §1;
+    // was 330 with the old button header) — verify in-game.
+    private const float PartyFocus5H = 334f;
 
     private readonly IPluginServices _services;
     private readonly ILocalization _loc;   // plugin-scoped UI-text resolver (framework 2.1.0); reads only, never sets the language
@@ -180,7 +177,9 @@ public sealed partial class Plugin : IStellarPlugin
         _checkmarkPng    = BuildCheckmarkPng();          // flat-white checkmark for the Ready Check header button
         _megaphonePng    = BuildMegaphonePng();          // flat-white megaphone for the Convene header button
         _countdownPng    = BuildCountdownPng();          // flat-white stopwatch for the Countdown header button
-        _settingsGearPng = LoadSettingsGearPng();        // embedded gear icon for the header Settings button
+        _settingsGearPng = LoadSettingsGearPng();        // embedded gear icon for the ⋯ popover's Settings card + launcher tile
+        _resetPng        = BuildResetPng();              // flat-white ↺ for the header Reset button (Plugin.HudIcons.cs)
+        _morePng         = BuildMorePng();               // flat-white ⋯ for the header More button
 
         _prefs = _services.Config.GetSection("combatmeter");
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
@@ -280,6 +279,8 @@ public sealed partial class Plugin : IStellarPlugin
         _rowMenuWindow = RegisterRowMenuWindow();
         RegisterHotkeys();
         RegisterLauncher();
+        // After RegisterLauncher: its History card shows _historyIconPng, which RegisterLauncher loads.
+        _moreWindow = RegisterMorePopover();   // Plugin.MorePopover.cs — the header ⋯ popover
     }
 
     private void RegisterHotkeys()
@@ -346,6 +347,8 @@ public sealed partial class Plugin : IStellarPlugin
         _toggleAction.Dispose();
         DisposeLauncher();
         _rowMenuWindow.Remove();
+        _moreWindow.Remove();
+        _historyCenterer?.Stop();
         _settingsCenterer?.Stop();
         _settingsWindow.Remove();
         _helpWindow.Remove();

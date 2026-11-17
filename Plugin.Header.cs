@@ -1,142 +1,116 @@
+using System;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
 
 /// <summary>
-/// Main meter window root + the header bar and its dropdown menus (migrated off the IMGUI popovers). The header
-/// is a Row: <c>Meter</c> title · Reset · {metric} ▾ · mode pill · ≡. The metric + main menus are inline
-/// dropdown Columns toggled via <see cref="ConditionalElement"/> (the retained-mode analog of the old floating
-/// popovers — they push the rows down while open). Metric/scope/mode changes persist via PersistPrefs().
+/// Main meter window root + its 28 px header (approved redesign 2026-11-17 §1,
+/// _scratch\prototypes\combatmeter-redesign-APPROVED.md): metric pill dropdown · List | Party segmented control · live
+/// muted status · flexible gap · leader tools (Party-focus leader only) · ↺ Reset · ⋯ More. The old ▾ inline menu is
+/// GONE — it grew the HUD by 72 px; its contents (scope / party size / pause / archive / history / settings) live in the
+/// ⋯ popover (Plugin.MorePopover.cs), so the HUD never changes height. Metric/scope/mode changes persist via PersistPrefs().
 /// </summary>
 public sealed partial class Plugin
 {
-    private bool _mainMenuOpen;
-
     private const int MetricCount = 3;   // Dps, Hps, Taken — used by CycleMetric wraparound
+    // Fixed dropdown width = the longest metric caption in ANY shipped locale (ja "被ダメージ") + caption padding and the
+    // chevron, so switching DPS → Taken never moves the controls beside it (R10).
+    private const float MetricDropdownW = 104f;
 
-    // Localized metric name (DPS/HPS acronyms stay per language; "Taken" translates). The dropdown button
-    // appends " ▾" at its call site; the metric row-menu reuses the bare name. Resolved live via _loc.
+    // Localized metric name (DPS/HPS acronyms stay per language; "Taken" translates). Resolved live via _loc.
     private string MetricName(Metric m) => m switch
     {
         Metric.Dps => _loc.T("list.metric.dps"),
         Metric.Hps => _loc.T("list.metric.hps"),
         _          => _loc.T("list.metric.taken"),
     };
-    private string ModeLabel(ViewMode v) => v == ViewMode.List ? _loc.T("header.mode.list") : _loc.T("header.mode.partyFocus");
 
+    // Legacy muted colour, still used by the History / Skill Breakdown / Snapshot windows.
     private ColorRgba? MutedCol() => new ColorRgba(0.66f, 0.70f, 0.73f, 1f);
 
+    // NOTE: the approved "Background" panel behind the whole meter (Settings → Look → Meter window, MeterBackgroundOpacity)
+    // is NOT drawn yet: the framework has no rounded, theme-coloured full-window backdrop (BackdropElement is black and
+    // square; a root BubbleElement would re-measure the whole meter on every list/status change). Needs an additive
+    // framework opt-in — see the redesign report.
     private HudElement BuildMainRoot() => new ColumnElement(new HudElement[]
     {
-        // Persistent "update the plugin" banner — shown while this build is below the server upload floor
-        // and not dismissed this session (owner 2026-08-16: the notice must stay until the user closes it,
-        // which the transient framework toast cannot do). Sits above the header so it's the first thing seen.
+        // Persistent "update the plugin" banner — shown while this build is below the server upload floor and not
+        // dismissed this session (owner 2026-08-16: the notice must stay until the user closes it, which the transient
+        // framework toast cannot do). Sits above the header so it's the first thing seen.
         new ConditionalElement(() => ShowCompatBanner, BuildCompatBanner()),
         BuildHeaderBar(),
-        new ConditionalElement(() => _mainMenuOpen, BuildMainMenu()),
-        // A little vertical margin (no divider line) between an open menu panel and the meter/group list below.
-        new ConditionalElement(() => _mainMenuOpen, new SpacerElement(Height: 6f)),
         new ConditionalElement(() => _viewMode == ViewMode.List, BuildListBody(), Fill: true),
         new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildPartyFocusBody()),
-    }, Gap: 4f);
-
-    // Persistent update banner (amber): the ⚠ message + an × that dismisses it for the session. Reads
-    // UploadFloorNoticeLine / DismissCompatNotice from Plugin.UploadCompat.cs.
-    private HudElement BuildCompatBanner() => new RowElement(new HudElement[]
-    {
-        new TextElement(() => UploadFloorNoticeLine, () => new ColorRgba(0.95f, 0.55f, 0.15f, 1f)),
-        new SpacerElement(),
-        new ButtonElement(() => "×", DismissCompatNotice, Width: 24f),
     }, Gap: 6f);
+
+    // Amber rounded strip (amber @14 % over the panel) with bold amber text and a round ✕ (red "remove" hover) that
+    // dismisses it for the session. The server's own message wins over the localized default (Plugin.UploadCompat.cs).
+    private HudElement BuildCompatBanner()
+    {
+        ColorRgba Fill() => Over(CautionColor() with { A = 0.14f }, PanelColor());
+        return new BubbleElement(new RowElement(new HudElement[]
+        {
+            new SpacerElement(6f, HudControlH),
+            new CellElement(new TextElement(CompatBannerText, Color: () => Readable(CautionColor(), Fill()), FontSize: 12)
+                { Bold = true, MaxLines = 2 }, Weight: 1f),
+            IconButton(() => "✕", DismissCompatNotice, remove: true),
+        }, Gap: 6f))
+        {
+            FillColorFn = () => Fade(Fill()), CornerRadius = 6f, PaddingX = 2f, PaddingY = 1f,
+        };
+    }
 
     private HudElement BuildHeaderBar() => new RowElement(new HudElement[]
     {
-        new TextElement(() => _loc.T("header.title"), Emphasis: true),
-        new ButtonElement(() => _loc.T("common.reset"), Clear),
-        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
-            new ButtonElement(() => "", TogglePunctuate, Icon: () => _locationPinPng)), Width: 28f),
-        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
-            new ConditionalElement(() => _readyCheckCooldown <= 0f,
-                new ButtonElement(() => "", LeaderReadyCheck, Icon: () => _checkmarkPng),
-                new ButtonElement(ReadyCheckLabel, static () => { }, Enabled: () => false))), Width: 28f),
-        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
-            new ButtonElement(() => "", LeaderConvene, Icon: () => _megaphonePng)), Width: 28f),
-        new CellElement(new ConditionalElement(() => _viewMode == ViewMode.PartyFocus && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader,
-            new ButtonElement(() => "", LeaderCountdown, Icon: () => _countdownPng)), Width: 28f),
-        new SpacerElement(),
-        new ButtonElement(() => MetricName(_metric) + " ▾", static () => { })
-            { OnClickWithRect = OpenMetricMenu },
-        new ButtonElement(() => ModeLabel(_viewMode), ToggleViewMode),
-        // Expand/collapse caret for the inline menu below (▾ expand · ▴ collapse) — not a hamburger, since it
-        // now toggles the inline Scope/Pause/Archive/History panel rather than opening a floating popover.
-        new ButtonElement(() => _mainMenuOpen ? "▴" : "▾", ToggleMainMenu, Active: () => _mainMenuOpen, Width: 30f),
+        new SpacerElement(0f, HudControlH),   // pins the header at 28 px whatever the children measure
+        PillDropdown(() => (int)_metric, MetricOptions, i => SelectMetric((Metric)i), MetricDropdownW),
+        HudSegmented(new Func<string>[] { () => _loc.T("header.mode.list"), () => _loc.T("hud.mode.party") },
+            () => _viewMode == ViewMode.List ? 0 : 1,
+            i => { if ((i == 0) != (_viewMode == ViewMode.List)) ToggleViewMode(); }),
+        new ConditionalElement(HudStatusHasDot, StatusDot(HudStatusDotColor)),
+        // The status takes the slack (weighted) and ellipsizes, so it is also the flexible gap before the tools.
+        new CellElement(new TextElement(HudStatusText, Color: HudStatusColor, NoWrap: true, FontSize: 12)
+            { RichEmoji = true, Ellipsize = true }, Weight: 1f),
+        new ConditionalElement(() => ShowLeaderTools, BuildLeaderTools()),
+        HudIconButton(() => _resetPng, Clear),
+        HudIconButton(() => _morePng, static () => { }, ToggleMorePopover),
     }, Gap: 6f);
 
-    private HudElement BuildMainMenu() => new ColumnElement(new HudElement[]
+    // Party-focus + in a party + leader — exactly the old header gate. Mark / ready check / convene / countdown as round
+    // 28 px icon buttons; while the ready-check cooldown runs, that button is RECESSED and shows the seconds left. The
+    // trailing 6 px spacer is the extra gap before ↺ (prototype 1b).
+    private bool ShowLeaderTools => _viewMode == ViewMode.PartyFocus
+                                    && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader;
+
+    private HudElement BuildLeaderTools() => new RowElement(new HudElement[]
     {
-        // List mode shows the per-player Scope filter; party-focus replaces it with the 5/20 party-size
-        // control (only while a party exists). One of the two is shown at a time, so the separator below
-        // only renders when one of them is present (avoids a dangling line in party-focus + no party).
-        new ConditionalElement(() => _viewMode == ViewMode.List, BuildScopeRow()),
-        new ConditionalElement(() => ShowPartySizeControl, BuildPartySizeRow()),
-        new ConditionalElement(() => _viewMode == ViewMode.List || ShowPartySizeControl, new SeparatorElement()),
-        new RowElement(new HudElement[]
+        HudIconButton(() => _locationPinPng, TogglePunctuate),
+        new ConditionalElement(() => _readyCheckCooldown <= 0f,
+            HudIconButton(() => _checkmarkPng, LeaderReadyCheck),
+            HudRecessedLabel(ReadyCheckLabel)),
+        HudIconButton(() => _megaphonePng, LeaderConvene),
+        HudIconButton(() => _countdownPng, LeaderCountdown),
+        new SpacerElement(6f, 1f),
+    }, Gap: 6f);
+
+    // DPS / HPS / Taken captions, rebuilt only when the language changes (the dropdown polls this every refresh).
+    private string[]? _metricOptions;
+    private string? _metricOptionsLang;
+
+    private System.Collections.Generic.IReadOnlyList<string> MetricOptions()
+    {
+        string lang = _loc.Language;
+        if (_metricOptions == null || !ReferenceEquals(lang, _metricOptionsLang))
         {
-            new ButtonElement(() => _paused ? _loc.T("common.resume") : _loc.T("common.pause"), TogglePause),
-            new ButtonElement(() => _loc.T("common.archive"), ManualArchiveFromMenu),
-            new ButtonElement(() => _loc.TFormat("header.historyCount", _history.Count), ToggleHistory, Active: () => _historyWindow.IsShown),
-            new ButtonElement(() => _loc.T("header.appearance"), ToggleAppearance, Active: () => _settingsWindow.IsShown),
-            // Settings gear: a BARE clickable icon (no button chrome / fill / border), right-aligned —
-            // the StatInspector mini-HUD pattern (CellElement > SelectableElement > ImageElement). An
-            // ImageElement carries no button styling, so it reads as a standalone cog like the sibling
-            // plugins rather than a filled/outlined button. Opens the auto-archive + uploads pane.
-            new SpacerElement(),
-            new CellElement(new SelectableElement(new ImageElement(() => _settingsGearPng, 15, 15), OnClick: ToggleArchiveSettings), Width: 26f),
-        }, Gap: 4f),
-    }, Gap: 4f);
-
-    private HudElement BuildScopeRow() => new RowElement(new HudElement[]
-    {
-        new TextElement(() => _loc.T("header.scope"), MutedCol),
-        ScopeItem("scope.self", FilterMode.Self),
-        ScopeItem("scope.party", FilterMode.Party),
-        ScopeItem("scope.all", FilterMode.All),
-    }, Gap: 4f);
-
-    // 5/20 party-size control. The active pill reflects the live party size (the grid auto-follows server
-    // broadcasts). Stage 1: selecting a size is a no-op placeholder; Stage 2 wires RequestPartySize to invoke
-    // the game's own ChangeTeamMemberType (policy-clean, never crafts a packet).
-    private HudElement BuildPartySizeRow() => new RowElement(new HudElement[]
-    {
-        new TextElement(() => _loc.T("header.party"), MutedCol),
-        PartySizeItem("5",  PartyType.Regular5),
-        PartySizeItem("20", PartyType.Raid20),
-    }, Gap: 4f);
-
-    private HudElement PartySizeItem(string label, PartyType size)
-        => new ButtonElement(() => label, () => RequestPartySize(size),
-                             Active: () => _services.PartySnapshot.PartyType == size);
-
-    private HudElement ScopeItem(string key, FilterMode f)
-        => new ButtonElement(() => _loc.T(key), () => SelectScope(f), Active: () => _filter == f);
-
-    // ----- menu actions -----
-
-    private void OpenMetricMenu(WindowRect anchor)
-    {
-        _rowMenuItems.Clear();
-        _rowMenuItems.Add(new EntityMenuItem(MetricName(Metric.Dps),   () => SelectMetric(Metric.Dps)));
-        _rowMenuItems.Add(new EntityMenuItem(MetricName(Metric.Hps),   () => SelectMetric(Metric.Hps)));
-        _rowMenuItems.Add(new EntityMenuItem(MetricName(Metric.Taken), () => SelectMetric(Metric.Taken)));
-        _rowMenuName = _loc.T("menu.metric");
-        ShowRowMenuBelow(anchor);
+            _metricOptionsLang = lang;
+            _metricOptions = new[] { MetricName(Metric.Dps), MetricName(Metric.Hps), MetricName(Metric.Taken) };
+        }
+        return _metricOptions;
     }
 
-    private void ToggleMainMenu() { _mainMenuOpen = !_mainMenuOpen; RefreshPartyFocusHeight(); }
+    // ----- actions -----
 
-    // Selecting an item does NOT collapse the panel — only the caret/metric button toggles it (clicking inside
-    // an open dropdown shouldn't snap it shut).
     private void SelectMetric(Metric m) { _metric = m; PersistPrefs(); }
 
     // Advance to the next metric (DPS → HPS → Taken → DPS). Wired to the combatmeter.mode hotkey.
@@ -151,6 +125,7 @@ public sealed partial class Plugin
         if (_services.PartySnapshot.PartyType == size) return;
         _services.PartyControl.SetMemberType(size);
     }
+
     private void ToggleViewMode()
     {
         CaptureModeGeometry();   // remember the view we're leaving
@@ -158,6 +133,7 @@ public sealed partial class Plugin
         PersistPrefs();
         ApplyModeSize();         // restore the view we're entering
     }
+
     private void TogglePause() { _paused = !_paused; }
 
     // One unconditional line BEFORE the archive runs — a user-initiated press, so ungated logging is
@@ -170,11 +146,14 @@ public sealed partial class Plugin
         ManualArchive();
     }
 
-    // Visible acknowledgment that a MANUAL archive landed (banked) — a success toast on the meter.
-    // Called from ManualArchive only when reason == Manual, so auto archives (scene/stage/boss/idle)
-    // don't spam the toast surface. Fire-and-forget on the main thread (INotifications enqueues).
+    // Visible acknowledgment that a MANUAL archive landed (banked) — a success toast on the meter, plus the ⋯ popover's
+    // inline "✓ Archived (102 s) · History 37" line (Plugin.MorePopover.cs). Called from ManualArchive only when
+    // reason == Manual, so auto archives (scene/stage/boss/idle) don't spam the toast surface.
     private void NotifyManualArchived(long durationMs)
-        => _services.Notifications.Notify(_loc.TFormat("archive.saved.toast", durationMs / 1000), NotificationKind.Success);
+    {
+        _services.Notifications.Notify(_loc.TFormat("archive.saved.toast", durationMs / 1000), NotificationKind.Success);
+        NoteArchivedFeedback(durationMs);
+    }
 
     private void ToggleHistory()
     {
