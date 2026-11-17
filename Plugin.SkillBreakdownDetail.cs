@@ -4,45 +4,86 @@ using Stellar.Abstractions.Services;
 namespace Stellar.CombatMeter;
 
 /// <summary>
-/// The source detail block shown above the per-skill list in the Skill Breakdown window — a two-row grid of
-/// metric-appropriate aggregate stats for the drilled source. DPS/HPS show outgoing aggregates (Total, rate,
-/// Crit%, Max, Hits, Kills, Uptime, and the "other" metric). Taken mode is metric-aware: its stats are derived
-/// from the incoming side (<see cref="SourceStats.TotalTaken"/> + <see cref="SourceStats.IncomingBySkill"/>),
-/// since the outgoing crit/kill/uptime fields don't describe damage taken. Values come from the captured
-/// <see cref="Plugin.EncounterHistoryEntry"/>, keyed off the metric captured at open time.
+/// The TOTALS panel of the Skill Breakdown window (approved redesign §5): a 5 × 3 grid of stat tiles (muted bold
+/// caption over a bold value; a blank cell shows a muted "—") with fixed widths, so values never shift. DPS/HPS show
+/// outgoing aggregates (Total, rate, Crit%, Luck%, Max, Hits, Kills, Uptime, the "other" metric, the ZDPS-parity
+/// splits). Taken mode is metric-aware: its stats are derived from the incoming side (<see cref="SourceStats.TotalTaken"/>
+/// + <see cref="SourceStats.IncomingBySkill"/>), since the outgoing crit/kill/uptime fields don't describe damage
+/// taken. Values come from the captured <see cref="Plugin.EncounterHistoryEntry"/>, keyed off the metric captured at
+/// open time, and are formatted ONCE per open / language change (<see cref="RebuildSkillTotals"/>), never per refresh.
 /// </summary>
 public sealed partial class Plugin
 {
-    private HudElement BuildSkillDetailBlock() => new ColumnElement(new HudElement[]
+    private const int   SkillStatCells = 15;
+    private const float SkillStatGap = 4f;
+    private const float SkillStatW = (SkillWindowW - 24f - 2f * PanelPadX - 4f * SkillStatGap) / 5f;
+
+    // Grid order → value slot (SkillDetail). Row 1: total · rate · crit · luck · max; row 2: hits · kills/skills · uptime ·
+    // the other metric · active DPS (overheal in HPS); row 3: the crit / lucky / crit-lucky splits · shield break
+    // (effective in HPS) · blank.
+    private static readonly int[] SkillStatOrder = { 0, 1, 2, 8, 3, 4, 5, 6, 7, 13, 9, 10, 11, 12, -1 };
+
+    private readonly string[] _sbCap = NewFilled(SkillStatCells, "");
+    private readonly string[] _sbVal = NewFilled(SkillStatCells, "—");
+    private readonly bool[]   _sbBlank = new bool[SkillStatCells];
+
+    private HudElement BuildTotalsPanel()
     {
-        new RowElement(new HudElement[]
+        var rows = new HudElement[3];
+        for (int r = 0; r < 3; r++)
         {
-            DetailStat(() => _loc.T("skill.detail.total"), () => SkillDetail(0)),
-            DetailStat(() => DetailRateKey(), () => SkillDetail(1)),
-            DetailStat(() => DetailKey2(), () => SkillDetail(2)),
-            DetailStat(() => DetailKeyLuck(), () => SkillDetail(8)),
-            DetailStat(() => _loc.T("skill.detail.max"), () => SkillDetail(3)),
-        }, Gap: 10f),
-        new RowElement(new HudElement[]
+            var cells = new HudElement[5];
+            for (int c = 0; c < 5; c++) cells[c] = SkillStatTile(r * 5 + c);
+            rows[r] = new RowElement(cells, Gap: SkillStatGap);
+        }
+        return SectionPanel(() => _loc.T("skill.totals"), null, new ColumnElement(rows, Gap: SkillStatGap));
+    }
+
+    // One 42 px stat tile: caption muted bold 11, value bold 14 (muted "—" when the cell is blank); both texts fixed to
+    // the tile width and centred, so a value change never moves its neighbours.
+    private HudElement SkillStatTile(int i) => new CellElement(new BubbleElement(new ColumnElement(new HudElement[]
         {
-            DetailStat(() => _loc.T("skill.col.hits"), () => SkillDetail(4)),
-            DetailStat(() => DetailKey5(), () => SkillDetail(5)),
-            DetailStat(() => DetailKey6(), () => SkillDetail(6)),
-            DetailStat(() => DetailOtherKey(), () => SkillDetail(7)),
-            // Empty 5th cell keeps row 2 column-aligned with row 1 (which gained LUCK %).
-            new CellElement(new TextElement(() => ""), Weight: 1f),
-        }, Gap: 10f),
-        // ZDPS-parity split row (v5 stats). Metric-aware: DPS shows the damage-value splits +
-        // active DPS; HPS shows the healing splits + effective/overheal; Taken renders "—".
-        new RowElement(new HudElement[]
+            new TextElement(() => _sbCap[i], Color: () => MutedColor(), Width: SkillStatW, Align: TextAlign.Center,
+                NoWrap: true, FontSize: 11) { Bold = true, Ellipsize = true },
+            new TextElement(() => _sbVal[i], Color: () => _sbBlank[i] ? MutedColor() : TextColor(), Width: SkillStatW,
+                Align: TextAlign.Center, NoWrap: true, FontSize: 14) { Bold = true, Ellipsize = true },
+        }, Gap: 0.01f))
+    {
+        FillColorFn = () => Fade(TileColor()), CornerRadius = TileRadius, PaddingX = 0f, PaddingY = 4f, MaxWidth = SkillStatW,
+    }, Width: SkillStatW);
+
+    private void RebuildSkillTotals()
+    {
+        for (int i = 0; i < SkillStatCells; i++)
         {
-            DetailStat(() => DetailSplitKey(0), () => SkillDetail(9)),
-            DetailStat(() => DetailSplitKey(1), () => SkillDetail(10)),
-            DetailStat(() => DetailSplitKey(2), () => SkillDetail(11)),
-            DetailStat(() => DetailSplitKey(3), () => SkillDetail(12)),
-            DetailStat(() => DetailSplitKey(4), () => SkillDetail(13)),
-        }, Gap: 10f),
-    }, Gap: 4f);
+            int slot = SkillStatOrder[i];
+            string cap = slot < 0 ? "" : SkillDetailCaption(slot);
+            _sbBlank[i] = cap.Length == 0;
+            _sbCap[i] = cap.ToUpperInvariant();
+            _sbVal[i] = _sbBlank[i] ? "—" : SkillDetail(slot);
+        }
+    }
+
+    // Value slot → caption (catalog keys are already upper-case in English; re-cased for the grid anyway). "" = the cell
+    // has no meaning in this metric (blank).
+    private string SkillDetailCaption(int slot)
+    {
+        bool taken = IsTakenDetail;
+        return slot switch
+        {
+            0 => _loc.T("skill.detail.total"),
+            1 => DetailRateKey(),
+            2 => taken ? "" : _loc.T("skill.detail.critPct"),
+            3 => _loc.T("skill.detail.max"),
+            4 => _loc.T("skill.col.hits"),
+            5 => taken ? _loc.T("skill.detail.skills") : _loc.T("skill.detail.kills"),
+            6 => taken ? "" : _loc.T("skill.detail.uptime"),
+            7 => DetailOtherKey(),
+            8 => taken ? "" : _loc.T("skill.detail.luckPct"),
+            >= 9 and <= 13 => DetailSplitKey(slot - 9),
+            _ => "",
+        };
+    }
 
     // Row-3 labels per metric (Taken has no outgoing splits).
     private string DetailSplitKey(int col)
@@ -53,22 +94,9 @@ public sealed partial class Plugin
             : col switch { 0 => _loc.T("skill.detail.cdmg"), 1 => _loc.T("skill.detail.ldmg"), 2 => _loc.T("skill.detail.cldmg"), 3 => _loc.T("skill.detail.shldBrk"), _ => _loc.T("skill.detail.active") };
     }
 
-    private HudElement DetailStat(Func<string> key, Func<string> value)
-        => new CellElement(new ColumnElement(new HudElement[]
-        {
-            new TextElement(key, MutedCol),
-            new TextElement(value, Emphasis: true),
-        }, Gap: 0f), Weight: 1f);
-
     private bool IsTakenDetail => _skillBreakdown?.Metric == Metric.Taken;
 
     private string DetailRateKey() => _skillBreakdown is { } sb ? MetricRateLabel(sb.Metric) : _loc.T("list.rate.dps");
-
-    // Taken mode replaces the outgoing-only CRIT%/LUCK%/KILLS/UPTIME slots with taken-appropriate labels.
-    private string DetailKey2() => IsTakenDetail ? "" : _loc.T("skill.detail.critPct");
-    private string DetailKeyLuck() => IsTakenDetail ? "" : _loc.T("skill.detail.luckPct");
-    private string DetailKey5() => IsTakenDetail ? _loc.T("skill.detail.skills") : _loc.T("skill.detail.kills");
-    private string DetailKey6() => IsTakenDetail ? "" : _loc.T("skill.detail.uptime");
 
     private string DetailOtherKey() => _skillBreakdown?.Metric == Metric.Hps ? _loc.T("list.col.dmg") : _loc.T("list.col.heal");
 

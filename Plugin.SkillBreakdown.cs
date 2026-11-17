@@ -1,96 +1,139 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
 
 /// <summary>
-/// Skill breakdown surface — a uGUI window (Party chrome) opened by the History drill-in ► button. Operates on
-/// the <see cref="EncounterHistoryEntry"/> captured at click-time (decoupled from live state). Header (name —
-/// Skill Breakdown + meta), a column header, and a scrollable per-skill table (rank·name·sub + TOTAL/DPS/COUNT).
-/// The plugin snapshots the skill rows into _skillRows each shown frame.
+/// Skill Breakdown — house style (approved redesign 2026-11-17 §5), opened by the History row's › drill-in. Operates on
+/// the <see cref="EncounterHistoryEntry"/> captured at click time (decoupled from live state):
+/// <code>
+///   header  [40 px class crest] "Name · damage by skill" / muted "date · duration · N players"
+///   TOTALS  5 × 3 stat tiles (Plugin.SkillBreakdownDetail.cs)
+///   SKILLS  "N skills" — rows = tiles: icon · bold "#1 Skill" · total · muted rate + hits / muted sub-line / 4 px share bar
+/// </code>
+/// Every string is formatted once per open / language change (a frozen archive never changes), never per refresh.
+/// Content-fit height with fixed blocks (the skill list is a fixed viewport), so the window keeps its size per player.
 /// </summary>
 public sealed partial class Plugin
 {
-    private const int MaxSkillSlots = 40;
-    private const float SkillScrollHeight = 280f;
-    private const float SkillColTotal = 90f, SkillColDps = 70f, SkillColCount = 64f, SkillColBar = 90f;
+    private const int   MaxSkillSlots = 40;
+    private const float SkillWindowW = 480f;
+    private const float SkillIconSize = 20f;
+    private const float SkillIconGap = 7f;
+    private const float SkillColTotal = 64f, SkillColRate = 52f, SkillColHits = 40f;
+    private const float SkillTilePitch = 62f;   // ~58 px tile (5 + 20 + 3 + 18 + 3 + 4 + 5) + gap
+    private const int   SkillRowsShown = 5;
 
     private SkillBreakdownState? _skillBreakdown;
     private readonly List<SkillRow> _skillRows = new(MaxSkillSlots);
+    private WindowCenterer? _skillCenterer;
+    private int _skillOffset;
+    private readonly UvRect[] _skillIconUv = NewUvRects(SkillRowsShown + 2);
+    private UvRect _skillCrestUv = new(0f, 0f, 1f, 1f);
 
     private sealed class SkillBreakdownState
     {
         public EntityId Source;
         public EncounterHistoryEntry Session = null!;
         public Metric Metric;   // captured at open time so the window is stable if the history metric later changes
+        public int ProfId;      // crest
     }
 
     private struct SkillRow
     {
-        public string Rank, Name, Sub, Total, Dps, Count;
+        public string Label, Sub, Total, Rate, Hits;   // Label = "#1 Skill"
         public float Share;
+        public int SkillId;
     }
+
+    // Header + count strings and the gauge colour, cached per open / language (RebuildSkillRows).
+    private string _sbTitle = "", _sbMeta = "", _sbCount = "";
+    private ColorRgba _sbGauge;
+    private SkillBreakdownState? _sbBuiltFor;
+    private string? _sbBuiltLang;
 
     private HudElement BuildSkillBreakdownRoot()
     {
-        var slots = new HudElement[MaxSkillSlots];
-        for (var i = 0; i < MaxSkillSlots; i++)
-        {
-            var idx = i;
-            string F(Func<SkillRow, string> sel) => idx < _skillRows.Count ? sel(_skillRows[idx]) : "";
-            // Explicit per-skill share bar (role- or class-coloured per Appearance → Bar colour) makes each row
-            // read as a bar chart. Replaces the old AccentRowElement wash — both encoded the same Share, so the
-            // wash was dropped to avoid double-encoding. Fill is baked at build time from the source captured at
-            // open (stable).
-            ColorRgba barColor = _skillBreakdown is { } sbColor ? GaugeColorFor(sbColor.Source) : default;
-            // Each skill is a Column of: (1) a top row — name (single-line, elastic) + numeric columns, so the
-            // numbers sit on the skill-name baseline instead of vertically centring against a 2-line cell;
-            // (2) the % DMG/Count/Crit/Luck sub-line; (3) a full-width role-coloured share bar (a per-skill bar
-            // chart — moved off the top row so it never competes with the name for width at narrow window sizes);
-            // (4) a 1-px separator so each skill reads as one bounded row. Replaces the old name+sub-stacked-in-
-            // one-cell layout whose centred numbers were ambiguous about which skill they belonged to.
-            slots[i] = new ColumnElement(new HudElement[]
-            {
-                new RowElement(new HudElement[]
-                {
-                    new CellElement(new TextElement(() => idx < _skillRows.Count ? $"{_skillRows[idx].Rank} {_skillRows[idx].Name}" : "", Emphasis: true, NoWrap: true), Weight: 1f),
-                    NumCell(() => F(r => r.Total), SkillColTotal),
-                    NumCell(() => F(r => r.Dps), SkillColDps),
-                    NumCell(() => F(r => r.Count), SkillColCount),
-                }, Gap: 6f),
-                new TextElement(() => F(r => r.Sub), MutedCol),
-                new BarElement(() => idx < _skillRows.Count ? _skillRows[idx].Share : 0f, barColor),
-                new SeparatorElement(),
-            }, Gap: 2f);
-        }
+        var pool = new HudElement[SkillRowsShown + 2];
+        for (int i = 0; i < pool.Length; i++) pool[i] = SkillSlot(i);
+        float viewport = SkillRowsShown * SkillTilePitch - ListRowGap;
         return new ColumnElement(new HudElement[]
         {
-            new TextElement(SkillHeader, Emphasis: true),
-            new TextElement(SkillMeta, MutedCol),
-            BuildSkillDetailBlock(),
-            new SeparatorElement(),
-            new RowElement(new HudElement[]
-            {
-                new CellElement(new TextElement(() => _loc.T("skill.col.skill"), MutedCol), Weight: 1f),
-                NumCell(() => _skillBreakdown is { } sb ? MetricColumnLabel(sb.Metric) : _loc.T("skill.col.total"), SkillColTotal, muted: true),
-                NumCell(() => _skillBreakdown is { } sb ? MetricRateLabel(sb.Metric) : _loc.T("list.rate.dps"), SkillColDps, muted: true),
-                NumCell(() => _loc.T("skill.col.hits"), SkillColCount, muted: true),
-            }, Gap: 6f),
-            new ConditionalElement(() => _skillRows.Count == 0,
-                new TextElement(SkillEmptyCaption, MutedCol)),
-            new ConditionalElement(() => _skillRows.Count > 0,
-                new ScrollElement(new ListElement(() => _skillRows.Count, slots), SkillScrollHeight)),
-        });
+            ToolHeader(SkillCrestTile(), () => _sbTitle,
+                new TextElement(() => _sbMeta, Color: () => MutedColor(), NoWrap: true) { Ellipsize = true }),
+            BuildTotalsPanel(),
+            SectionPanel(() => _loc.T("skill.skills"), () => _sbCount,
+                new ConditionalElement(() => _skillRows.Count == 0,
+                    FixedBox(viewport, MutedLine(SkillEmptyCaption)),
+                    new VirtualListElement(
+                        Count:     () => _skillRows.Count,
+                        RowHeight: SkillTilePitch, Pool: pool,
+                        OnWindow:  i => _skillOffset = i, Height: viewport))),
+        }, Gap: 8f);
     }
 
-    private string SkillHeader()
+    // 40 px class crest (the game's profession icon, rounded); the meter mark when the class is unknown. Fixed cell: a
+    // bare Conditional in a Row takes flexible width.
+    private HudElement SkillCrestTile() => new CellElement(new ConditionalElement(() => (_skillBreakdown?.ProfId ?? 0) > 0,
+        new GameTextureElement(
+            () => _skillBreakdown is { ProfId: > 0 } sb ? _services.GameAssets.LoadProfessionIcon(sb.ProfId, out _skillCrestUv) : null,
+            (int)ToolIconSize, (int)ToolIconSize, () => _skillCrestUv) { CornerRadius = 7 },
+        MeterIconTile()), Width: ToolIconSize);
+
+    private int SkillRowAt(int slot) { int i = _skillOffset + slot; return i >= 0 && i < _skillRows.Count ? i : -1; }
+
+    private string SkillText(int slot, Func<SkillRow, string> sel) => SkillRowAt(slot) is var i and >= 0 ? sel(_skillRows[i]) : "";
+
+    // One skill tile: [icon][bold "#1 Skill"][total][muted rate][muted hits] / muted sub-line / 4 px share bar in the
+    // gauge colour; the sub-line and bar are indented under the name (icon + gap).
+    private HudElement SkillSlot(int slot)
     {
-        if (_skillBreakdown is not { } sb) return _loc.T("skill.window.title");
-        EntityId self = _services.CombatSnapshot.LocalEntityId;
-        var name = EntityLabel.Resolve(sb.Source, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members);
-        return _loc.TFormat("skill.title.bySkill", name, MetricColumnLabel(sb.Metric));
+        var tile = new BubbleElement(new ColumnElement(new HudElement[]
+        {
+            new RowElement(new HudElement[]
+            {
+                new CellElement(new RowElement(new HudElement[]
+                    {
+                        new GameTextureElement(() => SkillIconTex(slot), (int)SkillIconSize, (int)SkillIconSize, () => _skillIconUv[slot])
+                            { CornerRadius = 4 },
+                    }, Gap: 0.01f, Justify: RowJustify.Center), Width: SkillIconSize),
+                new CellElement(new TextElement(() => SkillText(slot, r => r.Label), Color: () => TextColor(), NoWrap: true, FontSize: 13)
+                    { Bold = true, Ellipsize = true }, Weight: 1f),
+                SkillNum(() => SkillText(slot, r => r.Total), SkillColTotal, bold: true),
+                SkillNum(() => SkillText(slot, r => r.Rate), SkillColRate, bold: false),
+                SkillNum(() => SkillText(slot, r => r.Hits), SkillColHits, bold: false),
+            }, Gap: SkillIconGap),
+            new RowElement(new HudElement[]
+            {
+                new SpacerElement(SkillIconSize, 1f),
+                new CellElement(new TextElement(() => SkillText(slot, r => r.Sub), Color: () => MutedColor(), NoWrap: true)
+                    { Ellipsize = true }, Weight: 1f),
+            }, Gap: SkillIconGap),
+            new RowElement(new HudElement[]
+            {
+                new SpacerElement(SkillIconSize, 4f),
+                new CellElement(new BarElement(() => SkillRowAt(slot) is var i and >= 0 ? _skillRows[i].Share : 0f, default)
+                    { Height = 4f, FillWidth = true, FillColorFn = () => Fade(_sbGauge) }, Weight: 1f),
+            }, Gap: SkillIconGap),
+        }, Gap: 3f))
+        {
+            FillColorFn = () => Fade(TileColor()), CornerRadius = TileRadius, PaddingX = 8f, PaddingY = 5f,
+        };
+        return new ColumnElement(new HudElement[] { tile, new SpacerElement(0f, ListRowGap) }, Gap: 0.01f);
+    }
+
+    private HudElement SkillNum(Func<string> text, float width, bool bold) => new CellElement(
+        new TextElement(text, Color: () => bold ? TextColor() : MutedColor(), Width: width, Align: TextAlign.Right, NoWrap: true,
+            FontSize: 13) { Bold = bold }, Width: width);
+
+    private object? SkillIconTex(int slot)
+    {
+        int i = SkillRowAt(slot);
+        int id = i >= 0 ? _skillRows[i].SkillId : 0;
+        return id > 0 ? _services.GameAssets.LoadSkillIcon(id, out _skillIconUv[slot]) : null;
     }
 
     private string SkillEmptyCaption()
@@ -101,25 +144,47 @@ public sealed partial class Plugin
             _            => _loc.T("skill.empty.skills"),
         };
 
-    private string SkillMeta()
-    {
-        if (_skillBreakdown is not { } sb) return "";
-        var s = sb.Session;
-        return $"{FormatSessionTimestampLong(s.ArchivedAtMs)}  ·  {FormatSessionDurationShort(s.CombatDurationMs)}  ·  {s.MemberCount}p";
-    }
-
+    // Ticked at ~10 Hz while shown (Plugin.Tick.cs), but a frozen archive never changes: re-format only when the drilled
+    // source or the language changes. The stale-session guard runs every tick.
     private void RebuildSkillRows()
     {
-        _skillRows.Clear();
-        if (_skillBreakdown is not { } state) return;
-
+        if (_skillBreakdown is not { } state) { _skillRows.Clear(); return; }
         // Stale-session guard: close if the drilled entry was evicted (cap) or deleted (clear-all/clear-one).
         if (!_history.Contains(state.Session)) { CloseSkillBreakdown(); return; }
-        if (!state.Session.Stats.TryGetValue(state.Source, out var src)) return;
+        string lang = _loc.Language;
+        if (ReferenceEquals(state, _sbBuiltFor) && ReferenceEquals(lang, _sbBuiltLang)) return;
+        _sbBuiltFor = state; _sbBuiltLang = lang;
 
-        long durationMs = state.Session.CombatDurationMs;
-        if (state.Metric == Metric.Taken) RebuildIncomingRows(src, durationMs);
-        else                              RebuildOutgoingSkillRows(src, state.Metric, durationMs);
+        _skillRows.Clear();
+        RebuildSkillHeader(state);
+        RebuildSkillTotals();
+        if (state.Session.Stats.TryGetValue(state.Source, out var src))
+        {
+            long durationMs = state.Session.CombatDurationMs;
+            if (state.Metric == Metric.Taken) RebuildIncomingRows(src, durationMs);
+            else                              RebuildOutgoingSkillRows(src, state.Metric, durationMs);
+        }
+        _sbCount = _loc.TFormat("skill.count", _skillRows.Count);
+    }
+
+    private void RebuildSkillHeader(SkillBreakdownState sb)
+    {
+        var s = sb.Session;
+        var name = s.Entities.TryGetValue(sb.Source, out var frozen) && !string.IsNullOrEmpty(frozen.Name)
+            ? frozen.Name!
+            : EntityLabel.Resolve(sb.Source, _services.CombatSnapshot.LocalEntityId, _services.PlayerState,
+                _services.CombatLookup, _services.PartyRoster.Members);
+        _sbTitle = _loc.TFormat(sb.Metric switch
+        {
+            Metric.Hps   => "skill.title.healing",
+            Metric.Taken => "skill.title.taken",
+            _            => "skill.title.damage",
+        }, name);
+        var when = s.ArchivedAtMs <= 0 ? "—"
+            : DateTimeOffset.FromUnixTimeMilliseconds(s.ArchivedAtMs).LocalDateTime
+                .ToString(_loc.T("history.date.format"), CultureInfo.InvariantCulture);
+        _sbMeta = when + " · " + FormatSessionDurationShort(s.CombatDurationMs) + " · " + _loc.TFormat("history.players", s.MemberCount);
+        _sbGauge = ClassPalette.TryGet(sb.ProfId, out var cc) && ActiveToggles().BarColor == BarColorMode.Class ? cc : GaugeColorFor(sb.Source);
     }
 
     // DPS/HPS: per-skill outgoing rows. Metric total picks damage vs heal; pure-other skills (0 in this
@@ -146,13 +211,13 @@ public sealed partial class Plugin
             float luckPct = sk.Hits > 0 ? 100f * sk.Luckys / sk.Hits : 0f;
             _skillRows.Add(new SkillRow
             {
-                Rank = $"#{i + 1}",
-                Name = ResolveSkillName(rows[i].Key),
-                Sub = _loc.TFormat("skill.sub.damage", MetricColumnLabel(metric), pct, sk.Hits, critPct, luckPct),
+                Label = $"#{i + 1} {ResolveSkillName(rows[i].Key)}",
+                Sub = _loc.TFormat("skill.sub.share", pct, critPct, luckPct),
                 Total = FormatAmount(value),
-                Dps = FormatAmount(ComputeArchivedDps(value, durationMs)),
-                Count = sk.Hits.ToString(),
+                Rate = FormatAmount(ComputeArchivedDps(value, durationMs)),
+                Hits = sk.Hits.ToString(CultureInfo.InvariantCulture),
                 Share = sum > 0 ? (float)value / sum : 0f,
+                SkillId = rows[i].Key,
             });
         }
     }
@@ -169,13 +234,13 @@ public sealed partial class Plugin
             var r = rows[i];
             _skillRows.Add(new SkillRow
             {
-                Rank = $"#{i + 1}",
-                Name = ResolveSkillName(r.SkillId),
-                Sub = _loc.TFormat("skill.sub.taken", r.Hits, FormatAmount(r.TopHit)),
+                Label = $"#{i + 1} {ResolveSkillName(r.SkillId)}",
+                Sub = _loc.TFormat("skill.sub.takenShare", sum > 0 ? 100f * r.Total / sum : 0f, FormatAmount(r.TopHit)),
                 Total = FormatAmount(r.Total),
-                Dps = FormatAmount(ComputeArchivedDps(r.Total, durationMs)),
-                Count = r.Hits.ToString(),
+                Rate = FormatAmount(ComputeArchivedDps(r.Total, durationMs)),
+                Hits = r.Hits.ToString(CultureInfo.InvariantCulture),
                 Share = sum > 0 ? (float)r.Total / sum : 0f,
+                SkillId = r.SkillId,
             });
         }
     }
@@ -223,35 +288,26 @@ public sealed partial class Plugin
         return rows;
     }
 
-    // A popup dialog (opened from the History drill-in ►): free-drag + ✕ close, Party chrome. Shared by the
-    // initial registration (Plugin.cs) and the drill-in rebuild below.
-    private IWindowControl RegisterSkillBreakdownWindow() => _services.Windows.Register(new WindowRegistration(
-        new WindowSpec(
-            Id:          "combatmeter.skill-breakdown",
-            Title:       _loc.T("skill.window.title"),   // baked at registration; rebuilt on LanguageChanged
-            DefaultRect: new WindowRect(1000f, 80f, 460f, 520f),
-            Category:    WindowCategory.Tools,
-            Style:       WindowPanelStyle.GlassMenu)   // dark-slate frosted dialog: free-drag + ✕ close (see history above)
-        { StartVisible = false, Closable = true, Draggable = true,
-          Resizable = true, MinWidth = 360f, MinHeight = 280f, MaxWidth = 900f, MaxHeight = 1000f,
-          ShouldRender = () => _services.ClientState.Phase == GamePhase.World
-                            && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
-        BuildSkillBreakdownRoot(),
-        OnClose: CloseSkillBreakdown));
-
-    // The per-skill BarElement bakes its Fill colour at element-BUILD time from _skillBreakdown.Source, so the
-    // root must be rebuilt once _skillBreakdown is set for the bars to read the drilled source's role colour
-    // (it is null at first registration, which would bake a transparent fill). Rebuild the window subtree
-    // (preserving rect + visibility) — the framework-sanctioned Remove()+Register() pattern (mirrors
-    // RebuildHistoryWindow). Fires only on drill-in (user action), never per-frame.
-    private void RebuildSkillBreakdownWindow()
+    // A popup dialog (opened from the History drill-in ›): free-drag + ✕ close. Shared by the initial registration
+    // (Plugin.cs) and the language rebuild. A NEW id: the old one carries a persisted resizable rect of the old layout.
+    private IWindowControl RegisterSkillBreakdownWindow()
     {
-        var rect = _skillBreakdownWindow.Rect;
-        var wasShown = _skillBreakdownWindow.IsShown;
-        _skillBreakdownWindow.Remove();
-        _skillBreakdownWindow = RegisterSkillBreakdownWindow();
-        if (rect.Width > 0f) _skillBreakdownWindow.SetRect(rect);
-        _skillBreakdownWindow.SetVisible(wasShown);
+        var w = _services.Windows.Register(new WindowRegistration(
+            new WindowSpec(
+                Id:          "combatmeter.skill-breakdown.v2",
+                Title:       _loc.T("skill.window.title"),   // baked at registration; rebuilt on LanguageChanged
+                DefaultRect: new WindowRect(1000f, 80f, SkillWindowW, 640f),
+                Category:    WindowCategory.Tools,
+                Style:       WindowPanelStyle.GlassMenu)
+            { StartVisible = false, Closable = true, Draggable = true,
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
+            BuildSkillBreakdownRoot(),
+            OnClose: CloseSkillBreakdown));
+        _skillCenterer?.Stop();
+        _skillCenterer = new WindowCenterer(_services.Framework, w);
+        _sbBuiltFor = null;   // a rebuilt tree re-reads the caches; force a re-format on the next tick
+        return w;
     }
 
     private void HandleSkillBreakdownRequested(EntityId id, EncounterHistoryEntry session)
@@ -261,17 +317,23 @@ public sealed partial class Plugin
             CloseSkillBreakdown();
             return;
         }
-        _skillBreakdown = new SkillBreakdownState { Source = id, Session = session, Metric = _historyMetric };
+        var frozen = session.Entities.TryGetValue(id, out var es) ? es : null;
+        _skillBreakdown = new SkillBreakdownState
+        {
+            Source = id, Session = session, Metric = _historyMetric, ProfId = ArchivedProfession(frozen, id),
+        };
+        _skillOffset = 0;
         RebuildSkillRows();
-        // Rebuild the root now that _skillBreakdown is set so BuildSkillBreakdownRoot re-resolves the baked bar
-        // Fill to GaugeColorFor(Source) — without this the bars keep the transparent fill baked at registration.
-        RebuildSkillBreakdownWindow();
-        _skillBreakdownWindow.SetVisible(true);
+        // Child of History: opens centred on it and in front; already open (another player) → re-fill + front it
+        // (Rule 5 exception: an already-visible child re-opened from its parent).
+        if (_skillBreakdownWindow.IsShown) _skillBreakdownWindow.BringToFront();
+        else _skillCenterer?.OpenCentred(_historyWindow);
     }
 
     private void CloseSkillBreakdown()
     {
         _skillBreakdown = null;
+        _skillCenterer?.Stop();
         _skillBreakdownWindow.SetVisible(false);
     }
 }

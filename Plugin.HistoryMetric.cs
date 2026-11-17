@@ -1,3 +1,4 @@
+using System;
 using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
@@ -44,16 +45,16 @@ public sealed partial class Plugin
     private string MetricRateLabel(Metric m)   => _loc.T(MetricRateKey(m));
     private string MetricAxisTitle(Metric m)   => _loc.T(MetricAxisKey(m));
 
-    // History-window metric toggle (mirrors Plugin.Header.cs MetricItem).
-    private HudElement BuildHistoryMetricRow() => new RowElement(new HudElement[]
-    {
-        HistoryMetricItem("list.metric.dps", Metric.Dps),
-        HistoryMetricItem("list.metric.hps", Metric.Hps),
-        HistoryMetricItem("list.metric.taken", Metric.Taken),
-    }, Gap: 6f);
+    // History-window metric switch: the house segmented control (DPS / HPS / Taken) in the chart panel's caption row.
+    // Tab order = the Metric enum order (Dps, Hps, Taken).
+    private static readonly Metric[] HistoryMetricTabs = { Metric.Dps, Metric.Hps, Metric.Taken };
 
-    private HudElement HistoryMetricItem(string key, Metric m)
-        => new ButtonElement(() => _loc.T(key), () => SelectHistoryMetric(m), Active: () => _historyMetric == m);
+    private HudElement BuildHistoryMetricTabs() => TabStrip(new Func<string>[]
+        {
+            () => _loc.T("list.metric.dps"), () => _loc.T("list.metric.hps"), () => _loc.T("list.metric.taken"),
+        },
+        () => Array.IndexOf(HistoryMetricTabs, _historyMetric),
+        i => SelectHistoryMetric(HistoryMetricTabs[i]));
 
     private void SelectHistoryMetric(Metric m)
     {
