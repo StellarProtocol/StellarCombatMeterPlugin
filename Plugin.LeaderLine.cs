@@ -10,19 +10,19 @@ namespace Stellar.CombatMeter;
 // reads "Ready check 18s". It replaced the four round icon buttons on line 1, which squeezed the status to "● 0:00 i…".
 //
 // Height — RESERVED, not grown (user 2026-11-17 "fixed", replacing the first "grow by 34 px while leader" build): in Party
-// view the line's slot (28 px + the root Column's 6 px gap = LeaderLineH) is ALWAYS in the layout and ALWAYS in
-// PartyFocusHeight. Leader → caption + pills; anyone else (member / solo / no party) → a blank 28 px spacer of the same
-// height (nothing drawn, no Selectable, so no input is blocked). Leadership changes therefore never resize the window
-// (house rule: windows never grow) — only the content inside the slot swaps. The grow build also needed a one-shot re-fit
+// view 34 px (28 px + the root Column's 6 px gap = LeaderLineH) are ALWAYS in the layout and ALWAYS in
+// PartyFocusHeight. Leader → caption + pills under the header; anyone else (member / solo / no party) → the groups move up
+// under the header and the 34 px become a blank BELOW them (nothing drawn, no Selectable). Leadership never resizes the window
+// (house rule: windows never grow) — only where the spare 34 px sit swaps. The grow build also needed a one-shot re-fit
 // whose too-early SetRect persisted the (20,20) mount placeholder (the 2026-11-17 top-left bug, Plugin.ModeGeometry.cs).
-// The group/rows container below keeps EXACTLY the height it had before the line existed: the window is +34, the slot 34.
+// The group/rows container below keeps EXACTLY the height it had before the line existed: the window is +34, the line-or-blank 34.
 //
 // Performance (Plugin-Performance-Rules §7): built once; the predicates are field reads (_leaderLine is latched at the
 // ~10 Hz tick, not read off the party snapshot per poll), the labels catalog lookups or per-language caches (the cooldown
 // "Ready check 18s" strings are formatted once per language), the fills struct maths. No SetRect anywhere on this path.
 public sealed partial class Plugin
 {
-    private const float LeaderLineH = HudControlH + 6f;   // the reserved slot + the root Column gap (34), always in Party view
+    private const float LeaderLineH = HudControlH + 6f;   // the LEADER line (top) or the blank (bottom) + one root Column gap (34), always in Party view
 
     // Pill geometry: 8 | 16 icon | 5 | label (fixed) | 8. Each label width = the longest translation in ANY shipped locale
     // (and, for Ready check, its cooldown form "Ready check 25s" / th "เช็กความพร้อม 25 วิ"), so a language switch or
@@ -43,10 +43,16 @@ public sealed partial class Plugin
         _mainWindow.MarkDirty();
     }
 
-    // The root Column's Party-view slot (Plugin.Header.cs): the LEADER line, or a same-height blank. The 0-wide spacer pins
-    // the blank at HudControlH exactly like the line's own pinning spacer, so the slot never changes height.
-    private HudElement BuildLeaderLineSlot()
-        => new ConditionalElement(() => _leaderLine, BuildLeaderLine(), new SpacerElement(0f, HudControlH));
+    // The root Column's two Party-view slots (Plugin.Header.cs). TOP (under the header): the LEADER line, or nothing at all —
+    // no Else, so a non-leader's groups start right under the header instead of under a blank strip (user 2026-11-17
+    // "move the group up instead of having space between"). BOTTOM (after the groups): the same 34 px as a blank instead,
+    // when NOT leading. Exactly one of the two is in the layout, each worth 28 px + one Column gap = LeaderLineH, so the
+    // window height and the group container's height never change — only where the spare 34 px sits. Both predicates
+    // read the one _leaderLine latch, so they flip in the same layout pass (never a frame with both or neither). The
+    // 0-wide spacer pins the blank at HudControlH like the line's own pinning spacer; it draws nothing and is not a
+    // Selectable, so it blocks no input.
+    private HudElement BuildLeaderLineTop() => new ConditionalElement(() => _leaderLine, BuildLeaderLine());
+    private HudElement BuildLeaderLineBottom() => new ConditionalElement(() => !_leaderLine, new SpacerElement(0f, HudControlH));
 
     private HudElement BuildLeaderLine() => new RowElement(new HudElement[]
     {

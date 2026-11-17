@@ -69,7 +69,7 @@ public sealed partial class Plugin
             }
             if (_viewMode == ViewMode.PartyFocus)
             {
-                SyncLeaderLine();   // content of the reserved slot only (pills vs blank), no geometry → no settle gate needed
+                SyncLeaderLine();   // LEADER line on top vs blank at the bottom, no window geometry → no settle gate needed
                 RebuildPartyFocusRows();
             }
             else RebuildListRows();

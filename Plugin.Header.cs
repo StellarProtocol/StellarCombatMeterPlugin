@@ -49,12 +49,13 @@ public sealed partial class Plugin
         // framework toast cannot do). Sits above the header so it's the first thing seen.
         new ConditionalElement(() => ShowCompatBanner, BuildCompatBanner()),
         BuildHeaderBar(),
-        // Header line 2, RESERVED in Party view (Plugin.LeaderLine.cs): the LEADER line when you lead, else a blank of the
-        // same 28 px. The window's +34 (LeaderLineH) is exactly this slot + one Column gap, so the party body keeps its
-        // height. List view: no Else → the slot leaves the layout entirely (no stray gap), as before.
-        new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildLeaderLineSlot()),
+        // Header line 2 in Party view (Plugin.LeaderLine.cs): the LEADER line when you lead. Otherwise it leaves the layout
+        // and the same 34 px (LeaderLineH) sits as a blank AFTER the groups instead (BuildLeaderLineBottom), so the window
+        // and the party body keep their heights either way. List view: neither slot exists (no stray gap), as before.
+        new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildLeaderLineTop()),
         new ConditionalElement(() => _viewMode == ViewMode.List, BuildListBody(), Fill: true),
         new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildPartyFocusBody()),
+        new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildLeaderLineBottom()),
     }, Gap: 6f);
 
     // Amber rounded strip (amber @14 % over the panel) with bold amber text and a round ✕ (red "remove" hover) that
@@ -127,7 +128,7 @@ public sealed partial class Plugin
     {
         CaptureModeGeometry();   // remember the view we're leaving
         _viewMode = _viewMode == ViewMode.List ? ViewMode.PartyFocus : ViewMode.List;
-        SyncLeaderLine();        // the reserved slot's content is current on the first Party frame (height doesn't depend on it)
+        SyncLeaderLine();        // LEADER line vs bottom blank is current on the first Party frame (height doesn't depend on it)
         PersistPrefs();
         ApplyModeSize();         // restore the view we're entering
     }
