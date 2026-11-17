@@ -462,6 +462,7 @@
   "skill.detail.overheal": "過回復",
   "skill.detail.shldBrk": "シールド破壊",
   "skill.detail.skills": "スキル",
+  "skill.detail.taken": "被ダメージ",
   "skill.detail.total": "合計",
   "skill.detail.uptime": "稼働率",
   "skill.empty.healing": "このソースの回復は記録されていません。",

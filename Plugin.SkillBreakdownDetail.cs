@@ -20,8 +20,8 @@ public sealed partial class Plugin
 
     // Grid order → value slot (SkillDetail). Row 1: total · rate · crit · luck · max; row 2: hits · kills/skills · uptime ·
     // the other metric · active DPS (overheal in HPS); row 3: the crit / lucky / crit-lucky splits · shield break
-    // (effective in HPS) · blank.
-    private static readonly int[] SkillStatOrder = { 0, 1, 2, 8, 3, 4, 5, 6, 7, 13, 9, 10, 11, 12, -1 };
+    // (effective in HPS) · damage taken (blank in Taken mode, where TOTAL already is TotalTaken).
+    private static readonly int[] SkillStatOrder = { 0, 1, 2, 8, 3, 4, 5, 6, 7, 13, 9, 10, 11, 12, 14 };
 
     private readonly string[] _sbCap = NewFilled(SkillStatCells, "");
     private readonly string[] _sbVal = NewFilled(SkillStatCells, "—");
@@ -81,6 +81,7 @@ public sealed partial class Plugin
             7 => DetailOtherKey(),
             8 => taken ? "" : _loc.T("skill.detail.luckPct"),
             >= 9 and <= 13 => DetailSplitKey(slot - 9),
+            14 => taken ? "" : _loc.T("skill.detail.taken"),   // Taken view: would duplicate TOTAL
             _ => "",
         };
     }
@@ -129,6 +130,8 @@ public sealed partial class Plugin
             13 => sb.Metric == Metric.Hps
                 ? FormatAmount(Math.Max(0, s.TotalHealing - s.EffectiveHealing))
                 : FormatAmount(ActiveDps(s)),
+            // Damage the drilled source took — same value in both outgoing views.
+            14 => FormatAmount(s.TotalTaken),
             _ => "—",
         };
     }
@@ -151,7 +154,7 @@ public sealed partial class Plugin
             4 => TakenHitCount(s).ToString(),
             5 => s.IncomingBySkill.Count.ToString(),
             7 => FormatAmount(s.TotalHealing),
-            _ => "—",   // slots 2 (CRIT %) and 6 (UPTIME) have no taken-side meaning
+            _ => "—",   // slots 2 (CRIT %) and 6 (UPTIME) have no taken-side meaning; 14 (TAKEN) would repeat TOTAL
         };
 
     /// <summary>Biggest single incoming hit across all attacker skills (Taken-mode "MAX").</summary>

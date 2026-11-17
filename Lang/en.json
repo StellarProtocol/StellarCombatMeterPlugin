@@ -462,6 +462,7 @@
   "skill.detail.overheal": "OVERHEAL",
   "skill.detail.shldBrk": "SHLD BRK",
   "skill.detail.skills": "SKILLS",
+  "skill.detail.taken": "TAKEN",
   "skill.detail.total": "TOTAL",
   "skill.detail.uptime": "UPTIME",
   "skill.empty.healing": "No healing recorded for this source.",

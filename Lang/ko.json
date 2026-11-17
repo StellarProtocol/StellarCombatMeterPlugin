@@ -462,6 +462,7 @@
   "skill.detail.overheal": "초과 치유",
   "skill.detail.shldBrk": "보호막 파괴",
   "skill.detail.skills": "스킬",
+  "skill.detail.taken": "받은 피해",
   "skill.detail.total": "합계",
   "skill.detail.uptime": "유지율",
   "skill.empty.healing": "이 출처의 치유 데이터 없음",
