@@ -33,7 +33,7 @@ public sealed partial class Plugin
         ColorRgba Label() => !En() ? DisabledLabel(PanelColor()) : on() ? Readable(SuccessColor(), Fill()) : MutedColor();
         return new CellElement(ChipShell(
             new TextElement(() => on() ? _loc.T("style.on") : _loc.T("style.off"), Color: () => Label(),
-                Width: OnOffChipWidth, Align: TextAlign.Center, NoWrap: true, FontSize: 12) { Bold = true },
+                Width: OnOffChipWidth, Align: TextAlign.Center, NoWrap: true, FontSize: 12) { Bold = true, CenterCaps = true },
             Fill, hover, () => { if (En()) set(!on()); }, padX: 0f), Width: OnOffChipWidth);
     }
 
@@ -53,7 +53,7 @@ public sealed partial class Plugin
             : active() ? Over(TextColor() with { A = H() }, Over(Hue() with { A = ChipWashAlpha }, PanelColor()))
             : Over(TextColor() with { A = ChipOffAlpha + H() }, PanelColor());
         ColorRgba Label() => !En() ? DisabledLabel(PanelColor()) : active() ? Readable(Hue(), Fill()) : MutedColor();
-        return ChipShell(new TextElement(label, Color: () => Label(), NoWrap: true, FontSize: 12) { Bold = true },
+        return ChipShell(new TextElement(label, Color: () => Label(), NoWrap: true, FontSize: 12) { Bold = true, CenterCaps = true },
             Fill, hover, () => { if (En()) onClick(); }, padX: padX);
     }
 
@@ -61,7 +61,7 @@ public sealed partial class Plugin
         => new BubbleElement(new SelectableElement(new RowElement(new HudElement[]
             {
                 new SpacerElement(0f, ChipHeight),   // width 0 + height > 0 = a non-flexible height strut
-                DropBold(label),
+                label,                               // a CenterCaps label (Plugin.Style.cs) — no nudge
             }, Gap: 0.01f, Justify: RowJustify.Center),
             OnClick: onClick) { Bare = true, OnHover = over => hover.On = over })
         {
@@ -129,9 +129,9 @@ public sealed partial class Plugin
             tabs[i] = new BubbleElement(new SelectableElement(new RowElement(new HudElement[]
                 {
                     new SpacerElement(0f, TabSegH),
-                    DropBold(new TextElement(labels[i],
+                    new TextElement(labels[i],
                         Color: () => active() == idx ? SolidLabel(AccentColor()) : hover.On ? TextColor() : MutedColor(),
-                        NoWrap: true, FontSize: 13) { Bold = true }),
+                        NoWrap: true, FontSize: 13) { Bold = true, CenterCaps = true },
                 }, Gap: 0.01f, Justify: RowJustify.Center),
                 OnClick: () => select(idx)) { Bare = true, OnHover = over => hover.On = over })
             {

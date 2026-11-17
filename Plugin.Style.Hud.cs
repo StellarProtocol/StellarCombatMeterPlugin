@@ -54,7 +54,8 @@ public sealed partial class Plugin
 
     // ── List | Party segmented control ──────────────────────────────────────────────────────────────────────────────
     // A 28 px Track bubble (r13, 2 px inset) holding 24 px segments (r11): active = SOLID accent + contrast label, inactive
-    // = muted label (hover Text@8 %). Both states bold 12, so a switch never resizes a segment (R10).
+    // = muted label (hover Text@8 %). Both states bold 12, so a switch never resizes a segment (R10). Labels centre on the
+    // cap height (CenterCaps), so "List" and "Party" share one baseline and sit optically centred (rule 9).
     private HudElement HudSegmented(IReadOnlyList<Func<string>> labels, Func<int> active, Action<int> select)
     {
         var segs = new HudElement[labels.Count];
@@ -65,9 +66,9 @@ public sealed partial class Plugin
             segs[i] = new BubbleElement(new SelectableElement(new RowElement(new HudElement[]
                 {
                     new SpacerElement(0f, HudSegH),
-                    DropBold(new TextElement(labels[i],
+                    new TextElement(labels[i],
                         Color: () => active() == idx ? SolidLabel(AccentColor()) : hover.On ? TextColor() : MutedColor(),
-                        NoWrap: true, FontSize: 12) { Bold = true }),
+                        NoWrap: true, FontSize: 12) { Bold = true, CenterCaps = true },
                 }, Gap: 0.01f, Justify: RowJustify.Center),
                 OnClick: () => select(idx)) { Bare = true, OnHover = over => hover.On = over })
             {

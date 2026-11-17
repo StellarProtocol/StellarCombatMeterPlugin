@@ -147,12 +147,11 @@ public sealed partial class Plugin
     // min size is 2r+2, so side / 2 made every round control 2 px taller than its content.
     private static float RoundRadius(float side) => side / 2f - 1f;
 
-    // Bold (TMP) labels sit ~1.5–2 px HIGH when centred; a 2 px spacer above moves the text down 1 px (Maestro measured).
-    private static HudElement DropBold(HudElement label) => new ColumnElement(new HudElement[]
-    {
-        new SpacerElement(0f, 2f),
-        label,
-    }, Gap: 0.01f);
+    // Control labels (pills, chips, segments, tabs) are centred on the face's CAP HEIGHT — TextElement.CenterCaps
+    // (fw 2.33.0, TMP Capline) — so the middle of "H" sits on the middle of the control at any size (rule 9) and every
+    // label of a control shares one baseline whatever its letters ("List" vs "Party"). It replaces the old DropBold
+    // (a 2 px spacer above the label = a fixed 1 px nudge measured on a 13 px pill), which left the 12 px List | Party
+    // segment 1 px LOW (cap centre 21.5 in a 9–32 segment, in-game 2026-11-17).
 
     // ── pill buttons ──────────────────────────────────────────────────────────────────────────────────────────────
     // ONE build for every labelled button: Bubble (fill + hover) → Bare Selectable → Row[strut, bold-13 label, strut].
@@ -170,8 +169,8 @@ public sealed partial class Plugin
             new RowElement(new HudElement[]
             {
                 new SpacerElement(PillPadX, PillHeight),
-                DropBold(new TextElement(label, Color: () => En() ? text() : DisabledLabel(PanelColor()),
-                    Width: labelW, Align: TextAlign.Center, NoWrap: true, FontSize: 13) { Bold = true, Ellipsize = true }),
+                new TextElement(label, Color: () => En() ? text() : DisabledLabel(PanelColor()),
+                    Width: labelW, Align: TextAlign.Center, NoWrap: true, FontSize: 13) { Bold = true, Ellipsize = true, CenterCaps = true },
                 new SpacerElement(PillPadX, PillHeight),
             }, Gap: 0.01f, Justify: RowJustify.Center),
             OnClick: () => { if (En()) onClick(); })
