@@ -176,7 +176,6 @@ public sealed partial class Plugin : IStellarPlugin
         _checkmarkPng    = BuildCheckmarkPng();          // flat-white checkmark for the Ready Check header button
         _megaphonePng    = BuildMegaphonePng();          // flat-white megaphone for the Convene header button
         _countdownPng    = BuildCountdownPng();          // flat-white stopwatch for the Countdown header button
-        _settingsGearPng = LoadSettingsGearPng();        // embedded gear icon for the ⋯ popover's Settings card + launcher tile
         _resetPng        = CmDiag.NoNewIcons ? null : BuildResetPng(); // flat-white ↺ for the header Reset button (Plugin.HudIcons.cs)
         _morePng         = CmDiag.NoNewIcons ? null : BuildMorePng();  // flat-white ⋯ for the header More button
         BuildEncounterIcons();                           // header Pause / Resume / Archive glyphs + divider (Plugin.HudIcons.Encounter.cs)
@@ -284,7 +283,6 @@ public sealed partial class Plugin : IStellarPlugin
         _rowMenuWindow = RegisterRowMenuWindow();
         RegisterHotkeys();
         RegisterLauncher();
-        // After RegisterLauncher: its History card shows _historyIconPng, which RegisterLauncher loads.
         _moreWindow = RegisterMorePopover();   // Plugin.MorePopover.cs — the header ⋯ popover
     }
 

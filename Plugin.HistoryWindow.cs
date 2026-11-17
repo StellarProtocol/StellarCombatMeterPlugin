@@ -145,13 +145,13 @@ public sealed partial class Plugin
         }, Gap: HistGap),
     }, Gap: HistGap), HistoryConfirm) { ConfirmLabelWidth = HistoryConfirmLabelW };
 
-    // 40 px accent tile + the white history glyph (Resources/history.png, the launcher icon) tinted with the solid-fill
-    // label colour — live with the theme like MeterIconTile. Live: the PNG is loaded by RegisterLauncher, which runs after
-    // this window is registered.
+    // 40 px accent tile + the white rewind-clock glyph (pre-drawn per size, Plugin.MeterIcon.cs HistoryIconPng) tinted
+    // with the solid-fill label colour — live with the theme like MeterIconTile. Live: re-picks the exact-size bitmap
+    // after a UI-scale change (the picker hands out the same cached arrays, so an unchanged scale costs no re-decode).
     private HudElement HistoryIconTile() => new CellElement(new BubbleElement(new RowElement(new HudElement[]
         {
             new SpacerElement(8f, ToolIconSize),
-            new ImageElement(() => _historyIconPng, 24, 24) { Live = true, Tint = () => SolidLabel(AccentColor()) },
+            new ImageElement(() => HistoryIconPng(24f), 24, 24) { Live = true, Tint = () => SolidLabel(AccentColor()) },
             new SpacerElement(8f, 1f),
         }, Gap: 0.01f))
     {

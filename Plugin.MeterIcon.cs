@@ -20,13 +20,22 @@ public sealed partial class Plugin
     private byte[]? MeterIconPng(float units)
         => PickPreDrawn(_meterIconPngs ??= LoadPreDrawnPngs("meter.meter-bars", MeterIconSizes), MeterIconSizes, units);
 
-    // The hub's Settings-card gear (tools/icons/gen-effect-placeholders.py GEAR_SIZES: the 20-unit glyph at 0.75 / 1 /
-    // 1.5 px per unit + 16 / 24 / 32 / 64), same picker.
+    // The Settings glyph — approved S1 "solid gear" (2026-11-17), on the hub card and the ⋯ popover card. Sizes =
+    // tools/icons/gen-hub-icons.py GEAR_SIZES: the 20-unit card glyph at 0.75 / 1 / 1.5 px per unit + 16 / 24 / 32 / 64.
     private static readonly int[] GearIconSizes = { 15, 16, 20, 24, 30, 32, 64 };
     private byte[]?[]? _gearIconPngs;
 
     private byte[]? GearIconPng(float units)
         => PickPreDrawn(_gearIconPngs ??= LoadPreDrawnPngs("hub.settings-gear", GearIconSizes), GearIconSizes, units);
+
+    // The Combat History glyph — approved H1 "rewind clock" (2026-11-17), on the hub card, the ⋯ popover card (20 units)
+    // and the History window header (24 units). Sizes = gen-hub-icons.py HISTORY_SIZES: those slots at 0.75 / 1 / 1.5 px
+    // per unit + 16 / 32 / 64. It replaced the single 64 px history.png, which every slot scaled down (soft at 20 px).
+    private static readonly int[] HistoryIconSizes = { 15, 16, 18, 20, 24, 30, 32, 36, 64 };
+    private byte[]?[]? _historyIconPngs;
+
+    private byte[]? HistoryIconPng(float units)
+        => PickPreDrawn(_historyIconPngs ??= LoadPreDrawnPngs("hub.history", HistoryIconSizes), HistoryIconSizes, units);
 
     private byte[]? PickPreDrawn(byte[]?[] pngs, int[] sizes, float units)
     {

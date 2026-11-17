@@ -86,7 +86,7 @@ public sealed partial class Plugin
                 NoWrap: true) { Ellipsize = true }, Weight: 1f),
         }, Gap: 6f)),
         HubCard(() => MeterIconPng(HubGlyph), () => _loc.T("hub.meter"), HubMeterSubtitle, MeterShownChip(), ToggleMeterShown),
-        HubCard(() => _historyIconPng, () => _loc.T("history.window.title"), HistoryCardStatus, HubChevron(),
+        HubCard(() => HistoryIconPng(HubGlyph),() => _loc.T("history.window.title"), HistoryCardStatus, HubChevron(),
             () => OpenHistory(_hubWindow)),
         HubCard(() => GearIconPng(HubGlyph), () => _loc.T("hud.more.settings"), HubSettingsSubtitle, HubChevron(),
             () => OpenSettings(_settingsTabSel, _hubWindow)),

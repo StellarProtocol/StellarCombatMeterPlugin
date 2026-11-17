@@ -15,16 +15,11 @@ are anti-aliased (8x8 supersampled coverage).
 Sizes: every pixel size a placeholder is drawn at — meter tile art (cell − 2 units: 18 / 24 / 30), tooltip 28, Settings
 › Effects row 20 — at 0.75 / 1 / 1.5 px per unit (1080p / 1440p / 4K), rounded up, plus 16 / 32 / 64.
 
-Also draws the hub's Settings card glyph (CombatMeter hub, approved 2026-11-17): a flat white gear (hub mockup
-combatmeter-hub.html: ring r 3.2 + 8 spokes on a 24 grid, 2.2 stroke) on TRANSPARENT — the plugin draws it on a live accent
-tile and tints it (ImageElement.Tint), like the meter-bars mark. Sizes: the 20-unit card glyph at 0.75 / 1 / 1.5 px per unit
-(15 / 20 / 30) plus 16 / 24 / 32 / 64.
-
 Usage (conda python with Pillow):
     python tools/icons/gen-effect-placeholders.py [--preview <png>]
-Writes Resources/effects/<glyph>-<buff|debuff>_<size>.png and Resources/hub/settings-gear_<size>.png.
-Plugin.EffectIcons.cs's PlaceholderSizes / glyph stems must match SIZES / GLYPHS below; Plugin.MeterIcon.cs's
-GearIconSizes must match GEAR_SIZES.
+Writes Resources/effects/<glyph>-<buff|debuff>_<size>.png. (The hub card glyphs — Settings gear, History clock — are
+drawn by gen-hub-icons.py.)
+Plugin.EffectIcons.cs's PlaceholderSizes / glyph stems must match SIZES / GLYPHS below.
 """
 import argparse
 import math
@@ -111,33 +106,6 @@ def draw(name, kind, size):
     return tile
 
 
-GEAR_SIZES = [15, 16, 20, 24, 30, 32, 64]
-
-
-def draw_gear(size):
-    """Gear on a 24-unit grid: whole-pixel stroke, centre on a pixel centre (odd stroke) or edge (even)."""
-    scale = size / 24
-    stroke = max(1, round(2.2 * scale))
-    c = math.floor(size / 2) + 0.5 if stroke % 2 else round(size / 2)
-    big = Image.new("L", (size * SS, size * SS), 0)
-    d = ImageDraw.Draw(big)
-    w = stroke * SS
-    R = 3.2 * scale * SS
-    C = c * SS
-    d.ellipse([C - R - w / 2, C - R - w / 2, C + R + w / 2, C + R + w / 2], fill=255)
-    d.ellipse([C - R + w / 2, C - R + w / 2, C + R - w / 2, C + R - w / 2], fill=0)
-    for k in range(8):                       # spokes from r 6 to r 9 (the mockup's 3..6 / 5.6..7.7 strokes)
-        a = math.radians(45 * k)
-        x0, y0 = C + 6 * scale * SS * math.cos(a), C + 6 * scale * SS * math.sin(a)
-        x1, y1 = C + 9 * scale * SS * math.cos(a), C + 9 * scale * SS * math.sin(a)
-        d.line([(x0, y0), (x1, y1)], fill=255, width=w)
-        for X, Y in ((x0, y0), (x1, y1)):
-            d.ellipse([X - w / 2, Y - w / 2, X + w / 2, Y + w / 2], fill=255)
-    img = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-    img.putalpha(big.resize((size, size), Image.BOX))
-    return img
-
-
 def preview(path):
     zoom, pad = 4, 8
     bg = (24, 28, 34, 255)
@@ -165,21 +133,8 @@ def main():
         for kind in KINDS:
             for s in SIZES:
                 draw(name, kind, s).save(os.path.join(out_dir, f"{name}-{kind}_{s}.png"), optimize=True)
-    hub_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "Resources", "hub")
-    os.makedirs(hub_dir, exist_ok=True)
-    for s in GEAR_SIZES:
-        draw_gear(s).save(os.path.join(hub_dir, f"settings-gear_{s}.png"), optimize=True)
     if args.preview:
         preview(args.preview)
-        zoom, accent = 6, (200, 80, 143, 255)
-        strip = Image.new("RGBA", (sum(s * zoom + 8 for s in GEAR_SIZES) + 8, max(GEAR_SIZES) * zoom + 16), (24, 28, 34, 255))
-        x = 8
-        for s in GEAR_SIZES:
-            t = Image.new("RGBA", (s, s), accent)
-            t.alpha_composite(draw_gear(s))
-            strip.alpha_composite(t.resize((s * zoom, s * zoom), Image.NEAREST), (x, 8))
-            x += s * zoom + 8
-        strip.save(os.path.splitext(args.preview)[0] + "-gear.png")
 
 
 if __name__ == "__main__":

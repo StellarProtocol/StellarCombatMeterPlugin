@@ -13,15 +13,12 @@ namespace Stellar.CombatMeter;
 public sealed partial class Plugin
 {
     private IDisposable? _settingsLauncherEntry;
-    private byte[]? _historyIconPng;   // the History window header, the ⋯ popover card and the hub card
 
     // The launcher's tile glyph slot in canvas units (framework LauncherView.Tile.cs TileGlyph).
     private const float LauncherTileGlyphUnits = 32f;
 
     private void RegisterLauncher()
     {
-        _historyIconPng = LoadHistoryIconPng();
-
         _hubWindow = RegisterHubWindow();   // Plugin.Hub.cs — after History / Settings, which its cards open
 
         // The tile → the CombatMeter hub, under the CombatMeter mark (the three-bar meter glyph, Plugin.MeterIcon.cs).
@@ -44,20 +41,5 @@ public sealed partial class Plugin
     {
         try { _settingsLauncherEntry?.Dispose(); } catch { /* disposal must not throw */ }
         DisposeHub();
-    }
-
-    // Loads Resources/history.png (packed via the csproj EmbeddedResource entry) — the History glyph. Mirrors
-    // LoadSettingsGearPng — never throws; a missing/corrupt resource degrades to null (the card draws no glyph).
-    private static byte[]? LoadHistoryIconPng()
-    {
-        try
-        {
-            using var s = typeof(Plugin).Assembly.GetManifestResourceStream("Stellar.CombatMeter.history.png");
-            if (s == null) return null;
-            using var ms = new System.IO.MemoryStream();
-            s.CopyTo(ms);
-            return ms.ToArray();
-        }
-        catch { return null; }
     }
 }

@@ -12,23 +12,6 @@ namespace Stellar.CombatMeter;
 // lives in AutoArchiveEngine; this partial only reads/writes the Plugin.AutoArchive.cs accessors.
 public sealed partial class Plugin
 {
-    // Cached gear icon for the meter header "Settings" button and the launcher tile (real embedded PNG). Loaded once at
-    // construction (Plugin.cs) via LoadSettingsGearPng — never throws; a missing resource degrades to null.
-    private byte[]? _settingsGearPng;
-
-    private static byte[]? LoadSettingsGearPng()
-    {
-        try
-        {
-            using var s = typeof(Plugin).Assembly.GetManifestResourceStream("Stellar.CombatMeter.settings-gear.png");
-            if (s == null) return null;
-            using var ms = new System.IO.MemoryStream();
-            s.CopyTo(ms);
-            return ms.ToArray();
-        }
-        catch { return null; }
-    }
-
     private HudElement BuildArchiveTab() => SettingsTabColumn(TwoColumns(
         new[]
         {

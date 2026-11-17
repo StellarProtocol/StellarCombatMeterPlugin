@@ -57,8 +57,8 @@ public sealed partial class Plugin
                 FixedChip("5",  () => _services.PartySnapshot.PartyType == PartyType.Regular5, () => RequestPartySize(PartyType.Regular5)),
                 FixedChip("20", () => _services.PartySnapshot.PartyType == PartyType.Raid20,   () => RequestPartySize(PartyType.Raid20)),
             }, Gap: 6f))),
-        NavCard(() => _historyIconPng, () => _loc.T("history.window.title"), HistoryCardStatus, OpenHistoryFromHud),
-        NavCard(() => _settingsGearPng, () => _loc.T("hud.more.settings"), () => _loc.T("hud.more.settingsStatus"), OpenSettingsFromHud),
+        NavCard(() => HistoryIconPng(NavGlyph), () => _loc.T("history.window.title"), HistoryCardStatus, OpenHistoryFromHud),
+        NavCard(() => GearIconPng(NavGlyph),() => _loc.T("hud.more.settings"), () => _loc.T("hud.more.settingsStatus"), OpenSettingsFromHud),
     });
 
     private readonly FmtCache _runsSavedFmt = new();
