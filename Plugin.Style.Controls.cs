@@ -81,11 +81,12 @@ public sealed partial class Plugin
     // following lines start under the first chip so the chips line up. Widths are estimated from the CURRENT labels at
     // build time (EstimateChipWidth) — the window is rebuilt on a language change, so a long locale wraps instead of
     // clipping, and nothing re-flows at runtime. `trailing` (e.g. a "?") ends the FIRST line, right-aligned.
-    private HudElement ChipFlow(float indent, Func<string> label, float labelW, IReadOnlyList<HudElement> chips,
+    // `label` null = no label column: the chips start right at `indent` and get the whole width (labelW is ignored).
+    private HudElement ChipFlow(float indent, Func<string>? label, float labelW, IReadOnlyList<HudElement> chips,
         IReadOnlyList<string> chipLabels, float availW, HudElement? trailing = null)
     {
         const float gap = 6f;
-        float lead = indent + labelW + gap;
+        float lead = label != null ? indent + labelW + gap : indent;
         float room = availW - lead - (trailing != null ? HelpSize + gap : 0f);
         var lines = new List<HudElement>(2);
         var line = new List<HudElement>();
@@ -94,9 +95,10 @@ public sealed partial class Plugin
         {
             var row = new List<HudElement>(line.Count + 5) { new SpacerElement(0f, SettingRowH) };
             if (indent > 0f) row.Add(new SpacerElement(indent - gap, 1f));
-            row.Add(first ? new TextElement(label, Color: () => indent > 0f ? MutedColor() : TextColor(), Width: labelW, NoWrap: true)
-                              { Ellipsize = true }
-                          : new SpacerElement(labelW, 1f));
+            if (label != null)
+                row.Add(first ? new TextElement(label, Color: () => indent > 0f ? MutedColor() : TextColor(), Width: labelW, NoWrap: true)
+                                  { Ellipsize = true }
+                              : new SpacerElement(labelW, 1f));
             row.AddRange(line);
             if (first && trailing != null) { row.Add(new SpacerElement(0f)); row.Add(trailing); }
             lines.Add(new RowElement(row, Gap: gap));

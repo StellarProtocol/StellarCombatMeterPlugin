@@ -10,16 +10,22 @@ namespace Stellar.CombatMeter;
 // artifacts under a shared CONTENT / RUN STATS / REPLAY header (design 3d73f7a: 35 pills → 10 dropdowns), indented
 // difficulty chips for the kinds that have that axis, the Master level floor under Dungeons, and the footer feedback +
 // "Refresh content list". Right: DISCORD WEBHOOK and (testing-channel builds only) TESTING SERVER.
+// Alignment (option A, approved 2026-11-17): no "Tiers" word — the chips and the "Master level" row start ChildIndent in
+// under the content name and the chips use the full column width (all four raid chips on one line in English); the
+// RUN STATS / REPLAY captions are centred over their dropdowns; "Refresh content list" spans exactly both dropdown
+// columns (the row's right edge = the dropdowns' right edge, so equal width puts both edges flush).
 //
 // Control per axis (unchanged): auto/manual/off is mutually exclusive → a pill dropdown; tiers are genuinely
-// MULTI-select → chips; the master level is ordinal 1..20 → a slider with a "≥ N" readout.
+// MULTI-select → chips; the master level is ordinal 1..20 → a slider with an "N+" readout.
 // Run stats are TRI-state; Replay is TWO-state (auto/off) — owner ruling 2026-07-28: a `manual` replay cell cannot upload
 // on any path (the retained re-upload payload takes its positions from the archive-time doc, null under `manual`).
 public sealed partial class Plugin
 {
     private const float PolicyStatsW  = 90f;
     private const float PolicyReplayW = 84f;
-    private const float UploadsSubLabelW = 80f;   // "Tiers" / "Level" / "Post for" label column of an indented row
+    private const float PolicyColGap  = 6f;    // SettingRow's gap between the two dropdowns
+    private const float UploadsSubLabelW = 80f;   // "Post for" label column (Discord chips)
+    private const float MasterLevelLabelW = 108f; // "Master level" in the longest locale (fil "Antas ng Master" ≈ 105 regular-14)
 
     private static readonly UploadPolicyState[] StatsStates  = { UploadPolicyState.Auto, UploadPolicyState.Manual, UploadPolicyState.Off };
     private static readonly UploadPolicyState[] ReplayStates = { UploadPolicyState.Auto, UploadPolicyState.Off };
@@ -45,9 +51,9 @@ public sealed partial class Plugin
             {
                 new SpacerElement(0f, 16f),
                 new CellElement(UploadsColumnCaption("cfg.uploads.col.content", 0f), Weight: 1f),
-                UploadsColumnCaption("cfg.uploads.col.runStats", PolicyStatsW),
-                UploadsColumnCaption("cfg.uploads.col.replay", PolicyReplayW),
-            }, Gap: 6f),
+                UploadsColumnCaption("cfg.uploads.col.runStats", PolicyStatsW, TextAlign.Center),
+                UploadsColumnCaption("cfg.uploads.col.replay", PolicyReplayW, TextAlign.Center),
+            }, Gap: PolicyColGap),
         };
         foreach (var kind in UploadPolicyTable.Kinds)
         {
@@ -66,14 +72,17 @@ public sealed partial class Plugin
         {
             new SpacerElement(0f, PillHeight),
             new CellElement(new TextElement(UploadsNoteText, Color: () => UploadsNoteColor(), NoWrap: true) { Ellipsize = true }, Weight: 1f),
-            NeutralButton(() => _loc.T("upload.refreshContent"), OnRefreshContentClicked, 150f),
+            // Total width = both dropdown columns + their gap (PillButton = labelW + 2 × PillPadX); both rows end at the
+            // panel's inner right edge (no trailing "?" on the policy rows), so the button's edges sit flush with them.
+            NeutralButton(() => _loc.T("upload.refreshContent"), OnRefreshContentClicked,
+                PolicyStatsW + PolicyColGap + PolicyReplayW - 2f * PillPadX),
         }, Gap: 8f));
         return SectionPanelWithTrailing(() => _loc.T("cfg.uploads.title"), () => _loc.T("cfg.uploads.hint"),
             HelpDot("uploads.policy", "cfg.uploads.title", "cfg.uploads.title", "help.uploads.policy"), rows.ToArray());
     }
 
-    private HudElement UploadsColumnCaption(string key, float width)
-        => new TextElement(() => _loc.T(key), Color: () => MutedColor(), Width: width, NoWrap: true, FontSize: 11) { Bold = true };
+    private HudElement UploadsColumnCaption(string key, float width, TextAlign align = TextAlign.Left)
+        => new TextElement(() => _loc.T(key), Color: () => MutedColor(), Width: width, Align: align, NoWrap: true, FontSize: 11) { Bold = true };
 
     private string[] PolicyOptionLabels(UploadPolicyState[] states)
     {
@@ -108,7 +117,7 @@ public sealed partial class Plugin
         return 0;
     }
 
-    // Multi-select difficulty chips for one kind (indented, wrapping). A raid shows the game's own names
+    // Multi-select difficulty chips for one kind (indented under the content name, no label, wrapping). A raid shows the game's own names
     // (Clash! / Brutal! / Purge! / Backtrack!) for the same stored tiers as a dungeon's Normal / Hard.
     private HudElement TierChips(ContentKind kind, ContentTier[] tiers)
     {
@@ -122,7 +131,7 @@ public sealed partial class Plugin
             chips.Add(ChoiceChip(() => _loc.T(key), () => TierEnabled(kind, tier),
                 () => SetTierEnabled(kind, tier, !TierEnabled(kind, tier))));
         }
-        return ChipFlow(ChildIndent, () => _loc.T("cfg.uploads.tiers"), UploadsSubLabelW, chips, labels, SettingsColInnerW);
+        return ChipFlow(ChildIndent, null, 0f, chips, labels, SettingsColInnerW);
     }
 
     private static string TierLabelKey(ContentKind kind, ContentTier tier) => (kind, tier) switch
@@ -136,19 +145,20 @@ public sealed partial class Plugin
         _                                         => "cfg.tier.normal",
     };
 
-    // Master-level floor (dungeon-only): a round-knob slider + bold "≥ N".
+    // Master-level floor (dungeon-only): "Master level" + a round-knob slider + bold "N+" ("≥" is missing from the game
+    // font and drew as nothing, so "≥ 1" read "1").
     private readonly FmtCache _masterLevelFmt = new();
-    // Column inner width − [indent 6 + label 80 + "≥ N" 36 + 4 gaps × 6] → the slider takes the rest of the line.
-    private const float MasterSliderW = SettingsColInnerW - (ChildIndent - 6f) - UploadsSubLabelW - 36f - 4f * 6f;
+    // Column inner width − [indent 6 + label + "N+" 36 + 4 gaps × 6] → the slider takes exactly the rest of the line.
+    private const float MasterSliderW = SettingsColInnerW - (ChildIndent - 6f) - MasterLevelLabelW - 36f - 4f * 6f;
 
     private HudElement MasterLevelRow() => new RowElement(new HudElement[]
     {
         new SpacerElement(0f, SettingRowH),
         new SpacerElement(ChildIndent - 6f, 1f),
-        new TextElement(() => _loc.T("cfg.uploads.level"), Color: () => MutedColor(), Width: UploadsSubLabelW, NoWrap: true) { Ellipsize = true },
+        new TextElement(() => _loc.T("cfg.uploads.masterLevel"), Color: () => MutedColor(), Width: MasterLevelLabelW, NoWrap: true) { Ellipsize = true },
         new CellElement(RoundSlider(() => MinMasterLevel, v => SetMinMasterLevel((int)MathF.Round(v)),
             UploadTierFilter.MinMasterLevelFloor, UploadTierFilter.MaxMasterLevel) with { Width = MasterSliderW }, Width: MasterSliderW),
-        new TextElement(() => _masterLevelFmt.Get("≥ {0}", MinMasterLevel), Color: () => TextColor(), Width: 36f,
+        new TextElement(() => _masterLevelFmt.Get("{0}+", MinMasterLevel), Color: () => TextColor(), Width: 36f,
             Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
     }, Gap: 6f);
 
