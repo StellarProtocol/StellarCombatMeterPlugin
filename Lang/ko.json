@@ -76,6 +76,7 @@
   "cfg.effects.forView": "{0} 보기용",
   "cfg.effects.hidden": "숨김",
   "cfg.effects.list": "효과 목록",
+  "cfg.effects.loading": "효과 불러오는 중…",
   "cfg.effects.mode": "표시할 효과",
   "cfg.effects.modeAll": "체크한 것 빼고 모두",
   "cfg.effects.modeOnly": "체크한 것만",

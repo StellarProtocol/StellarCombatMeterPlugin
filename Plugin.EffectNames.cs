@@ -38,8 +38,6 @@ public sealed partial class Plugin
     private void RefreshEffectLabels()
     {
         _effectLabels.Clear();
-        if (_effectCatalog.Count == 0) return;   // never opened Effects — it builds fresh on first open
-        _effectCatalog.Clear();
-        ApplyDebuffCfgFilter(_dcFilter);         // rebuilds the catalog with the real labels (one table walk)
+        RestartEffectCatalog();   // Plugin.EffectCatalog.cs — sliced rebuild with the real labels; no-op if never opened
     }
 }

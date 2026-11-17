@@ -11,7 +11,8 @@ namespace Stellar.CombatMeter;
 // Caution "Untick all" with a modal confirm (Plugin.Confirm.cs). The list is the CooldownBar picker (Plugin.Settings.Rows.cs /
 // .Feedback.cs) recipe: a click flashes the row green with "Hidden" / "Shown" for ~1 s (keyed by kind + the group's
 // representative id + time, so scrolling / re-filtering keeps it on the right row) and the footer says
-// "✓ Hidden “X” · N hidden" for ~3 s. Rows never re-sort under the cursor.
+// "✓ Hidden “X” · N hidden" for ~3 s. Ticked rows sort first, but rows never re-sort under the cursor: a click keeps
+// every position; the order refreshes on the next search / tab / Hidden-effects change or reopen (ApplyDebuffCfgFilter).
 // Model (catalog, filter, kind / mode / show-hidden switches): Plugin.DebuffConfig.cs.
 // Per-refresh cost: every Func is O(1) — a slot's ticked state, name and ×N text are cached per slot and recomputed only
 // when the slot shows another row or _dcSelVer moved; the ticked count is recomputed only when _dcSelVer moved.
@@ -29,12 +30,13 @@ public sealed partial class Plugin
 
     private bool DcExcludeMode => ActiveSel.Mode == DebuffTrackMode.ShowAllExceptSelected;
 
-    // Called when the Effects tab is shown: the catalog (a ~10k-row table walk) is built and filtered only on a real
-    // open — never in the hidden background prebuild (Plugin-Performance-Rules §7: lists backed by loaded data report 0
-    // rows while hidden).
+    // Called when the Effects tab is shown: the catalog (the whole ~10k-row table) is requested and filtered only on a
+    // real open — never in the hidden background prebuild (Plugin-Performance-Rules §7: lists backed by loaded data
+    // report 0 rows while hidden). The first open starts the sliced build (Plugin.EffectCatalog.cs) and the list reads
+    // "Loading effects…" until it lands; every open re-sorts, so rows ticked last time now sit at the top.
     private void OnEffectsTabShown()
     {
-        EnsureEffectCatalog();
+        RequestEffectCatalog();
         ApplyDebuffCfgFilter(_dcFilter);
     }
 
@@ -89,7 +91,7 @@ public sealed partial class Plugin
                 ChoiceChip(() => _loc.T("debuffcfg.tab.debuffs"), () => _dcTab == 0, () => SetDebuffConfigTab(0), color: () => DebuffKindColor),
                 ChoiceChip(() => _loc.T("debuffcfg.tab.buffs"),   () => _dcTab == 1, () => SetDebuffConfigTab(1), color: () => BuffKindColor),
                 new SpacerElement(0f),
-                new TextElement(() => _effCountFmt.Get("{0} / {1}", _dcFiltCount, _dcTab == 1 ? _dcBuffTotal : _dcDebuffTotal),
+                new TextElement(() => _effCountFmt.Get("{0} / {1}", _dcFiltCount, _dcTotal),
                     Color: () => MutedColor(), NoWrap: true),
             }, Gap: 6f),
             new RowElement(new HudElement[]
@@ -111,11 +113,21 @@ public sealed partial class Plugin
                     { SingleLine = true, Placeholder = EffectsSearchPlaceholder },
                 IconButton(() => "✕", () => ApplyDebuffCfgFilter("")),
             }, Gap: 6f),
-            new VirtualListElement(
-                Count:     () => _dcFiltCount,
-                RowHeight: ListRowPitch, Pool: pool,
-                OnWindow:  i => _dcOffset = i, Height: ListViewportHeight(EffectsListRows))
-            { ResetScroll = () => { if (!_dcScrollReset) return false; _dcScrollReset = false; return true; } },
+            // While the sliced catalog build runs: a muted "Loading effects…" in a box of the list's exact height, so the
+            // panel doesn't jump when the rows arrive.
+            new ConditionalElement(() => !_effCatReady,
+                new ColumnElement(new HudElement[]
+                {
+                    new SpacerElement(0f, 8f),
+                    new TextElement(() => _loc.T("cfg.effects.loading"), Color: () => MutedColor(), Align: TextAlign.Center, NoWrap: true),
+                    new SpacerElement(0f, ListViewportHeight(EffectsListRows) - 8f - SettingRowH),
+                }, Gap: 0.01f),
+                new VirtualListElement(
+                    Count:     () => _dcFiltCount,
+                    RowHeight: ListRowPitch, Pool: pool,
+                    OnWindow:  i => _dcOffset = i, Height: ListViewportHeight(EffectsListRows))
+                { ResetScroll = () => { if (!_dcScrollReset) return false; _dcScrollReset = false; return true; } })
+            { Prebuild = true },
             EffectsFooter(),
         });
     }
@@ -266,7 +278,7 @@ public sealed partial class Plugin
         if (_dcCountVer == _dcSelVer) return _dcTicked;
         _dcCountVer = _dcSelVer;
         _dcTicked = 0;
-        if (_effectCatalog.Count == 0) return 0;   // never builds the catalog itself (only an open of the tab does)
+        if (!_effCatReady) return 0;   // never builds the catalog itself (only an open of the tab does)
         FilterSeenEffects(_effectCatalog, "", ActiveSel.ShowHidden, wantBuff: _dcTab == 1, out var all, out var n);
         for (int g = 0; g < n; g++)
         {

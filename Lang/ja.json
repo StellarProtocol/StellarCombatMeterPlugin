@@ -76,6 +76,7 @@
   "cfg.effects.forView": "{0} 表示用",
   "cfg.effects.hidden": "非表示",
   "cfg.effects.list": "効果リスト",
+  "cfg.effects.loading": "効果を読み込み中…",
   "cfg.effects.mode": "表示する効果",
   "cfg.effects.modeAll": "チェック以外すべて",
   "cfg.effects.modeOnly": "チェックのみ",

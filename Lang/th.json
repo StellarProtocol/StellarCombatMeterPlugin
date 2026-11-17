@@ -76,6 +76,7 @@
   "cfg.effects.forView": "สำหรับมุมมอง {0}",
   "cfg.effects.hidden": "ซ่อน",
   "cfg.effects.list": "รายการเอฟเฟกต์",
+  "cfg.effects.loading": "กำลังโหลดเอฟเฟกต์…",
   "cfg.effects.mode": "แสดงอะไร",
   "cfg.effects.modeAll": "ทั้งหมดยกเว้นที่ติ๊ก",
   "cfg.effects.modeOnly": "เฉพาะที่ติ๊ก",

@@ -76,6 +76,7 @@
   "cfg.effects.forView": "para sa view na {0}",
   "cfg.effects.hidden": "nakatago",
   "cfg.effects.list": "Listahan ng effects",
+  "cfg.effects.loading": "Nilo-load ang mga effect…",
   "cfg.effects.mode": "Alin ang ipapakita",
   "cfg.effects.modeAll": "Lahat maliban sa naka-tsek",
   "cfg.effects.modeOnly": "Naka-tsek lang",

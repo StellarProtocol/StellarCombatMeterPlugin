@@ -26,6 +26,7 @@ public sealed partial class Plugin
         TickReadyCheck(deltaTime);
         TickReplayCapture(deltaTime);
         TickReplayDiagnostics(deltaTime);
+        PumpEffectCatalog();    // Plugin.EffectCatalog.cs — sliced Settings › Effects catalog build; one bool test when idle
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;

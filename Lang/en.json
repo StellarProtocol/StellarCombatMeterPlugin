@@ -76,6 +76,7 @@
   "cfg.effects.forView": "for the {0} view",
   "cfg.effects.hidden": "hidden",
   "cfg.effects.list": "Effect list",
+  "cfg.effects.loading": "Loading effects…",
   "cfg.effects.mode": "Which to show",
   "cfg.effects.modeAll": "All except ticked",
   "cfg.effects.modeOnly": "Only ticked",

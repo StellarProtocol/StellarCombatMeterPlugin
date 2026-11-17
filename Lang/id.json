@@ -76,6 +76,7 @@
   "cfg.effects.forView": "untuk tampilan {0}",
   "cfg.effects.hidden": "tersembunyi",
   "cfg.effects.list": "Daftar efek",
+  "cfg.effects.loading": "Memuat efek…",
   "cfg.effects.mode": "Yang ditampilkan",
   "cfg.effects.modeAll": "Semua kecuali dicentang",
   "cfg.effects.modeOnly": "Hanya dicentang",
