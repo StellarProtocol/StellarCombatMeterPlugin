@@ -163,6 +163,7 @@ public sealed partial class Plugin
     // here: the role / HP / self colours are framework theme slots (IColorRegistry) and the SDK has no way for a plugin
     // to open the theme editor, so the row was dropped as the approved spec allows.
     private readonly FmtCache _bgPctFmt = new();
+    private readonly FmtCache _fgPctFmt = new();
 
     private HudElement LookMeterWindowPanel() => SectionPanel(() => _loc.T("cfg.look.meterWindow"), null,
         SettingRow(() => _loc.T("cfg.look.background"), false,
@@ -170,7 +171,16 @@ public sealed partial class Plugin
                 with { Width = 150f }, Width: 150f),
             new TextElement(() => _bgPctFmt.Get("{0}%", (long)MathF.Round(MeterBackgroundOpacity * 100f)),
                 Color: () => TextColor(), Width: 38f, Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
-            HelpDot("look.background", "cfg.look.meterWindow", "cfg.look.background", "help.look.background")));
+            HelpDot("look.background", "cfg.look.meterWindow", "cfg.look.background", "help.look.background")),
+        // "Foreground" 20–100 %, default 100 %: fades the whole meter content (header, icons, bars, names, numbers,
+        // effect tiles) through the framework's WindowSpec.ContentOpacity. The Background panel sits outside that faded
+        // group, so neither slider changes what the other one shows.
+        SettingRow(() => _loc.T("cfg.look.foreground"), false,
+            new CellElement(RoundSlider(() => MathF.Round(MeterForegroundOpacity * 100f), v => SetMeterForeground(v / 100f), 20f, 100f)
+                with { Width = 150f }, Width: 150f),
+            new TextElement(() => _fgPctFmt.Get("{0}%", (long)MathF.Round(MeterForegroundOpacity * 100f)),
+                Color: () => TextColor(), Width: 38f, Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
+            HelpDot("look.foreground", "cfg.look.meterWindow", "cfg.look.foreground", "help.look.foreground")));
 
     // ── row helpers ───────────────────────────────────────────────────────────────────────────────────────────────
     private HudElement LookToggleRow(string id, string labelKey, Func<bool> get, Action<bool> set)
@@ -215,6 +225,35 @@ public sealed partial class Plugin
         if (_meterBackground == v) return;
         _meterBackground = v;
         _prefs.Set(PrefMeterBackground, v);
+        MarkMeterLookDirty();
+    }
+
+    // ── meter foreground ──────────────────────────────────────────────────────────────────────────────────────────
+    private const string PrefMeterForeground = "meter.foreground";
+    private float? _meterForeground;
+    private Func<float>? _meterForegroundFn;
+
+    /// <summary>Opacity (0.2..1) of the whole meter content, applied by the framework as WindowSpec.ContentOpacity (the
+    /// Background panel is not faded by it). Default 1 = today's look; the 20 % floor stops the meter vanishing by
+    /// accident. Config key <c>meter.foreground</c> (0.2..1) in the "combatmeter" section.</summary>
+    internal float MeterForegroundOpacity => _meterForeground ??= Math.Clamp(_prefs.Get(PrefMeterForeground, 1f), 0.2f, 1f);
+
+    // The WindowSpec.ContentOpacity delegate, built once: the framework polls it at the window refresh rate.
+    private Func<float> MeterForegroundFn => _meterForegroundFn ??= () => MeterForegroundOpacity;
+
+    private void SetMeterForeground(float v)
+    {
+        v = Math.Clamp(MathF.Round(v * 100f) / 100f, 0.2f, 1f);
+        if (_meterForeground == v) return;
+        _meterForeground = v;
+        _prefs.Set(PrefMeterForeground, v);
+        MarkMeterLookDirty();
+    }
+
+    // Shared by the Background and Foreground sliders. A drag fires every frame, so the prefs file is written at most twice
+    // a second, plus once when the Settings window closes (FlushMeterBackgroundSave) — never a disk write per frame.
+    private void MarkMeterLookDirty()
+    {
         _meterBgDirty = true;
         double now = _services.Framework.TimeNow;
         if (now - _meterBgSavedAt >= 0.5) FlushMeterBackgroundSave();

@@ -260,8 +260,9 @@ public sealed partial class Plugin : IStellarPlugin
               // The List view's limits; the Party view swaps in its own at runtime (ApplyViewSizeLimits, Plugin.ModeGeometry.cs).
               Resizable = true, MinWidth = ListMinW, MinHeight = ListMinH, MaxWidth = MeterMaxW, MaxHeight = ListMaxH,
               ZOrder = -100,   // background layer: every other Stellar window draws over the meter
-              // "Background" setting: rounded theme Panel behind the whole meter (Plugin.Header.cs). Delegate built once here.
-              BackgroundColor = MeterBackdropColor, BackgroundCornerRadius = 6,
+              // "Background": rounded theme Panel behind the whole meter (Plugin.Header.cs); "Foreground": fades the content
+              // above it, the panel stays outside the faded group (Plugin.Settings.cs). Delegates built once here.
+              BackgroundColor = MeterBackdropColor, BackgroundCornerRadius = 6, ContentOpacity = MeterForegroundFn,
               // In-world meter HUD: draw only in the World phase, and hide behind blocking overlays (old
               // AutoHideBehindGameMenus == Blocking) and behind any menu incl. the line-selector (AnyMenu).
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World
