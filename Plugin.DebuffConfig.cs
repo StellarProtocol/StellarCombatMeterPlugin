@@ -34,12 +34,12 @@ public sealed partial class Plugin
     // ticked count (Plugin.SettingsEffects.cs), so nothing is recomputed per refresh.
     private int      _dcSelVer;
 
-    // Full pick-list catalog of the WHOLE game BuffTable (every iconed buff/debuff, like CooldownBar lists every
-    // skill/buff) — NOT limited to what's been seen live. Keyed by id → (name, hasIcon, isBuff, hidden): name is the
+    // Full pick-list catalog of the WHOLE game BuffTable (every buff/debuff, like CooldownBar lists every
+    // skill/buff) — NOT limited to what's been seen live. Keyed by id → (name, isBuff, hidden): name is the
     // SHOWN label — the game name, or for a game-hidden effect (hidden = its game name is empty/placeholder) its
     // EffectLabel. The two tabs filter this by kind. Built once per session by the sliced job in
     // Plugin.EffectCatalog.cs (first open of the tab); rebuilt once on IGameText.Ready (RefreshEffectLabels).
-    private readonly Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)> _effectCatalog = new();
+    private readonly Dictionary<int, (string name, bool isBuff, bool hidden)> _effectCatalog = new();
     // Eligible groups of the active tab for the current Hidden-effects switch, ignoring the search text — the "/ total"
     // of the "shown / total" hint. Recomputed with the filter, so the two numbers always count the same unit (rows).
     private int _dcTotal;
@@ -93,7 +93,7 @@ public sealed partial class Plugin
     /// <summary>
     /// Pure/static: snapshots the effect catalog into the filtered group array the panel's virtual list reads,
     /// restricted to the active tab's KIND (<paramref name="wantBuff"/>). A row is eligible to list at all when it
-    /// matches the kind AND has an icon AND (<paramref name="showHidden"/> or it is not game-hidden) — the same gates
+    /// matches the kind AND (<paramref name="showHidden"/> or it is not game-hidden) — the same gate
     /// <see cref="DebuffSelection.ShouldShow"/> applies to the live strip, so the panel never offers a toggle for
     /// something the strip could never show anyway. <paramref name="total"/> counts the eligible groups; they are then
     /// filtered by a case-insensitive label-or-id substring match against <paramref name="text"/> (the label is the
@@ -103,7 +103,7 @@ public sealed partial class Plugin
     /// records that sort-time state.
     /// </summary>
     internal static void FilterSeenEffects(
-        IReadOnlyDictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)> seen, string text, bool showHidden,
+        IReadOnlyDictionary<int, (string name, bool isBuff, bool hidden)> seen, string text, bool showHidden,
         bool wantBuff, Func<int, bool>? isSelected, out EffectGroup[] groups, out int count, out int total)
     {
         var q = text?.Trim() ?? "";
@@ -114,7 +114,6 @@ public sealed partial class Plugin
         foreach (var (id, entry) in seen)
         {
             if (entry.isBuff != wantBuff) continue;   // active tab: Debuffs (false) or Buffs (true)
-            if (!entry.hasIcon) continue;
             if (!showHidden && entry.hidden) continue;
             if (!entry.hidden)
             {
@@ -151,7 +150,7 @@ public sealed partial class Plugin
 
     /// <summary>Selection-agnostic overload (nothing counts as ticked; no total) — tests and the ticked count.</summary>
     internal static void FilterSeenEffects(
-        IReadOnlyDictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)> seen, string text, bool showHidden,
+        IReadOnlyDictionary<int, (string name, bool isBuff, bool hidden)> seen, string text, bool showHidden,
         bool wantBuff, out EffectGroup[] groups, out int count)
         => FilterSeenEffects(seen, text, showHidden, wantBuff, null, out groups, out count, out _);
 

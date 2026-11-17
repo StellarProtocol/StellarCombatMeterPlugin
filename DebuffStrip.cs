@@ -93,7 +93,7 @@ public static class DebuffStrip
     private static bool IsExpired(in ActiveBuff b, long nowMs)
         => b.DurationMs > 0 && b.CreateTimeMs > 0 && nowMs > b.CreateTimeMs + b.DurationMs + ExpiredGraceMs;   // no create time = unknown, keep
 
-    // Filter predicate: a buff OR debuff whose name/icon pass its OWN selection (debuffs → debuffSel, buffs →
+    // Filter predicate: a buff OR debuff whose name passes its OWN selection (debuffs → debuffSel, buffs →
     // buffSel). Outputs the kind (isBuff = NOT a debuff) so the strip can colour the tile. "Named" is decided by
     // isUnnamed (the plugin passes IGameText.IsPlaceholderName, so filler / "Buff <id>" names count as game-hidden,
     // matching Settings › Effects); null = the bare empty-name check (tests).
@@ -105,7 +105,7 @@ public static class DebuffStrip
         isBuff = !bi.IsDebuff;
         var sel = isBuff ? buffSel : debuffSel;
         bool named = isUnnamed != null ? !isUnnamed(bi.Name) : !string.IsNullOrEmpty(bi.Name);
-        return sel.ShouldShow(baseId, named, !string.IsNullOrEmpty(bi.IconPath));
+        return sel.ShouldShow(baseId, named);
     }
 
     // In-place insertion sort by CreateTimeMs: stable (only shifts on strictly-greater, so equal-time

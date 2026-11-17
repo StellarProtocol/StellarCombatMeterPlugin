@@ -78,13 +78,13 @@ public sealed partial class Plugin
         ApplyDebuffCfgFilter(_dcFilter);   // first (sorted) fill of the list
     }
 
-    // One table row → catalog entry. Iconed rows only: the meter strip can never draw an icon-less effect
-    // (DebuffSelection.ShouldShow), so listing one would offer a toggle that does nothing. Game-hidden (placeholder
-    // name) rows are kept with their readable label and listed under "Hidden effects".
+    // One table row → catalog entry. EVERY row, iconed or not: an effect with no art of its own still draws (a category
+    // placeholder, Plugin.EffectIcons.cs — owner 2026-11-17), so e.g. Physical Immunity 55225/55226/683314 is listable.
+    // Game-hidden (placeholder name) rows are kept with their readable label and listed under "Hidden effects".
     private void AddEffectCatalogRow(in BuffInfo b)
     {
-        if (b.Id <= 0 || string.IsNullOrEmpty(b.IconPath)) return;
+        if (b.Id <= 0) return;
         var hidden = _services.GameText.IsPlaceholderName(b.Name);
-        _effectCatalog[b.Id] = (hidden ? EffectLabel(b.Id, b.Name) : b.Name!, true, !b.IsDebuff, hidden);
+        _effectCatalog[b.Id] = (hidden ? EffectLabel(b.Id, b.Name) : b.Name!, !b.IsDebuff, hidden);
     }
 }

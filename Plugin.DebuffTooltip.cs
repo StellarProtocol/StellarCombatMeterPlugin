@@ -146,7 +146,7 @@ public sealed partial class Plugin
 
     // MeterRowData.OnDebuffClick target. Clicking ANY tile lists ALL of that member's shown buffs & debuffs
     // (owner 2026-09-24) — not just the clicked one. The icons match the meter cells exactly (both go through
-    // ResolveDebuffIcon). Clicking the same member's block again closes it. cellIndex is unused.
+    // ResolveEffectIcon, Plugin.EffectIcons.cs). Clicking the same member's block again closes it. cellIndex is unused.
     private void OnDebuffCellClick(EntityId id, int cellIndex)
     {
         long key = id.Value;   // per member — any cell shows that member's full list
@@ -179,7 +179,7 @@ public sealed partial class Plugin
         var desc = info?.Description;
         _tipEntries[slot] = new DebuffTipEntry
         {
-            Tex     = ResolveDebuffIcon(e.BaseId, e.SourceSkillId, out var uv),
+            Tex     = ResolveEffectIcon(e.BaseId, e.SourceSkillId, e.IsBuff, TipIcon, out var uv),
             Uv      = uv,
             // A game-hidden effect (only listed under "Hidden effects") reads its EffectLabel — "Design name (id)" /
             // "#id" — and, with no game description, the framework's English one (or design note). Once per open.

@@ -330,6 +330,7 @@ public sealed partial class Plugin : IStellarPlugin
         _services.Loadout.LiveStateChanged         -= OnLoadoutLiveStateChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;
         UnhookGameText();      // IGameText.Ready (Plugin.SkillBreakdown.Names.cs)
+        DestroyEffectPlaceholders();   // decoded placeholder tiles (Plugin.EffectIcons.cs)
         OnInspectRequested -= HandleInspectRequested;
 
         _roleDpsSlot.Dispose();

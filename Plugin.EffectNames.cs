@@ -38,6 +38,7 @@ public sealed partial class Plugin
     private void RefreshEffectLabels()
     {
         _effectLabels.Clear();
+        ClearEffectCategories();  // Plugin.EffectIcons.cs — placeholder categories now see the English design label
         RestartEffectCatalog();   // Plugin.EffectCatalog.cs — sliced rebuild with the real labels; no-op if never opened
     }
 }

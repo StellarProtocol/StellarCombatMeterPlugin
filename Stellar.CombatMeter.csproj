@@ -223,6 +223,9 @@
          picks the exact size. -->
     <EmbeddedResource Include="Resources/meter/*.png" LogicalName="Stellar.CombatMeter.meter.%(Filename)%(Extension)" />
     <!-- Row context-menu glyphs, pre-drawn per size (<stem>_<16|24|32>.png); Plugin.RowMenuIcons.cs picks the exact size. -->
+    <!-- Effect placeholder tiles (one glyph per category, green buff / red debuff, pre-drawn per size by
+         tools/icons/gen-effect-placeholders.py); Plugin.EffectIcons.cs picks the exact-size bitmap. -->
+    <EmbeddedResource Include="Resources/effects/*.png" LogicalName="Stellar.CombatMeter.effects.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/rowmenu/*.png" LogicalName="Stellar.CombatMeter.rowmenu.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>

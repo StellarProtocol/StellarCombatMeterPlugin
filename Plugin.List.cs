@@ -119,11 +119,12 @@ public sealed partial class Plugin
         if (Mathf.Abs(cur - target) < 1f / DisplayQuantize.BarSteps) cur = target;
         _barAnim[id] = cur;
         var rowData = AssembleRow(row, rank, elapsed, vis, toggles);
-        ResolveDebuffs(id, vis.Debuffs, MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
         // Player-tile size drives the row height (party-focus grows every row uniformly). List keeps the base
         // height (its TileSize control isn't exposed, so it stays Small → 48px), but the block still renders
         // when its Debuffs toggle is on (owner 2026-09-24: buffs & debuffs supported in List too).
+        // Set BEFORE ResolveDebuffs: an icon-less effect's placeholder tile is picked for this exact cell size.
         rowData.DebuffCellSize = MeterElementToggles.TileSizePx(toggles.TileSize);
+        ResolveDebuffs(id, vis.Debuffs, MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
         return rowData;
     }
 

@@ -220,7 +220,9 @@ public sealed partial class Plugin
     {
         int i = _dcOffset + slot;
         if (i >= _dcFiltCount) { _dcUv[slot] = default; return null; }
-        return _services.GameAssets.LoadBuffIcon(_dcGroups[i].RepId, out _dcUv[slot]);
+        // The shared effect icon chain (Plugin.EffectIcons.cs) with no live source: imagine card / skill icon via
+        // BuffTable.SkillId → own icon → category placeholder (green on the Buffs tab, red on Debuffs).
+        return ResolveEffectIcon(_dcGroups[i].RepId, 0, _dcTab == 1, EffectsIconSize, out _dcUv[slot]);
     }
 
     // Per pool-slot hover keyed by the slot's LOGICAL row: a re-bound slot never inherits the previous row's hover.

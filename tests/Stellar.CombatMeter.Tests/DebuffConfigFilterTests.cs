@@ -9,27 +9,28 @@ namespace Stellar.CombatMeter.Tests;
 public class DebuffConfigFilterTests
 {
     // All rows default to DEBUFFS (isBuff:false); pass isBuff:true for a buff row.
-    private static Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)> Seen(
-        params (int id, string name, bool hasIcon)[] rows)
+    private static Dictionary<int, (string name, bool isBuff, bool hidden)> Seen(
+        params (int id, string name)[] rows)
     {
-        var d = new Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)>();
-        foreach (var r in rows) d[r.id] = (r.name, r.hasIcon, false, r.name.Length == 0);   // "" = game-hidden, unlabelled
+        var d = new Dictionary<int, (string name, bool isBuff, bool hidden)>();
+        foreach (var r in rows) d[r.id] = (r.name, false, r.name.Length == 0);   // "" = game-hidden, unlabelled
         return d;
     }
 
     [Fact]
-    public void No_icon_is_never_eligible_even_with_ShowHidden()
+    public void Icon_less_effect_is_eligible()
     {
-        var seen = Seen((1, "Poison", false));
-        Plugin.FilterSeenEffects(seen, "", showHidden: true, wantBuff: false, out var groups, out var count);
-        Assert.Equal(0, count);
-        Assert.Empty(groups);
+        // Every effect draws (no art → a category placeholder tile, owner 2026-11-17), so there is no icon gate.
+        var seen = Seen((1, "Poison"));
+        Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out var groups, out var count);
+        Assert.Equal(1, count);
+        Assert.Equal(1, groups[0].RepId);
     }
 
     [Fact]
     public void Unnamed_iconed_debuff_is_hidden_unless_ShowHidden()
     {
-        var seen = Seen((1, "", true));
+        var seen = Seen((1, ""));
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out _, out var hiddenCount);
         Assert.Equal(0, hiddenCount);
 
@@ -43,7 +44,7 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Same_named_effects_group_into_one_row_with_a_count()
     {
-        var seen = Seen((10, "Cuisine", true), (11, "Cuisine", true), (12, "Cuisine", true), (20, "Poison", true));
+        var seen = Seen((10, "Cuisine"), (11, "Cuisine"), (12, "Cuisine"), (20, "Poison"));
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out var groups, out var count);
         Assert.Equal(2, count);   // Cuisine (×3) + Poison
         var cuisine = System.Array.Find(groups, g => g.Name == "Cuisine");
@@ -54,7 +55,7 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Search_matches_name_case_insensitively()
     {
-        var seen = Seen((1, "Poison", true), (2, "Burn", true));
+        var seen = Seen((1, "Poison"), (2, "Burn"));
         Plugin.FilterSeenEffects(seen, "poi", showHidden: false, wantBuff: false, out var groups, out var count);
         Assert.Equal(1, count);
         Assert.Equal("Poison", groups[0].Name);
@@ -63,7 +64,7 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Search_matches_an_id_within_a_group()
     {
-        var seen = Seen((12345, "Poison", true), (999, "Burn", true));
+        var seen = Seen((12345, "Poison"), (999, "Burn"));
         Plugin.FilterSeenEffects(seen, "234", showHidden: false, wantBuff: false, out var groups, out var count);
         Assert.Equal(1, count);
         Assert.Equal(12345, groups[0].RepId);
@@ -72,15 +73,15 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Empty_query_keeps_every_eligible_group()
     {
-        var seen = Seen((1, "Poison", true), (2, "Burn", true), (3, "NoIcon", false));
+        var seen = Seen((1, "Poison"), (2, "Burn"), (3, "NoIcon"));
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out _, out var count);
-        Assert.Equal(2, count);
+        Assert.Equal(3, count);
     }
 
     [Fact]
     public void Groups_sort_by_name_then_rep_id()
     {
-        var seen = Seen((3, "Burn", true), (1, "Burn", true), (2, "Ablaze", true));
+        var seen = Seen((3, "Burn"), (1, "Burn"), (2, "Ablaze"));
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out var groups, out var count);
         Assert.Equal(2, count);   // Ablaze + Burn(×2)
         Assert.Equal("Ablaze", groups[0].Name);
@@ -100,11 +101,11 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Tab_filters_by_kind()
     {
-        var seen = new Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)>
+        var seen = new Dictionary<int, (string name, bool isBuff, bool hidden)>
         {
-            [1] = ("Poison", true, false, false),        // debuff
-            [2] = ("Attack Up", true, true, false),      // buff
-            [3] = ("Bleed", true, false, false),         // debuff
+            [1] = ("Poison", false, false),        // debuff
+            [2] = ("Attack Up", true, false),       // buff
+            [3] = ("Bleed", false, false),         // debuff
         };
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out var d, out var dCount);
         Assert.Equal(2, dCount);
@@ -120,12 +121,12 @@ public class DebuffConfigFilterTests
     {
         // A game-hidden effect is listed under its EffectLabel ("Design name (id)"); two with the same label stay
         // separate rows, cluster before named rows, and the search box matches the shown label.
-        var seen = new Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)>
+        var seen = new Dictionary<int, (string name, bool isBuff, bool hidden)>
         {
-            [5]  = ("Burn", true, false, false),
-            [7]  = ("Firmament Sub-Buff (7)", true, false, true),
-            [8]  = ("Firmament Sub-Buff (7)", true, false, true),
-            [9]  = ("Ablaze", true, false, false),
+            [5]  = ("Burn", false, false),
+            [7]  = ("Firmament Sub-Buff (7)", false, true),
+            [8]  = ("Firmament Sub-Buff (7)", false, true),
+            [9]  = ("Ablaze", false, false),
         };
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out _, out var namedOnly);
         Assert.Equal(2, namedOnly);
@@ -145,14 +146,14 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Ticked_groups_sort_first_then_hidden_then_name()
     {
-        var seen = new Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)>
+        var seen = new Dictionary<int, (string name, bool isBuff, bool hidden)>
         {
-            [1] = ("Ablaze", true, false, false),
-            [2] = ("Burn", true, false, false),
-            [3] = ("Cuisine", true, false, false),
-            [4] = ("Cuisine", true, false, false),
-            [7] = ("Sub-Buff (7)", true, false, true),
-            [8] = ("Sub-Buff (8)", true, false, true),
+            [1] = ("Ablaze", false, false),
+            [2] = ("Burn", false, false),
+            [3] = ("Cuisine", false, false),
+            [4] = ("Cuisine", false, false),
+            [7] = ("Sub-Buff (7)", false, true),
+            [8] = ("Sub-Buff (8)", false, true),
         };
         var ticked = new HashSet<int> { 2, 8, 3, 4 };
         Plugin.FilterSeenEffects(seen, "", showHidden: true, wantBuff: false, ticked.Contains,
@@ -168,7 +169,7 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Partly_ticked_name_group_does_not_sort_as_ticked()
     {
-        var seen = Seen((10, "Cuisine", true), (11, "Cuisine", true), (20, "Burn", true));
+        var seen = Seen((10, "Cuisine"), (11, "Cuisine"), (20, "Burn"));
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, new HashSet<int> { 11 }.Contains,
                                  out var g, out _, out _);
         Assert.Equal("Burn", g[0].Name);       // nothing fully ticked → plain name order
@@ -178,11 +179,11 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Total_counts_eligible_groups_ignoring_the_search_text()
     {
-        var seen = Seen((1, "Poison", true), (2, "Burn", true), (3, "Burn", true), (4, "", true), (5, "NoIcon", false));
+        var seen = Seen((1, "Poison"), (2, "Burn"), (3, "Burn"), (4, ""), (5, "NoIcon"));
         Plugin.FilterSeenEffects(seen, "poi", showHidden: false, wantBuff: false, null, out _, out var n, out var total);
         Assert.Equal(1, n);
-        Assert.Equal(2, total);   // Poison + Burn(×2); the hidden and the icon-less rows are not eligible
+        Assert.Equal(3, total);   // Poison + Burn(×2) + NoIcon; the game-hidden row is not eligible
         Plugin.FilterSeenEffects(seen, "poi", showHidden: true, wantBuff: false, null, out _, out _, out var withHidden);
-        Assert.Equal(3, withHidden);
+        Assert.Equal(4, withHidden);
     }
 }
