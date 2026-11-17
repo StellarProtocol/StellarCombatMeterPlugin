@@ -60,12 +60,13 @@ public sealed partial class Plugin
         => SmallNumber(secs / 60) + ":" + (secs % 60).ToString("00", System.Globalization.CultureInfo.InvariantCulture);
 
     // The dot shows for the two "live" states and takes their colour; Paused also tints the text amber.
+    // Every other state (idle count, combat clock, raid) reads in full theme text, not muted (user call).
     private bool HudStatusHasDot() => _hudStatusKind is HudStatusKind.Combat or HudStatusKind.Paused;
     private ColorRgba HudStatusDotColor() => _hudStatusKind == HudStatusKind.Paused ? CautionColor() : SuccessColor();
     private ColorRgba? HudStatusColor() => _hudStatusKind switch
     {
         HudStatusKind.Paused   => CautionColor(),
         HudStatusKind.Archived => SuccessText(),
-        _                      => MutedColor(),
+        _                      => TextColor(),
     };
 }
