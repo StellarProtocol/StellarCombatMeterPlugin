@@ -69,9 +69,10 @@ public sealed partial class Plugin
 
     // ── ROW ───────────────────────────────────────────────────────────────────────────────────────────────────────
     // Row size (approved 2026-11-17) leads the panel. Rows the chosen size doesn't draw go RECESSED (rule 22: disabled,
-    // not clickable, values kept) with a muted inline hint — see SizeRow / Plugin.Settings.RowSize.cs.
+    // not clickable, values kept); ONE muted note under it says why — see SizeRow / Plugin.Settings.RowSize.cs.
     private HudElement LookRowPanel() => SectionPanel(() => _loc.T("cfg.look.row"), () => _loc.T("cfg.look.row.hint"),
         LookRowSizeRow(),
+        RowSizeNote("cfg.look.rowSize.noteCompact", "cfg.look.rowSize.noteMini"),
         LookToggleRow("rank", "settings.toggle.rank", () => LookT.Rank, v => LookT.Rank = v),
         LookToggleRow("crest", "settings.toggle.crest", () => LookT.Crest, v => LookT.Crest = v, DrawnNotMini),
         // "Class/Spec" merges the two old toggles (Spec name, Class name) — no config migration: Off = neither,
@@ -176,30 +177,43 @@ public sealed partial class Plugin
     private readonly FmtCache _rowBgPctFmt = new();
 
     private HudElement LookMeterWindowPanel() => SectionPanel(() => _loc.T("cfg.look.meterWindow"), null,
-        SettingRow(() => _loc.T("cfg.look.background"), false,
-            new CellElement(RoundSlider(() => MathF.Round(MeterBackgroundOpacity * 100f), v => SetMeterBackground(v / 100f), 0f, 100f)
-                with { Width = 150f }, Width: 150f),
+        MeterWindowRow("cfg.look.background",
+            new CellElement(RoundSlider(() => MathF.Round(MeterBackgroundOpacity * 100f), v => SetMeterBackground(v / 100f), 0f, 100f), Weight: 1f),
             new TextElement(() => _bgPctFmt.Get("{0}%", (long)MathF.Round(MeterBackgroundOpacity * 100f)),
                 Color: () => TextColor(), Width: 38f, Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
             HelpDot("look.background", "cfg.look.meterWindow", "cfg.look.background", "help.look.background")),
         // "Row background" 0–100 %, default 60 %: fades only each row's dark backing (row tile, bar + spine tracks, empty
         // effect squares, the recessed empty slot) through the framework's MeterRowElement.BackingOpacity; bars, crest,
         // names, numbers, icons, filled effect tiles and the self wash/ring stay solid. 100 % = the look before 2.33.
-        SettingRow(() => _loc.T("cfg.look.rowBackground"), false,
-            new CellElement(RoundSlider(() => MathF.Round(MeterRowBackingOpacity * 100f), v => SetMeterRowBacking(v / 100f), 0f, 100f)
-                with { Width = 150f }, Width: 150f),
+        MeterWindowRow("cfg.look.rowBackground",
+            new CellElement(RoundSlider(() => MathF.Round(MeterRowBackingOpacity * 100f), v => SetMeterRowBacking(v / 100f), 0f, 100f), Weight: 1f),
             new TextElement(() => _rowBgPctFmt.Get("{0}%", (long)MathF.Round(MeterRowBackingOpacity * 100f)),
                 Color: () => TextColor(), Width: 38f, Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
             HelpDot("look.rowBackground", "cfg.look.meterWindow", "cfg.look.rowBackground", "help.look.rowBackground")),
         // "Foreground" 20–100 %, default 100 %: fades the whole meter content (header, icons, bars, names, numbers,
         // effect tiles) through the framework's WindowSpec.ContentOpacity. The Background panel sits outside that faded
         // group, so neither slider changes what the other one shows.
-        SettingRow(() => _loc.T("cfg.look.foreground"), false,
-            new CellElement(RoundSlider(() => MathF.Round(MeterForegroundOpacity * 100f), v => SetMeterForeground(v / 100f), 20f, 100f)
-                with { Width = 150f }, Width: 150f),
+        MeterWindowRow("cfg.look.foreground",
+            new CellElement(RoundSlider(() => MathF.Round(MeterForegroundOpacity * 100f), v => SetMeterForeground(v / 100f), 20f, 100f), Weight: 1f),
             new TextElement(() => _fgPctFmt.Get("{0}%", (long)MathF.Round(MeterForegroundOpacity * 100f)),
                 Color: () => TextColor(), Width: 38f, Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
             HelpDot("look.foreground", "cfg.look.meterWindow", "cfg.look.foreground", "help.look.foreground")));
+
+    // [label: FIXED MeterWindowLabelW] [slider: the rest] [38 px readout] [?]. A fixed label column (not the weighted,
+    // ellipsizing SettingRow label) so no locale cuts a label ("Row backgr…" at the old 150 px slider) and the three
+    // sliders start and end at the same x. Width = the longest of Background / Row background / Foreground in ANY locale:
+    // fil "Background ng row" ≈ 123 px at the plain 14 px face (Arial measure; "Background" = 76 measured in game) + spare.
+    // ⚠️ A longer translation of any of the three → re-measure and widen this.
+    private const float MeterWindowLabelW = 132f;
+
+    private HudElement MeterWindowRow(string labelKey, params HudElement[] controls)
+    {
+        var items = new HudElement[controls.Length + 2];
+        items[0] = new SpacerElement(0f, SettingRowH);
+        items[1] = new TextElement(() => _loc.T(labelKey), Color: () => TextColor(), Width: MeterWindowLabelW, NoWrap: true);
+        Array.Copy(controls, 0, items, 2, controls.Length);
+        return new RowElement(items, Gap: 6f);
+    }
 
     // ── row helpers ───────────────────────────────────────────────────────────────────────────────────────────────
     private HudElement LookToggleRow(string id, string labelKey, Func<bool> get, Action<bool> set, SizeNeed need = SizeNeed.Any)

@@ -32,8 +32,11 @@ public sealed partial class Plugin
     // padding + caption + rows × (28 px row + 6 px gap), panels 8 px apart in the column.
     private const int LookLeftPanels = 2, LookLeftRows = 9 + 4;           // ROW 9 (Row size + 8) · BATTLE IMAGINE 4
     private const int LookRightPanels = 3, LookRightRows = 6 + 3 + 3;     // BARS 6 · NUMBERS 3 · METER WINDOW 3
+    // + the ROW panel's Row-size note line (RowSizeNoteH, always present) and its panel gap.
+    private const float LookLeftExtraH = RowSizeNoteH + PanelGap;
     private const float LookPanelChromeH = 2f * PanelPadY + CaptionHeight;
-    private const float LookColLeftH  = LookLeftPanels  * LookPanelChromeH + LookLeftRows  * (SettingRowH + PanelGap) + (LookLeftPanels  - 1) * SettingsGap;
+    private const float LookColLeftH  = LookLeftPanels  * LookPanelChromeH + LookLeftRows  * (SettingRowH + PanelGap) + (LookLeftPanels  - 1) * SettingsGap
+                                      + LookLeftExtraH;
     private const float LookColRightH = LookRightPanels * LookPanelChromeH + LookRightRows * (SettingRowH + PanelGap) + (LookRightPanels - 1) * SettingsGap;
     private const float LookColH = LookColLeftH > LookColRightH ? LookColLeftH : LookColRightH;
     // 728 was laid out (and seen in game with the footer's bottom padding) when the taller Look column was 496 px (the

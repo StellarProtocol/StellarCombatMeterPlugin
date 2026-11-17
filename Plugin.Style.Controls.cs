@@ -202,10 +202,14 @@ public sealed partial class Plugin
     private const float ChildIndent = 12f;
 
     private HudElement SettingRow(Func<string> label, bool child, params HudElement[] controls)
+        => SettingRow(label, child, child ? static () => true : static () => false, controls);
+
+    // `muted` = the label draws muted while it returns true (a child row, or a row recessed by Row size — SizeRow).
+    private HudElement SettingRow(Func<string> label, bool child, Func<bool> muted, params HudElement[] controls)
     {
         var items = new List<HudElement>(controls.Length + 3) { new SpacerElement(0f, SettingRowH) };
         if (child) items.Add(new SpacerElement(ChildIndent - 6f, 1f));
-        items.Add(new CellElement(new TextElement(label, Color: () => child ? MutedColor() : TextColor(), NoWrap: true)
+        items.Add(new CellElement(new TextElement(label, Color: () => muted() ? MutedColor() : TextColor(), NoWrap: true)
             { Ellipsize = true }, Weight: 1f));
         items.AddRange(controls);
         return new RowElement(items, Gap: 6f);
