@@ -20,6 +20,7 @@ public sealed partial class Plugin
     private string   _discordWebhookUrl = "";
     private readonly bool[] _discordContent = new bool[System.Enum.GetValues(typeof(ContentKind)).Length];
     private string   _discordTestResult = "";
+    private volatile bool _discordTestOk;   // last test result succeeded → the settings line shows it green
 
     private readonly record struct PendingDiscordPost(long LevelUuid, DiscordRunSummary Summary, long DeadlineMs);
     private readonly List<PendingDiscordPost> _discordPending = new();
@@ -63,13 +64,15 @@ public sealed partial class Plugin
     }
 
     internal string DiscordTestResult => _discordTestResult;
+    internal bool DiscordTestOk => _discordTestOk;
 
     internal void SendDiscordTest()
     {
+        _discordTestOk = false;
         var probe = new DiscordRunSummary("CombatMeter", "test", 0, 1,
             new[] { new DiscordPlayerRow("Webhook connected ✓", 0, 0, 0) }, null);
         DiscordWebhookPoster.PostFireAndForget(_discordWebhookUrl, DiscordMessageBuilder.Build(probe),
-            (ok, status, err) => _discordTestResult = ok ? _loc.T("discord.test.sent") : _loc.TFormat("discord.test.failed", status == 0 ? err ?? "" : status.ToString()));
+            (ok, status, err) => _discordTestResult = (_discordTestOk = ok) ? _loc.T("discord.test.sent") : _loc.TFormat("discord.test.failed", status == 0 ? err ?? "" : status.ToString()));
     }
 
     // Renders the run card IN-GAME (main thread, from the settings button) from your latest banked run's
@@ -78,11 +81,12 @@ public sealed partial class Plugin
     {
         var model = BuildCardFromLatestRun() ?? SampleCardModel();
         var png = DiscordCardRenderer.Render(model, s => _services.Log.Info(s));
-        if (png is null) { _discordTestResult = "Card render failed — see log"; return; }
-        _discordTestResult = "Rendering… sending card";
+        _discordTestOk = false;
+        if (png is null) { _discordTestResult = _loc.T("discord.test.cardRenderFailed"); return; }
+        _discordTestResult = _loc.T("discord.test.cardSending");
         DiscordWebhookPoster.PostImage(_discordWebhookUrl, png,
             "{\"content\":\"Run card — rendered in-game.\"}",
-            onComplete: (ok, status, err) => _discordTestResult = ok ? _loc.T("discord.test.cardSent") : _loc.TFormat("discord.test.cardFailed", status == 0 ? err ?? "" : status.ToString()));
+            onComplete: (ok, status, err) => _discordTestResult = (_discordTestOk = ok) ? _loc.T("discord.test.cardSent") : _loc.TFormat("discord.test.cardFailed", status == 0 ? err ?? "" : status.ToString()));
     }
 
     private sealed class CardAgg

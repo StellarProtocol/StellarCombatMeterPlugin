@@ -272,88 +272,54 @@ public class UploadTargetTests
     }
 
     // -------------------------------------------------------------------------
-    // 3. BuildUploadTargetSection — the settings-column section, gated on an injectable Func<bool>.
+    // 3. BuildUploadTargetSection — gates the Settings › Uploads "Testing server" panel on an injectable Func<bool>.
+    //    The panel itself (house-style SectionPanel + on/off chip) is built by the plugin instance; the builder only
+    //    decides WHETHER it renders, which is the part that must never leak onto a stable build.
     // -------------------------------------------------------------------------
+
+    private static readonly HudElement Panel = new TextElement(() => "panel");
 
     [Fact]
     public void Section_When_reflects_the_injected_gate_true()
     {
-        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(
-            () => true, () => "section", () => "toggle", () => false, _ => { }, () => "hint");
+        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(() => true, Panel);
         Assert.True(el.When());
     }
 
     [Fact]
     public void Section_When_reflects_the_injected_gate_false()
     {
-        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(
-            () => false, () => "section", () => "toggle", () => false, _ => { }, () => "hint");
+        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(() => false, Panel);
         Assert.False(el.When());
     }
 
-    // A stable build's gate returns false — the settings column must render NOTHING for this block.
-    // The Else branch is pinned as a zero-height spacer regardless of the gate value (both subtrees
-    // are always built; only When() decides which one is shown — see HudElement.cs's own doc comment
-    // on ConditionalElement).
+    // A stable build's gate returns false — the settings column must render NOTHING for this block. The Else branch is
+    // pinned as a zero-height spacer regardless of the gate value (only When() decides which subtree is shown).
     [Fact]
     public void Section_Else_branch_is_a_zero_height_spacer()
     {
-        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(
-            () => false, () => "section", () => "toggle", () => false, _ => { }, () => "hint");
+        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(() => false, Panel);
         var spacer = Assert.IsType<SpacerElement>(el.Else);
         Assert.Equal(0f, spacer.Height);
         Assert.Equal(0f, spacer.Width);
     }
 
-    // The Then branch carries the section label, the toggle row (bound to the supplied get/set), and
-    // the hint text — built regardless of the gate (the gate only controls visibility via When()).
+    // The Then branch is exactly the panel the caller built — the gate wraps it, never rebuilds or replaces it.
     [Fact]
-    public void Section_Then_branch_contains_the_toggle_bound_to_the_supplied_state()
+    public void Section_Then_branch_is_the_supplied_panel()
     {
-        var toggleState = false;
-        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(
-            () => true, () => "Upload target", () => "Upload to testing",
-            () => toggleState, v => toggleState = v, () => "hint text");
-
-        var column = Assert.IsType<ColumnElement>(el.Then);
-        Assert.Equal(4, column.Children.Count);
-        Assert.IsType<SeparatorElement>(column.Children[0]);
-
-        var label = Assert.IsType<TextElement>(column.Children[1]);
-        Assert.True(label.Emphasis);
-        Assert.Equal("Upload target", label.Text());
-
-        var row = Assert.IsType<RowElement>(column.Children[2]);
-        var toggle = Assert.IsType<ToggleElement>(row.Children[0]);
-        var toggleLabel = Assert.IsType<TextElement>(row.Children[1]);
-        Assert.Equal("Upload to testing", toggleLabel.Text());
-
-        Assert.False(toggle.Get());
-        toggle.Set(true);
-        Assert.True(toggleState);   // Set delegate reached the caller-supplied state
-        Assert.True(toggle.Get());  // Get delegate reflects it back live
-
-        var hint = Assert.IsType<TextElement>(column.Children[3]);
-        Assert.Equal("hint text", hint.Text());
+        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(() => true, Panel);
+        Assert.Same(Panel, el.Then);
     }
 
-    // Distinguishes the hint copy from the post-save relaunch copy by whichever Func<string> the
-    // caller supplies for the hint slot — Plugin.UploadTargetSection() (the instance wrapper) is what
-    // actually switches between "settings.uploadTarget.hint" and "…relaunch" on
-    // _uploadTargetPendingRelaunch; this pins that the builder just renders whatever it is given.
+    // The gate is read LIVE (a Func), not captured at build time.
     [Fact]
-    public void Section_Then_hint_text_reflects_whatever_the_caller_supplies()
+    public void Section_gate_is_polled_live()
     {
-        var pending = false;
-        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(
-            () => true, () => "s", () => "t", () => false, _ => { },
-            () => pending ? "relaunch copy" : "hint copy");
-
-        var column = Assert.IsType<ColumnElement>(el.Then);
-        var hint = Assert.IsType<TextElement>(column.Children[3]);
-        Assert.Equal("hint copy", hint.Text());
-
-        pending = true;
-        Assert.Equal("relaunch copy", hint.Text());   // Func re-pulled live, not baked at build time
+        var testing = false;
+        var el = (ConditionalElement)Plugin.BuildUploadTargetSection(() => testing, Panel);
+        Assert.False(el.When());
+        testing = true;
+        Assert.True(el.When());
     }
 }

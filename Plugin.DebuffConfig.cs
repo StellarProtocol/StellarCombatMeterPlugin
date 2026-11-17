@@ -5,15 +5,14 @@ using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
 
-// Party-focus debuff config panel (owner request 2026-09-24). A faithful port of CooldownBar's Debuffs
-// Track tab (StellarCooldownBarPlugin Plugin.Settings.cs BuildDebuffsTab — VirtualListElement + pooled
-// row + search-filter + per-row-toggle), but sourced from the "seen debuffs" catalog Plugin.Debuffs.cs
-// sourced from the FULL game BuffTable via IGameDataCombat.AllBuffs() (every iconed buff/debuff), split by kind.
-// Drives the already-built DebuffSelection model (mode + show-hidden + per-id checked set); opened from
-// the Appearance panel's "Configure debuffs…" button (Plugin.Settings.cs, party tabs only).
+// Party buffs & debuffs pick-list MODEL (owner request 2026-09-24): the catalog, the kind / mode / show-hidden
+// switches, the search filter and the per-row group state behind Settings › Effects (the UI is
+// Plugin.SettingsEffects.cs; it replaced the old standalone "Configure buffs & debuffs" window). A port of
+// CooldownBar's Debuffs Track tab, sourced from the FULL game BuffTable via IGameDataCombat.AllBuffs() (every iconed
+// buff/debuff), split by kind. Drives the DebuffSelection model (mode + show-hidden + per-id checked set).
 public sealed partial class Plugin
 {
-    private const int DebuffConfigPoolSize = 24;
+    private const int DebuffConfigPoolSize = 14;   // ceil(10-row viewport / 28) + 3 (KB VirtualList pool rule)
 
     // One config row: a group of same-NAMED effects (like CooldownBar's "Cuisine ×136"). Ids is every base id
     // sharing Name; toggling the row toggles them all. Unnamed rows are single-id groups (Name = "", Count = 1).
@@ -29,6 +28,9 @@ public sealed partial class Plugin
     private bool     _dcScrollReset;
     private int      _dcTab;   // 0 = Debuffs tab, 1 = Buffs tab (which selection + kind the panel edits)
     private readonly UvRect[] _dcUv = new UvRect[DebuffConfigPoolSize];
+    // Bumped on every selection / mode / filter / kind change: invalidates the per-slot tick caches and the
+    // ticked count (Plugin.SettingsEffects.cs), so nothing is recomputed per refresh.
+    private int      _dcSelVer;
 
     // Full pick-list catalog built ONCE from IGameDataCombat.AllBuffs() (every iconed buff/debuff in the game's
     // BuffTable, like CooldownBar lists every skill/buff) — NOT limited to what's been seen live. Keyed by id →
@@ -54,74 +56,6 @@ public sealed partial class Plugin
         }
     }
 
-    private IWindowControl BuildAndRegisterDebuffConfig()
-        => _services.Windows.Register(new WindowRegistration(
-            new WindowSpec(
-                Id:          "combatmeter.debuffConfig",
-                Title:       _loc.T("debuffcfg.title"),   // baked; rebuilt on LanguageChanged
-                DefaultRect: new WindowRect(900f, 120f, 380f, 540f),
-                Category:    WindowCategory.Tools,
-                Style:       WindowPanelStyle.GlassMenu)
-            { StartVisible = false, Closable = true, Draggable = true, Resizable = true,
-              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
-                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
-            BuildDebuffConfigRoot(),
-            OnClose: () => _debuffConfigWindow.SetVisible(false)));
-
-    // Builds the catalog + re-applies the filter on open (the game table may not have been loaded when the panel
-    // was first built, so a fresh EnsureEffectCatalog on open picks it up).
-    private void ToggleDebuffConfig()
-    {
-        if (!_debuffConfigWindow.IsShown) { EnsureEffectCatalog(); ApplyDebuffCfgFilter(_dcFilter); }
-        _debuffConfigWindow.SetVisible(!_debuffConfigWindow.IsShown);
-    }
-
-    private HudElement BuildDebuffConfigRoot()
-    {
-        var pool = new HudElement[DebuffConfigPoolSize];
-        for (int i = 0; i < DebuffConfigPoolSize; i++)
-        {
-            int idx = i;
-            pool[i] = new ConditionalElement(
-                () => _dcOffset + idx < _dcFiltCount,
-                new RowElement(new HudElement[]
-                {
-                    new CellElement(new GameTextureElement(() => DcIcon(idx), 22, 22, () => _dcUv[idx]), Width: 26f),
-                    new TextElement(() => DcLabel(idx)),
-                    new SpacerElement(Width: 0f),
-                    new ToggleElement(() => "", () => DcTracked(idx), v => SetDcTracked(idx, v)),
-                }, Gap: 4f));
-        }
-        return new ColumnElement(new HudElement[]
-        {
-            new TextElement(() => _loc.T("debuffcfg.title"), Emphasis: true),
-            DebuffConfigTabRow(),
-            DebuffConfigModeRow(),
-            new TextElement(() => _loc.T("debuffcfg.mode.help"), MutedCol),
-            DebuffConfigShowHiddenRow(),
-            new SeparatorElement(),
-            new InputElement(Get: () => _dcFilter, Submit: ApplyDebuffCfgFilter, Width: 340f, OnChange: ApplyDebuffCfgFilter),
-            new TextElement(() => _loc.TFormat("debuffcfg.count", _dcFiltCount, _dcTab == 1 ? _dcBuffTotal : _dcDebuffTotal)),
-            new VirtualListElement(
-                Count:    () => _dcFiltCount,
-                RowHeight: 32f, Pool: pool,
-                OnWindow: i => _dcOffset = i, Height: 360f)
-            { ResetScroll = () => { if (!_dcScrollReset) return false; _dcScrollReset = false; return true; } },
-        }, Gap: 4f);
-    }
-
-    // Debuffs | Buffs tab — the top-level switch. Each tab edits its OWN selection (mode + checked set +
-    // show-hidden below apply to the active tab only), so "show only checked" on Debuffs is independent of Buffs
-    // (owner 2026-09-24).
-    private HudElement DebuffConfigTabRow()
-        => new RowElement(new HudElement[]
-        {
-            new ButtonElement(() => _loc.T("debuffcfg.tab.debuffs"),
-                () => SetDebuffConfigTab(0), Active: () => _dcTab == 0, Width: 168f),
-            new ButtonElement(() => _loc.T("debuffcfg.tab.buffs"),
-                () => SetDebuffConfigTab(1), Active: () => _dcTab == 1, Width: 168f),
-        }, Gap: 6f);
-
     private void SetDebuffConfigTab(int tab)
     {
         if (_dcTab == tab) return;
@@ -130,31 +64,13 @@ public sealed partial class Plugin
         ApplyDebuffCfgFilter(_dcFilter);
     }
 
-    // Show all except checked | Show only checked — the active tab's own mode.
-    private HudElement DebuffConfigModeRow()
-        => new RowElement(new HudElement[]
-        {
-            new ButtonElement(() => _loc.T("debuffcfg.mode.all"),
-                () => SetDebuffMode(DebuffTrackMode.ShowAllExceptSelected),
-                Active: () => ActiveSel.Mode == DebuffTrackMode.ShowAllExceptSelected, Width: 168f),
-            new ButtonElement(() => _loc.T("debuffcfg.mode.selected"),
-                () => SetDebuffMode(DebuffTrackMode.ShowOnlySelected),
-                Active: () => ActiveSel.Mode == DebuffTrackMode.ShowOnlySelected, Width: 168f),
-        }, Gap: 6f);
-
     private void SetDebuffMode(DebuffTrackMode mode)
     {
         ActiveSel.Mode = mode;
         ActiveSel.Save(_prefs, ActiveSelPrefix);
         _dcScrollReset = true;
+        _dcSelVer++;
     }
-
-    private HudElement DebuffConfigShowHiddenRow()
-        => new RowElement(new HudElement[]
-        {
-            new ToggleElement(() => "", () => ActiveSel.ShowHidden, SetDebuffShowHidden),
-            new TextElement(() => _loc.T("debuffcfg.showHidden")),
-        }, Gap: 8f);
 
     // Re-applies the filter immediately: toggling ShowHidden changes which unnamed rows are eligible, so
     // the list must refresh in place rather than waiting for the next search keystroke.
@@ -172,6 +88,7 @@ public sealed partial class Plugin
         EnsureEffectCatalog();
         FilterSeenEffects(_effectCatalog, text, ActiveSel.ShowHidden, wantBuff: _dcTab == 1,
                           out _dcGroups, out _dcFiltCount);
+        _dcSelVer++;
     }
 
     /// <summary>
@@ -239,38 +156,14 @@ public sealed partial class Plugin
         => name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
            || id.ToString(System.Globalization.CultureInfo.InvariantCulture).Contains(query, StringComparison.OrdinalIgnoreCase);
 
-    // ── Row helpers ──────────────────────────────────────────────────────────
-
-    private object? DcIcon(int idx)
-    {
-        int i = _dcOffset + idx;
-        if (i >= _dcFiltCount) { _dcUv[idx] = default; return null; }
-        return _services.GameAssets.LoadBuffIcon(_dcGroups[i].RepId, out _dcUv[idx]);
-    }
-
-    private string DcLabel(int idx)
-    {
-        int i = _dcOffset + idx;
-        if (i >= _dcFiltCount) return "";
-        var g = _dcGroups[i];
-        var name = string.IsNullOrEmpty(g.Name) ? $"#{g.RepId}" : g.Name;
-        return g.Count > 1 ? $"{name} ×{g.Count}" : name;   // "Cuisine ×136"
-    }
-
-    // A group is "checked" when EVERY id in it is selected; toggling flips them all together.
-    private bool DcTracked(int idx)
-    {
-        int i = _dcOffset + idx;
-        if (i >= _dcFiltCount) return false;
-        foreach (var id in _dcGroups[i].Ids) if (!ActiveSel.IsSelected(id)) return false;
-        return true;
-    }
-
+    // Toggles the WHOLE name group in pool slot `idx` (a group is "checked" only when every member id is selected, so a
+    // partial group reads off and one click selects all of it); selection stays per-id.
     private void SetDcTracked(int idx, bool on)
     {
         int i = _dcOffset + idx;
         if (i >= _dcFiltCount) return;
         foreach (var id in _dcGroups[i].Ids) ActiveSel.SetSelected(id, on);
         ActiveSel.Save(_prefs, ActiveSelPrefix);
+        _dcSelVer++;
     }
 }

@@ -36,8 +36,6 @@ public sealed partial class Plugin : IStellarPlugin
     private IWindowControl _historyWindow = null!;
     private IWindowControl _skillBreakdownWindow = null!;
     private IWindowControl _snapshotWindow = null!;
-    private IWindowControl _settingsWindow = null!;
-    private IWindowControl _debuffConfigWindow = null!;
     private IHotkeyAction _toggleAction = null!;
     private IHotkeyAction _historyAction = null!;
     private IHotkeyAction _resetAction = null!;
@@ -276,9 +274,8 @@ public sealed partial class Plugin : IStellarPlugin
         _skillBreakdownWindow = RegisterSkillBreakdownWindow();
         _snapshotWindow = RegisterSnapshotWindow();
 
-        _settingsWindow = BuildAndRegisterSettings();
-        _archiveSettingsWindow = BuildAndRegisterArchiveSettings();
-        _debuffConfigWindow = BuildAndRegisterDebuffConfig();
+        _helpWindow = RegisterHelpWindow();             // Plugin.Style.Help.cs — the shared "?" popover
+        _settingsWindow = BuildAndRegisterSettings();   // Plugin.SettingsWindow.cs — the merged tabbed settings window
         _debuffTip = BuildAndRegisterDebuffTip();   // Plugin.DebuffTooltip.cs — click a debuff cell -> name+desc popup
         _rowMenuWindow = RegisterRowMenuWindow();
         RegisterHotkeys();
@@ -349,8 +346,9 @@ public sealed partial class Plugin : IStellarPlugin
         _toggleAction.Dispose();
         DisposeLauncher();
         _rowMenuWindow.Remove();
-        _debuffConfigWindow.Remove();
+        _settingsCenterer?.Stop();
         _settingsWindow.Remove();
+        _helpWindow.Remove();
         _snapshotWindow.Remove();
         _skillBreakdownWindow.Remove();
         _historyWindow.Remove();

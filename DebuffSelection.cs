@@ -44,6 +44,9 @@ public sealed class DebuffSelection
         if (on) _selected.Add(baseId); else _selected.Remove(baseId);
     }
 
+    /// <summary>Unticks every id (Settings › Effects "Untick all"). Mode and show-hidden are kept.</summary>
+    public void Clear() => _selected.Clear();
+
     /// <summary>
     /// The core display predicate shared by <c>DebuffStrip</c>: whether a debuff with the given base id
     /// should appear in the strip, given whether it has a display name and a display icon.

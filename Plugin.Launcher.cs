@@ -8,8 +8,7 @@ namespace Stellar.CombatMeter;
 // launcher entry — its history + settings were reachable only through the meter overlay's header menu, so
 // a player who hid the meter (Toir's feature request 2026-09-17) had to unhide it just to open history or
 // link an account. Two tiles fix that WITHOUT the meter needing to be visible:
-//   • a ⚙ "CombatMeter" tile   → the uploads/auto-archive Settings window (which now also carries
-//                                 Account → Link to site, folded in from its old standalone window),
+//   • a ⚙ "CombatMeter" tile   → the merged CombatMeter settings window (Plugin.SettingsWindow.cs), Archive tab,
 //   • a 🕘 "Combat History" tile → the history window.
 // Both reuse the existing Toggle* handlers, so the windows keep their own World-phase ShouldRender gates.
 // The tiles themselves are shown only in the World phase, matching the sibling plugins (Wardrobe /
@@ -31,7 +30,10 @@ public sealed partial class Plugin
         // mirrors that for TitleProvider's live-localized DISPLAY text, even though the value itself never
         // changes per-locale today.
         _settingsLauncherEntry = _services.Launcher.Register(new LauncherEntry(
-            "CombatMeter", IconPng: _settingsGearPng, IconKey: null, OnOpen: ToggleArchiveSettings)
+            "CombatMeter", IconPng: _settingsGearPng, IconKey: null,
+            // Opens the merged settings window on the Archive tab (what this tile opened before the merge), centred on
+            // the screen — the launcher is not a CombatMeter window to centre on.
+            OnOpen: () => ToggleSettings(SettingsTab.Archive))
         {
             ShouldShow = () => _services.ClientState.Phase == GamePhase.World,
             TitleProvider = () => _loc.T("launcher.settings.title"),

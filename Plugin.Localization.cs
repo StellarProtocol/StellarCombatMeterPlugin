@@ -24,9 +24,10 @@ public sealed partial class Plugin
         RebuildWindow(ref _historyWindow, RegisterHistoryWindow);
         RebuildWindow(ref _skillBreakdownWindow, RegisterSkillBreakdownWindow);
         RebuildWindow(ref _snapshotWindow, RegisterSnapshotWindow);
+        // The settings window bakes chip widths / dropdown options / wrapped chip lines in the active language at
+        // build time, so it is rebuilt too (its rect, visibility and tab are kept). The help popover just closes.
+        CloseHelp();
         RebuildWindow(ref _settingsWindow, BuildAndRegisterSettings);
-        RebuildWindow(ref _archiveSettingsWindow, BuildAndRegisterArchiveSettings);
-        RebuildWindow(ref _debuffConfigWindow, BuildAndRegisterDebuffConfig);
 
         // Context-menu items baked their labels at Register-time; re-register under the new language.
         ReRegisterTeamContextMenuItems();

@@ -369,13 +369,17 @@ public sealed partial class Plugin
     private volatile string? _contentKindsNotice;
     private volatile bool _contentKindsNoticeOk;
 
+    // The notice is a catalog KEY (set off-thread); it is resolved here, on the main thread, and shown both as the
+    // toast and as the feedback line beside Settings › Uploads "Refresh content list" (Plugin.SettingsUploads.cs).
     private void DrainContentKindsNotice()
     {
-        var notice = _contentKindsNotice;
-        if (notice is null) return;
+        var key = _contentKindsNotice;
+        if (key is null) return;
         _contentKindsNotice = null;
-        _services.Notifications.Notify(notice,
+        var text = _loc.T(key);
+        _services.Notifications.Notify(text,
             _contentKindsNoticeOk ? NotificationKind.Success : NotificationKind.Warning);
+        ShowUploadsNote(text, _contentKindsNoticeOk);
     }
 
     // Thread-pool thread: only prefs + thread-safe log calls, never uGUI. A null body (304 / failure)
@@ -385,13 +389,13 @@ public sealed partial class Plugin
         if (body is null)
         {
             // 304 / unreachable. A manual refresh still owes the user an answer; the automatic path stays quiet.
-            if (userRequested) RaiseContentKindsNotice("Content list already up to date.", ok: true);
+            if (userRequested) RaiseContentKindsNotice("upload.contentList.upToDate", ok: true);
             return;
         }
         if (!ContentKindMap.TryParse(body, out var map))
         {
             _services.Log.Warning("[CombatMeter.SP1] content-kinds payload unparseable — keeping cached map.");
-            if (userRequested) RaiseContentKindsNotice("Content list refresh failed — kept the cached list.", ok: false);
+            if (userRequested) RaiseContentKindsNotice("upload.contentList.failed", ok: false);
             return;
         }
 
@@ -418,12 +422,12 @@ public sealed partial class Plugin
         _prefs.Save();
         RecomputeUploadPolicyCache();
         _services.Log.Info($"[CombatMeter.SP1] content-kinds map updated (cached for plugin {CurrentPluginVersion ?? "?"}).");
-        if (userRequested) RaiseContentKindsNotice("Content list updated ✓", ok: true);
+        if (userRequested) RaiseContentKindsNotice("upload.contentList.updated", ok: true);
     }
 
-    private void RaiseContentKindsNotice(string message, bool ok)
+    private void RaiseContentKindsNotice(string key, bool ok)
     {
         _contentKindsNoticeOk = ok;
-        _contentKindsNotice = message;   // written last: the drain reads the message as the ready flag
+        _contentKindsNotice = key;   // written last: the drain reads the key as the ready flag
     }
 }

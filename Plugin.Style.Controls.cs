@@ -76,6 +76,43 @@ public sealed partial class Plugin
         return w + 2f * ChipPadX;
     }
 
+    // A labelled chip group that WRAPS: [indent][label (labelW)][chips…] on 28 px lines no wider than `availW`; the
+    // following lines start under the first chip so the chips line up. Widths are estimated from the CURRENT labels at
+    // build time (EstimateChipWidth) — the window is rebuilt on a language change, so a long locale wraps instead of
+    // clipping, and nothing re-flows at runtime. `trailing` (e.g. a "?") ends the FIRST line, right-aligned.
+    private HudElement ChipFlow(float indent, Func<string> label, float labelW, IReadOnlyList<HudElement> chips,
+        IReadOnlyList<string> chipLabels, float availW, HudElement? trailing = null)
+    {
+        const float gap = 6f;
+        float lead = indent + labelW + gap;
+        float room = availW - lead - (trailing != null ? HelpSize + gap : 0f);
+        var lines = new List<HudElement>(2);
+        var line = new List<HudElement>();
+        float used = 0f;
+        void Flush(bool first)
+        {
+            var row = new List<HudElement>(line.Count + 5) { new SpacerElement(0f, SettingRowH) };
+            if (indent > 0f) row.Add(new SpacerElement(indent - gap, 1f));
+            row.Add(first ? new TextElement(label, Color: () => indent > 0f ? MutedColor() : TextColor(), Width: labelW, NoWrap: true)
+                              { Ellipsize = true }
+                          : new SpacerElement(labelW, 1f));
+            row.AddRange(line);
+            if (first && trailing != null) { row.Add(new SpacerElement(0f)); row.Add(trailing); }
+            lines.Add(new RowElement(row, Gap: gap));
+            line.Clear(); used = 0f;
+        }
+        for (int i = 0; i < chips.Count; i++)
+        {
+            float w = EstimateChipWidth(chipLabels[i]);
+            float need = line.Count > 0 ? used + gap + w : w;
+            if (line.Count > 0 && need > room) { Flush(lines.Count == 0); need = w; }
+            line.Add(chips[i]);
+            used = need;
+        }
+        if (line.Count > 0 || lines.Count == 0) Flush(lines.Count == 0);
+        return lines.Count == 1 ? lines[0] : new ColumnElement(lines, Gap: gap);
+    }
+
     // ── segmented tab strip ───────────────────────────────────────────────────────────────────────────────────────
     // A recessed Track bubble (r = RoundRadius(30)) holding 24 px round segments: active = SOLID accent + contrast label,
     // inactive = muted label on nothing (hover Text@0.08). Bold in both states → a switch never resizes a tab. Hugs left.
