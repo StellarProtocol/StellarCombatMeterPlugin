@@ -23,6 +23,7 @@ public sealed partial class Plugin
     private void RebuildHistorySnapshots()
     {
         RefreshUploadBlock();   // cheap; the upload policy can change in Settings while History is open
+        RefreshRunUploadState(force: false);   // cheap poll; re-composes the status only when an upload phase changed
         var first = _history.Count > 0 ? _history[0] : null;
         var last  = _history.Count > 0 ? _history[^1] : null;
         string lang = _loc.Language;
@@ -44,7 +45,7 @@ public sealed partial class Plugin
         foreach (var run in runs)
         {
             // The selected run's segments are found over ALL runs, so a search that hides the selected row never hides
-            // its segment chips.
+            // its segment cards.
             foreach (var seg in run.Segments) if (seg == _historyIndex) _selectedSegments = run.Segments;
             var primary = _history[run.Primary];
             // REAL elapsed span only — the combat (damage) span lives in the run panel. For a grouped row the span
@@ -98,7 +99,7 @@ public sealed partial class Plugin
         return string.IsNullOrEmpty(name) ? _loc.TFormat("history.scene.numbered", id) : name;
     }
 
-    /// <summary>One run's archives. <see cref="Segments"/> is oldest-first (so chip 1 is the run's first
+    /// <summary>One run's archives. <see cref="Segments"/> is oldest-first (so card 1 is the run's first
     /// archive); <see cref="Primary"/> is the archive the row opens.</summary>
     internal readonly struct RunGroup
     {
@@ -155,65 +156,6 @@ public sealed partial class Plugin
         foreach (var i in segments)
             if (history[i].CombatDurationMs > history[best].CombatDurationMs) best = i;
         return best;
-    }
-
-    // Segment chips for the selected run — one per archive, oldest first, so a grouped row can be drilled into
-    // without putting every archive back in the list. Each chip names WHY that archive exists with the readable reason
-    // ("Boss kill", "Stage", "Wipe"…, SegmentLabel); duplicates are expected and honest (two run-end stages
-    // really do produce two "Stage" segments), and the chips are chronological so position tells them apart.
-    //
-    // Fixed geometry: every chip has the SAME width (the longest reason name in this language, so a chip never
-    // resizes when a run with other triggers is selected), as many per line as fit beside the SEGMENTS caption, and the
-    // area is a fixed two-line viewport that scrolls for a raid's 13+ archives — the window never grows (rule 14).
-    private const float SegCaptionW = 74f;
-    private const float SegAreaH = 2f * ChipHeight + 6f;
-
-    private static readonly string[] SegmentTags =
-        { "manual", "scene", "wipe", "boss", "idle", "stage", "bosskill", "boundary", "clear", "prepare" };
-
-    private HudElement BuildSegmentPicker()
-    {
-        float chipW = 56f;
-        foreach (var t in SegmentTags) chipW = MathF.Max(chipW, EstimateChipWidth(SegmentLabel(t)));
-        float avail = HistDetailW - 2f * PanelPadX - SegCaptionW - 6f - 12f;   // 12 = the scrollbar's lane
-        int perRow = Math.Max(1, (int)((avail + 6f) / (chipW + 6f)));
-        var lines = new HudElement[(MaxSegmentChips + perRow - 1) / perRow];
-        for (int r = 0; r < lines.Length; r++) lines[r] = SegmentChipLine(r * perRow, perRow, chipW);
-        return new ScrollElement(new ListElement(
-            () => Math.Min(lines.Length, (_selectedSegments.Length + perRow - 1) / perRow), lines) { Gap = 6f },
-            SegAreaH) { FixedHeight = true };
-    }
-
-    private HudElement SegmentChipLine(int firstSlot, int perRow, float chipW)
-    {
-        var kids = new HudElement[perRow + 1];
-        kids[0] = new TextElement(() => firstSlot == 0 ? SegCaption() : "", Color: () => MutedColor(),
-            Width: SegCaptionW, NoWrap: true, FontSize: 11) { Bold = true, Ellipsize = true };
-        for (int i = 0; i < perRow; i++)
-        {
-            int slot = firstSlot + i;
-            kids[i + 1] = new CellElement(new ConditionalElement(() => slot < _selectedSegments.Length,
-                SegmentChip(slot, chipW)), Width: chipW);
-        }
-        return new RowElement(kids, Gap: 6f);
-    }
-
-    private readonly UpperCache _segCaption = new();
-    private string SegCaption() => _segCaption.Get(_loc.T("history.segments"));
-
-    // A choice chip at a FIXED width (the house ChoiceChip hugs its label, and a chip whose label changes keeps its first
-    // width): accent wash + bold accent label when it is the selected archive.
-    private HudElement SegmentChip(int slot, float chipW)
-    {
-        var hover = new HoverFlag();
-        bool Active() => slot < _selectedSegments.Length && _selectedSegments[slot] == _historyIndex;
-        float H() => hover.On ? ChipHoverAlpha : 0f;
-        ColorRgba Fill() => Active()
-            ? Over(TextColor() with { A = H() }, Over(AccentColor() with { A = ChipWashAlpha }, PanelColor()))
-            : Over(TextColor() with { A = ChipOffAlpha + H() }, PanelColor());
-        return ChipShell(new TextElement(() => _segLabels[slot], Color: () => Active() ? Readable(AccentColor(), Fill()) : MutedColor(),
-                Width: chipW - 2f * ChipPadX, Align: TextAlign.Center, NoWrap: true, FontSize: 12) { Bold = true, Ellipsize = true },
-            Fill, hover, () => { if (slot < _selectedSegments.Length) SelectSession(_selectedSegments[slot]); }, ChipPadX);
     }
 
     /// <summary>The uploaded run's identity for the status line — <c>sea/HpPqOu76Bh</c> rather than the whole

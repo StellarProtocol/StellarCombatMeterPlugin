@@ -26,6 +26,7 @@ public sealed partial class Plugin
         _resumePng  = EncodeGlyphPng(ResumeSdf);
         _archivePng = EncodeGlyphPng(ArchiveSdf);
         _dividerPng = EncodeGlyphPng(static _ => -1f);   // solid white swatch, tinted MenuText @14 % by the divider
+        BuildHistoryIcons();                              // History run panel Copy link / Delete (Plugin.HudIcons.History.cs)
     }
 
     // ‖ — two 2 × 10 px bars (at 16 px) with a 2 px gap.

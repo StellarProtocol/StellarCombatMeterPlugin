@@ -10,10 +10,11 @@ namespace Stellar.CombatMeter;
 /// <c>_scratch\prototypes\combatmeter-redesign-APPROVED.md</c> §4):
 /// <code>
 ///   ToolHeader  [history icon tile] Combat History / "N runs saved · keeps M"
-///   Row[ RUNS panel 220 px (search · 40 px run tiles · Danger "Clear all" → inline confirm)
-///      | run panel (upload pills, segments) · chart panel (DPS/HPS/Taken + LineChart) · player table ]
+///   Row[ RUNS panel 280 px (search · 40 px run tiles · Danger "Clear all" → inline confirm)
+///      | run panel (status + upload pills + icon buttons, SEGMENTS cards) · chart panel (DPS/HPS/Taken + LineChart) · player table ]
 /// </code>
-/// The run / chart / table panels live in Plugin.HistoryWindow.Detail.cs; the run grouping + the throttled snapshot
+/// The chart / table panels live in Plugin.HistoryWindow.Detail.cs (+ .Table.cs), the run panel in .RunPanel.cs, the
+/// SEGMENTS cards in .Segments.cs; the run grouping + the throttled snapshot
 /// rebuild in Plugin.HistoryWindow.Runs.cs.
 ///
 /// <para>Content-fit height, fixed width: every block has a fixed height (lists are fixed viewports, the confirm swaps
@@ -29,10 +30,11 @@ public sealed partial class Plugin
     private const int MaxSessionSlots = MaxRetention;   // run-view capacity (the retention setting can change at runtime)
     private const int MaxSourceSlots  = 24;              // player-table rows bound
 
-    // Geometry (rule 18: widen, don't cram — the old 780 px window could not fit the 220 px runs column + the run pills).
-    private const float HistWindowW  = 880f;
+    // Geometry (rule 18: widen, don't cram). 780 → 880 for the runs column + run pills; 880 → 1000 with the runs column
+    // 220 → 280 (addendum "run panel B", 2026-11-17) so map names stop truncating and five segment cards fit a row.
+    private const float HistWindowW  = 1000f;
     private const float HistBodyW    = HistWindowW - 24f;              // GlassMenu body padding 12 each side
-    private const float HistRunsW    = 220f;
+    private const float HistRunsW    = 280f;
     private const float HistGap      = 8f;
     private const float HistDetailW  = HistBodyW - HistRunsW - HistGap; // the right column
     private const float HistRunTileH = 40f;
@@ -62,17 +64,13 @@ public sealed partial class Plugin
         public SessionEntry(int idx, string clock, string count, string meta, int[] segments)
         { Index = idx; Clock = clock; Count = count; Meta = meta; Segments = segments; }
         // Clock = bold "3:13 AM"; Count = muted "×4" ("" for a single archive); Meta = muted "map · length · Np [· trigger]".
-        // Segments = every archive of the SAME run (levelUuid), OLDEST FIRST so chip 1 is the run's first archive; Index is
+        // Segments = every archive of the SAME run (levelUuid), OLDEST FIRST so card 1 is the run's first archive; Index is
         // the one this row opens (the run's main fight). All strings are built on a (throttled, dirty-keyed) rebuild only.
         public readonly int Index; public readonly string Clock, Count, Meta; public readonly int[] Segments;
     }
 
-    // Segments of the currently selected run, oldest first. Drives the run panel's segment chips.
+    // Segments of the currently selected run, oldest first. Drives the SEGMENTS cards.
     private int[] _selectedSegments = Array.Empty<int>();
-
-    // Chip slots for the segment picker (built once, polled). A real RAID banks 13 archives per session (measured
-    // 2026-08-25, Clash! Field of Forgotten Illusions ×2: prepare/bosskill/cut per stage); 24 covers that with room.
-    private const int MaxSegmentChips = 24;
 
     // Field struct (no constructor) — keeps clear of the analyzer's ctor-dependency cap. Every string is pre-formatted
     // on rebuild so the row Funcs only index (Plugin-Performance-Rules §2).
@@ -89,12 +87,13 @@ public sealed partial class Plugin
     private WindowCenterer? _historyWinCenterer;
 
     // A popup dialog: free-drag + ✕ close. Shared by the initial registration (Plugin.cs) and
-    // the language rebuild. A NEW id: the old "combatmeter.history" carries a persisted 780-wide resizable rect.
+    // the language rebuild. A NEW id per width change: a saved rect (the old "combatmeter.history" 780 resizable, then
+    // "combatmeter.history.v2" at 880) would otherwise override the new default width.
     private IWindowControl RegisterHistoryWindow()
     {
         var w = _services.Windows.Register(new WindowRegistration(
             new WindowSpec(
-                Id:          "combatmeter.history.v2",
+                Id:          "combatmeter.history.v3",
                 Title:       _loc.T("history.window.title"),   // baked at registration; rebuilt on LanguageChanged
                 DefaultRect: new WindowRect(900f, 160f, HistWindowW, 760f),
                 Category:    WindowCategory.Tools,
@@ -252,10 +251,10 @@ public sealed partial class Plugin
 
     // Inline confirm (SDL "destructive actions confirm"): bold question + muted consequence + the Danger/Neutral pair, on
     // a faint red wash. Lives inside the fixed list block, so it never changes the window height. The pair is STACKED
-    // (full-width pills): side by side each pill gets ~60 px of label in this 220 px column — too narrow for
+    // (full-width pills): side by side each pill got ~60 px of label in the old 220 px column (~90 px now) — too narrow for
     // "キャンセル" / "Kanselahin".
     private readonly FmtCache _clearAllAskFmt = new();
-    // 220 − 2 × panel padding − 2 × confirm-box padding, minus the pill's own padding.
+    // 280 − 2 × panel padding − 2 × confirm-box padding, minus the pill's own padding.
     private const float ConfirmPairLabelW = HistRunsW - 4f * PanelPadX - 2f * PillPadX;
 
     private HudElement ClearAllConfirmBox() => new BubbleElement(new ColumnElement(new HudElement[]
@@ -284,7 +283,7 @@ public sealed partial class Plugin
         _deleteRunConfirm = false;
         _historyIndex = historyIndex;
         _selectedSession = historyIndex >= 0 && historyIndex < _history.Count ? _history[historyIndex] : null;
-        // The run's segments NOW (the snapshot tick would only catch up ~100 ms later, showing the old run's chips).
+        // The run's segments NOW (the snapshot tick would only catch up ~100 ms later, showing the old run's cards).
         foreach (var e in _historyView)
             if (Array.IndexOf(e.Segments, historyIndex) >= 0) { _selectedSegments = e.Segments; break; }
         // A new session => no carried-over chart lines, and the visible (zoom) window resets to the full span.
