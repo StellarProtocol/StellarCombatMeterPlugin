@@ -43,21 +43,28 @@ public sealed partial class Plugin
     private HudElement BuildEffectsTab() => SettingsTabColumn(EffectsPartyPanel(), EffectsListPanel());
 
     // ── PARTY EFFECTS ─────────────────────────────────────────────────────────────────────────────────────────────
+    // Follows the EDITED view's Row size like the Look tab (SizeRow / RowSizeNote, Plugin.Settings.RowSize.cs; user
+    // 2026-11-17): Compact draws a fixed one row of up to 3 tiles → "Max shown" recessed; Mini draws no effects → both
+    // rows recessed. Values are kept. The note line under the rows is always there (empty on Normal), so the panel never
+    // changes height. The pick list below stays usable at every size — Compact still filters its 3 tiles through it.
     private HudElement EffectsPartyPanel() => SectionPanel(() => _loc.T("cfg.effects.party"), EffectsViewHint,
-        SettingRow(() => _loc.T("settings.toggle.debuffs"), false,
-            ToggleChip(() => LookT.Debuffs, v => { LookT.Debuffs = v; PersistToggles(); }),
+        SizeRow(() => _loc.T("settings.toggle.debuffs"), false, DrawnNotMini,
+            ToggleChip(() => LookT.Debuffs, v => { LookT.Debuffs = v; PersistToggles(); }, IsNotMini),
             HelpDot("effects.show", "cfg.effects.party", "settings.toggle.debuffs", "help.effects.show")),
         // Max cells per row: 4 (2×2) up to 12 (2×6) — the block grows in columns, keeping 2 rows (owner 2026-09-24).
-        SettingRow(() => _loc.T("settings.debuff.max"), false,
+        SizeRow(() => _loc.T("settings.debuff.max"), false, DrawnNormalOnly,
             DebuffMaxChip(4), DebuffMaxChip(6), DebuffMaxChip(8), DebuffMaxChip(10), DebuffMaxChip(12),
-            HelpDot("effects.max", "cfg.effects.party", "settings.debuff.max", "help.effects.max")));
+            HelpDot("effects.max", "cfg.effects.party", "settings.debuff.max", "help.effects.max")),
+        RowSizeNote("cfg.effects.noteCompact", "cfg.effects.noteMini"));
 
     private HudElement DebuffMaxChip(int n)
     {
         string label = n.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return ChoiceChip(() => label, () => MeterElementToggles.DebuffMaxCells(LookT.DebuffMax) == n,
-            () => { LookT.DebuffMax = n; PersistToggles(); }, () => LookT.Debuffs);
+            () => { LookT.DebuffMax = n; PersistToggles(); }, DebuffMaxEnabled);
     }
+
+    private bool DebuffMaxEnabled() => LookT.Debuffs && IsNormalSize();
 
     // "for the Party (5) view" — these two settings are per view, like the Look tab; cached per view + language.
     private int _effViewHintView = -1;

@@ -80,6 +80,8 @@
   "cfg.effects.mode": "Alin ang ipapakita",
   "cfg.effects.modeAll": "Lahat maliban sa naka-tsek",
   "cfg.effects.modeOnly": "Naka-tsek lang",
+  "cfg.effects.noteCompact": "Hanggang 3 effect lang ang ipinapakita ng Compact na row.",
+  "cfg.effects.noteMini": "Walang ipinapakitang effect ang Mini na row.",
   "cfg.effects.party": "Party effects",
   "cfg.effects.searchBuffs": "Maghanap ng buffs…",
   "cfg.effects.searchDebuffs": "Maghanap ng debuffs…",

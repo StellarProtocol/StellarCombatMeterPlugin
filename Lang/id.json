@@ -80,6 +80,8 @@
   "cfg.effects.mode": "Yang ditampilkan",
   "cfg.effects.modeAll": "Semua kecuali dicentang",
   "cfg.effects.modeOnly": "Hanya dicentang",
+  "cfg.effects.noteCompact": "Baris Ringkas menampilkan hingga 3 efek.",
+  "cfg.effects.noteMini": "Baris Mini tidak menampilkan efek.",
   "cfg.effects.party": "Efek party",
   "cfg.effects.searchBuffs": "Cari buff…",
   "cfg.effects.searchDebuffs": "Cari debuff…",

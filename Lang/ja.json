@@ -80,6 +80,8 @@
   "cfg.effects.mode": "表示する効果",
   "cfg.effects.modeAll": "チェック以外すべて",
   "cfg.effects.modeOnly": "チェックのみ",
+  "cfg.effects.noteCompact": "コンパクト行の効果表示は最大3つです。",
+  "cfg.effects.noteMini": "ミニ行には効果は表示されません。",
   "cfg.effects.party": "パーティ効果",
   "cfg.effects.searchBuffs": "バフを検索…",
   "cfg.effects.searchDebuffs": "デバフを検索…",

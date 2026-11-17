@@ -80,6 +80,8 @@
   "cfg.effects.mode": "Which to show",
   "cfg.effects.modeAll": "All except ticked",
   "cfg.effects.modeOnly": "Only ticked",
+  "cfg.effects.noteCompact": "Compact rows show up to 3 effects.",
+  "cfg.effects.noteMini": "Mini rows don't show effects.",
   "cfg.effects.party": "Party effects",
   "cfg.effects.searchBuffs": "Search buffs…",
   "cfg.effects.searchDebuffs": "Search debuffs…",

@@ -80,6 +80,8 @@
   "cfg.effects.mode": "표시할 효과",
   "cfg.effects.modeAll": "체크한 것 빼고 모두",
   "cfg.effects.modeOnly": "체크한 것만",
+  "cfg.effects.noteCompact": "컴팩트 행은 효과를 최대 3개까지 표시합니다.",
+  "cfg.effects.noteMini": "미니 행에는 효과가 표시되지 않습니다.",
   "cfg.effects.party": "파티 효과",
   "cfg.effects.searchBuffs": "버프 검색…",
   "cfg.effects.searchDebuffs": "디버프 검색…",

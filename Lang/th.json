@@ -80,6 +80,8 @@
   "cfg.effects.mode": "แสดงอะไร",
   "cfg.effects.modeAll": "ทั้งหมดยกเว้นที่ติ๊ก",
   "cfg.effects.modeOnly": "เฉพาะที่ติ๊ก",
+  "cfg.effects.noteCompact": "แถวแบบกะทัดรัดแสดงเอฟเฟกต์ได้สูงสุด 3 รายการ",
+  "cfg.effects.noteMini": "แถวแบบมินิไม่แสดงเอฟเฟกต์",
   "cfg.effects.party": "เอฟเฟกต์ปาร์ตี้",
   "cfg.effects.searchBuffs": "ค้นหาบัฟ…",
   "cfg.effects.searchDebuffs": "ค้นหาดีบัฟ…",
