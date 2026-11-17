@@ -1,3 +1,4 @@
+using System;
 using Stellar.Abstractions.Domain;
 
 namespace Stellar.CombatMeter;
@@ -15,6 +16,7 @@ public sealed partial class Plugin
     // also snaps a Party-focus window the user resized below PartyFocusMinW back to the floor (one SetRect, only then).
     private void CaptureModeGeometry()
     {
+        if (!_geomSettled) return;   // pre-restore rect = the framework's (20,20) mount placeholder — never remember it
         var r = _mainWindow.Rect;
         if (r.Width <= 0f) return;
         if (_viewMode == ViewMode.PartyFocus && r.Width < PartyFocusMinW)
@@ -32,7 +34,7 @@ public sealed partial class Plugin
     private void ApplyModeSize()
     {
         var rect = _viewMode == ViewMode.PartyFocus
-            ? new WindowRect(_partyX, _partyY, System.Math.Max(_partyW, PartyFocusMinW), PartyFocusHeight())
+            ? new WindowRect(_partyX, _partyY, Math.Max(_partyW, PartyFocusMinW), PartyFocusHeight())
             : new WindowRect(_listX, _listY, _listW > 0 ? _listW : ListWidth, _listH > 0 ? _listH : ListHeight);
         _mainWindow.SetRect(rect);
     }
@@ -62,9 +64,61 @@ public sealed partial class Plugin
     // window the user has dragged. No-op outside party-focus (List mode reflows via its Fill scroll).
     private void RefreshPartyFocusHeight()
     {
-        if (_viewMode != ViewMode.PartyFocus || _mainWindow is null) return;
+        if (_viewMode != ViewMode.PartyFocus || _mainWindow is null || !_geomSettled) return;
         var r = _mainWindow.Rect;
         if (r.Width <= 0f) return;
-        _mainWindow.SetRect(new WindowRect(r.X, r.Y, r.Width, PartyFocusHeight()));
+        _mainWindow.SetRect(new WindowRect(r.X, r.Y, r.Width, PartyFocusHeight()));   // height only; live X/Y/W kept
     }
+
+    // ---- Layout-settle gate (bug 2026-11-17: the meter jumped to the top-left corner after e501e99) ----
+    // The framework mounts a window at a (20,20) PLACEHOLDER (UGuiPrimitives: "default until SetRect restores") and, on a
+    // fresh canvas (login / scene change), PARKS the saved-layout apply until the CanvasScaler settles (WindowService
+    // ApplySavedRect → ApplyPending; on the session's first mount there is no last-good rect to hold either). IsShown is
+    // already true in that gap, so Rect reads (20,20). e501e99's "first Party tick re-fits the height once" SetRect'd that
+    // rect — and Entry.SetRect AUTO-PERSISTS, so (20,20) became the saved layout and the deferred apply then restored it.
+    // IWindowControl has no "layout applied" signal, so: touch the rect (read OR write) only once the window has been shown
+    // for GeometrySettleTicks consecutive ~10 Hz ticks with an unchanged rect (the parked apply lands one frame after the
+    // canvas settles, so a placeholder never survives that). Reset on every hide, so each re-mount waits again.
+    private const int GeometrySettleTicks = 3;
+    private int _geomStableTicks;
+    private WindowRect _geomLastRect;
+    private bool _geomSettled;
+    private bool _geomRecoveryChecked;   // once per session: undo a (20,20) the bug persisted (see RecoverPlaceholderPosition)
+
+    // ~10 Hz while shown (Plugin.Tick.cs). True once the rect is trustworthy; the caller then captures/re-fits as before.
+    private bool MainGeometrySettled()
+    {
+        if (_geomSettled) return true;
+        var r = _mainWindow.Rect;
+        if (r.Width <= 0f) { _geomStableTicks = 0; return false; }
+        _geomStableTicks = _geomStableTicks > 0 && SameRect(r, _geomLastRect) ? _geomStableTicks + 1 : 1;
+        _geomLastRect = r;
+        if (_geomStableTicks < GeometrySettleTicks) return false;
+        _geomSettled = true;
+        if (!_geomRecoveryChecked) { _geomRecoveryChecked = true; RecoverPlaceholderPosition(r); }
+        return true;
+    }
+
+    private void ResetGeometrySettle() { _geomSettled = false; _geomStableTicks = 0; }
+
+    // One-time recovery for users the bug already hit: the framework layout now SAYS (20,20), so it restores there on every
+    // launch. If the settled live position is exactly that placeholder AND the plugin's own prefs (loaded at boot, never
+    // overwritten before settle — CaptureModeGeometry is gated) hold a different spot, move back there (position only; the
+    // size stays the live one). Self-limiting: a user who really keeps it at (20,20) gets that captured into prefs on the
+    // next save, after which prefs match and nothing is moved.
+    private void RecoverPlaceholderPosition(WindowRect r)
+    {
+        if (!IsMountPlaceholder(r)) return;
+        bool party = _viewMode == ViewMode.PartyFocus;
+        float px = party ? _partyX : _listX, py = party ? _partyY : _listY;
+        if (IsMountPlaceholder(new WindowRect(px, py, 0f, 0f))) return;
+        _mainWindow.SetRect(new WindowRect(px, py, r.Width, r.Height));   // persists the recovered spot (Entry.SetRect)
+        _services.Log.Info($"[CombatMeter] Restored the meter position ({px:0},{py:0}) from a top-left placeholder layout.");
+    }
+
+    private static bool IsMountPlaceholder(WindowRect r) => Math.Abs(r.X - 20f) < 0.5f && Math.Abs(r.Y - 20f) < 0.5f;
+
+    private static bool SameRect(WindowRect a, WindowRect b)
+        => Math.Abs(a.X - b.X) < 0.5f && Math.Abs(a.Y - b.Y) < 0.5f
+        && Math.Abs(a.Width - b.Width) < 0.5f && Math.Abs(a.Height - b.Height) < 0.5f;
 }

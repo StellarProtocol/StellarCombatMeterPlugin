@@ -31,8 +31,10 @@ public sealed partial class Plugin
     private const float LeaderMarkW = 40f, LeaderReadyW = 112f, LeaderConveneW = 68f, LeaderCountdownW = 88f;
 
     private bool _leaderLine;         // latched "line shown" (see header); read by the Conditional + PartyFocusHeight
-    private bool _leaderLineSynced;   // first Party-focus tick re-fits once: the framework restores the rect it saved last,
-                                      // which may have been taken in the other state (34 px off)
+    private bool _leaderLineSynced;   // first SETTLED Party-focus tick re-fits once: the framework restores the rect it saved
+                                      // last, which may have been taken in the other state (34 px off). Only after the
+                                      // settle gate (Plugin.ModeGeometry.cs) — an earlier refit persisted the (20,20) mount
+                                      // placeholder and parked the meter in the top-left corner (2026-11-17)
 
     // The old header gate (Party-focus + in a party + leader), evaluated only at the ~10 Hz tick / on a mode switch.
     private bool WantLeaderLine => _viewMode == ViewMode.PartyFocus

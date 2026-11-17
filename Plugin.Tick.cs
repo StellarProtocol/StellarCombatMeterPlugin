@@ -58,18 +58,24 @@ public sealed partial class Plugin
     {
         if (_mainWindow.IsShown)
         {
-            CaptureModeGeometry();
-            if (_viewMode == ViewMode.PartyFocus)
+            // Geometry only once the framework has placed the window at its saved layout (Plugin.ModeGeometry.cs settle
+            // gate): before that Rect is the (20,20) mount placeholder, and a SetRect would persist it (2026-11-17 bug).
+            if (MainGeometrySettled())
             {
-                // Re-fit the window height (ONE SetRect) when the party size switches 5↔20 or the LEADER line latch flips
-                // (Plugin.LeaderLine.cs — the line and the height change on this same tick).
-                bool refit = SyncLeaderLine();
-                if (_lastViewWas20 != IsRaid20View) { _lastViewWas20 = IsRaid20View; refit = true; }
-                if (refit) RefreshPartyFocusHeight();
-                RebuildPartyFocusRows();
+                CaptureModeGeometry();
+                if (_viewMode == ViewMode.PartyFocus)
+                {
+                    // Re-fit the window height (ONE SetRect) when the party size switches 5↔20 or the LEADER line latch
+                    // flips (Plugin.LeaderLine.cs — the line and the height change on this same tick).
+                    bool refit = SyncLeaderLine();
+                    if (_lastViewWas20 != IsRaid20View) { _lastViewWas20 = IsRaid20View; refit = true; }
+                    if (refit) RefreshPartyFocusHeight();
+                }
             }
+            if (_viewMode == ViewMode.PartyFocus) RebuildPartyFocusRows();
             else RebuildListRows();
         }
+        else ResetGeometrySettle();
         if (_historyWindow.IsShown) RebuildHistorySnapshots();
         if (_skillBreakdownWindow.IsShown) RebuildSkillRows();
         if (_snapshotWindow.IsShown) RebuildSnapshotRows();
