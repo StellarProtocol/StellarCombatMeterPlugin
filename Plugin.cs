@@ -157,7 +157,6 @@ public sealed partial class Plugin : IStellarPlugin
     private Metric     _metric = Metric.Dps;
     private FilterMode _filter = FilterMode.Party;
     private ViewMode   _viewMode = ViewMode.List;
-    private bool       _lastViewWas20;   // tracks party-size view (5↔20) to re-fit the window on a live switch
     private bool       _paused;
 
     // Per-mode window geometry (the framework persists one rect per window id, so the plugin remembers each
@@ -258,7 +257,8 @@ public sealed partial class Plugin : IStellarPlugin
                 Category:    WindowCategory.HUD,
                 Style:       WindowPanelStyle.Borderless)
             { Draggable = true, EditModeDragOnly = true,
-              Resizable = true, MinWidth = 500f, MinHeight = 160f, MaxWidth = 760f, MaxHeight = 1000f,
+              // The List view's limits; the Party view swaps in its own at runtime (ApplyViewSizeLimits, Plugin.ModeGeometry.cs).
+              Resizable = true, MinWidth = ListMinW, MinHeight = ListMinH, MaxWidth = MeterMaxW, MaxHeight = ListMaxH,
               ZOrder = -100,   // background layer: every other Stellar window draws over the meter
               // "Background" setting: rounded theme Panel behind the whole meter (Plugin.Header.cs). Delegate built once here.
               BackgroundColor = MeterBackdropColor, BackgroundCornerRadius = 6,
@@ -271,6 +271,7 @@ public sealed partial class Plugin : IStellarPlugin
               // skips a hidden window, so the fill reads the empty row caches; the body Conditionals prebuild their rows.
               Prebuild = true },
             BuildMainRoot()));
+        ApplyViewSizeLimits();   // pre-mount is fine: the framework applies them at mount, before the saved-layout restore
 
         _historyWindow = RegisterHistoryWindow();
         _skillBreakdownWindow = RegisterSkillBreakdownWindow();

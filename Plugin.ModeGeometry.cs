@@ -1,5 +1,6 @@
 using System;
 using Stellar.Abstractions.Domain;
+using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
 
@@ -8,22 +9,33 @@ public sealed partial class Plugin
 {
     // Party-focus minimum width (addendum 2026-11-17): first sized for line 1 with the four leader tools; since the "LEADER
     // line" addendum those tools sit on line 2 (Plugin.LeaderLine.cs), whose pill widths are budgeted to fit 560 too.
-    // The window spec's MinWidth stays 500 for the List view (IWindowControl has no runtime min-size), so the Party view enforces its own floor here and at load (Plugin.cs).
     private const float PartyFocusMinW = 560f;
 
+    // Resize limits per view (user 2026-11-17: "height should not be resizable in party mode, only for list mode").
+    // List: free resize in both axes. Party: width only — the height is computed from the party layout (PartyFocusHeight),
+    // so it is locked by min == max. The spec carries the List limits; fw 2.33.0 IWindowSizeLimits swaps them at runtime
+    // for the grip (normal + layout edit), every SetRect and the saved-layout restore, so the Party width floor needs no
+    // 10 Hz snap-back any more and a stale saved Party height is corrected on load. A size outside new limits is clamped
+    // in place (top-left fixed). Idempotent in the framework, but only called on a view switch / party-height change.
+    private const float ListMinW = 500f, ListMinH = 160f, ListMaxH = 1000f, MeterMaxW = 760f;
+
+    private void ApplyViewSizeLimits()
+    {
+        if (_viewMode == ViewMode.PartyFocus)
+        {
+            var h = PartyFocusHeight();
+            _mainWindow.SetSizeLimits(PartyFocusMinW, h, MeterMaxW, h);
+        }
+        else _mainWindow.SetSizeLimits(ListMinW, ListMinH, MeterMaxW, ListMaxH);
+    }
+
     // Capture the live window rect into the active view's remembered geometry (so a mode switch can restore it)
-    // + track the current width for the List collapse breakpoints. Runs at ~10 Hz while shown (Plugin.Tick.cs), so it
-    // also snaps a Party-focus window the user resized below PartyFocusMinW back to the floor (one SetRect, only then).
+    // + track the current width for the List collapse breakpoints. Runs at ~10 Hz while shown (Plugin.Tick.cs).
     private void CaptureModeGeometry()
     {
         if (!_geomSettled) return;   // pre-restore rect = the framework's (20,20) mount placeholder — never remember it
         var r = _mainWindow.Rect;
         if (r.Width <= 0f) return;
-        if (_viewMode == ViewMode.PartyFocus && r.Width < PartyFocusMinW)
-        {
-            r = new WindowRect(r.X, r.Y, PartyFocusMinW, r.Height);
-            _mainWindow.SetRect(r);
-        }
         _listWidthNow = r.Width;
         if (_viewMode == ViewMode.PartyFocus) { _partyX = r.X; _partyY = r.Y; _partyW = r.Width; }
         else { _listW = r.Width; _listH = r.Height; _listX = r.X; _listY = r.Y; }
@@ -33,6 +45,7 @@ public sealed partial class Plugin
     // structure → fixed size; List restores the user's resized size.
     private void ApplyModeSize()
     {
+        ApplyViewSizeLimits();   // FIRST: the leaving view's limits would clamp this SetRect (Party's locked height vs List's)
         var rect = _viewMode == ViewMode.PartyFocus
             ? new WindowRect(_partyX, _partyY, Math.Max(_partyW, PartyFocusMinW), PartyFocusHeight())
             : new WindowRect(_listX, _listY, _listW > 0 ? _listW : ListWidth, _listH > 0 ? _listH : ListHeight);
@@ -62,19 +75,21 @@ public sealed partial class Plugin
 
     // First SETTLED Party tick of the session re-fits the height once: the framework restores the rect it saved last, which
     // may predate the reserved slot (34 px short) or a tile-size change. Only after the settle gate below — a re-fit before
-    // it persisted the (20,20) mount placeholder (2026-11-17 top-left bug).
+    // it persisted the (20,20) mount placeholder (2026-11-17 top-left bug). (The locked-height limits already clamp the
+    // restore; this SetRect is what persists the corrected rect.)
     private bool _partyHeightSynced;
+    private float _syncedPartyH;   // the PartyFocusHeight() last applied (limits + rect)
 
-    // ~10 Hz from RebuildSnapshots (Party view, geometry settled): ONE height-only SetRect when the first sync is owed or
-    // the party size switched 5↔20. Held while the user is in layout edit-mode, so a resize never lands under a drag; the
-    // owed re-fit applies on the first tick after they leave it.
+    // ~10 Hz from RebuildSnapshots (Party view, geometry settled): limits + ONE height-only SetRect when the first sync is
+    // owed or the computed height changed (5↔20 switch, tile size). Held while the user is in layout edit-mode, so a
+    // resize never lands under a drag; the owed re-fit applies on the first tick after they leave it.
     private void SyncPartyFocusHeight()
     {
-        bool is20 = IsRaid20View;
-        if (_partyHeightSynced && _lastViewWas20 == is20) return;
+        float h = PartyFocusHeight();
+        if (_partyHeightSynced && Math.Abs(h - _syncedPartyH) < 0.5f) return;
         if (_services.Windows.IsLayoutEditing) return;
         _partyHeightSynced = true;
-        _lastViewWas20 = is20;
+        _syncedPartyH = h;
         RefreshPartyFocusHeight();
     }
 
@@ -84,6 +99,7 @@ public sealed partial class Plugin
     private void RefreshPartyFocusHeight()
     {
         if (_viewMode != ViewMode.PartyFocus || _mainWindow is null || !_geomSettled) return;
+        ApplyViewSizeLimits();   // the new locked height first, or the SetRect below is clamped to the old one
         var r = _mainWindow.Rect;
         if (r.Width <= 0f) return;
         _mainWindow.SetRect(new WindowRect(r.X, r.Y, r.Width, PartyFocusHeight()));   // height only; live X/Y/W kept
