@@ -226,6 +226,8 @@
     <!-- Effect placeholder tiles (one glyph per category, green buff / red debuff, pre-drawn per size by
          tools/icons/gen-effect-placeholders.py); Plugin.EffectIcons.cs picks the exact-size bitmap. -->
     <EmbeddedResource Include="Resources/effects/*.png" LogicalName="Stellar.CombatMeter.effects.%(Filename)%(Extension)" />
+    <!-- The hub's Settings-card gear, pre-drawn per size (same generator); Plugin.MeterIcon.cs GearIconPng. -->
+    <EmbeddedResource Include="Resources/hub/*.png" LogicalName="Stellar.CombatMeter.hub.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/rowmenu/*.png" LogicalName="Stellar.CombatMeter.rowmenu.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>

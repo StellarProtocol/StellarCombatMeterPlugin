@@ -291,7 +291,7 @@ public sealed partial class Plugin : IStellarPlugin
     {
         _toggleAction = _services.Hotkeys.DeclareAction(
             new HotkeyAction("combatmeter.toggle", _loc.T("hotkey.toggle"), new KeyBinding(StellarKeyCode.F9)),
-            callback: () => _mainWindow.SetVisible(!_mainWindow.IsShown));
+            callback: ToggleMeterShown);   // Plugin.Hub.cs — the hub's Meter card does the same
 
         _historyAction = _services.Hotkeys.DeclareAction(
             new HotkeyAction("combatmeter.history-toggle", _loc.T("hotkey.history"),
