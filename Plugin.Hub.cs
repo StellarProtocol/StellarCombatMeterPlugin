@@ -9,7 +9,7 @@ namespace Stellar.CombatMeter;
 // the meter's own live status line (Plugin.HudStatus.cs — the SAME builder the meter header polls; "Idle" when it is
 // empty). Three 56 px cards:
 //   Meter          — click = show / hide the meter (exactly the Toggle hotkey); trailing Shown / Hidden chip instead of ›
-//   Combat History — "N runs saved" (the in-memory list count, as the ⋯ popover card) ; › opens History
+//   Combat History — "N runs saved" (the grouped run count, as the History header + the ⋯ popover card) ; › opens History
 //   Settings       — the tab names; › opens Settings on the last-used tab
 // Both › cards open their window centred on the hub and in front; an already-open child is just fronted (OpenHistory /
 // OpenSettings — CLAUDE.md Rule 5 exception). In-world only (ShouldRender World && !Loading) and closed on logout.
