@@ -47,6 +47,7 @@ public sealed partial class Plugin
         public string Label, Sub, Total, Rate, Hits;   // Label = "#1 Skill"
         public float Share;
         public int SkillId;
+        public bool BuffIcon;   // id is a buff, not a skill → LoadBuffIcon (SourceName)
     }
 
     // Header + count strings and the gauge colour, cached per open / language (RebuildSkillRows).
@@ -137,7 +138,11 @@ public sealed partial class Plugin
     {
         int i = SkillRowAt(slot);
         int id = i >= 0 ? _skillRows[i].SkillId : 0;
-        return id > 0 ? _services.GameAssets.LoadSkillIcon(id, out _skillIconUv[slot]) : null;
+        if (id <= 0) return null;
+        // A buff-sourced row (sub-buff, damage zone, proc) has no skill row → its icon is the buff's.
+        return _skillRows[i].BuffIcon
+            ? _services.GameAssets.LoadBuffIcon(id, out _skillIconUv[slot])
+            : _services.GameAssets.LoadSkillIcon(id, out _skillIconUv[slot]);
     }
 
     private string SkillEmptyCaption()
@@ -216,6 +221,7 @@ public sealed partial class Plugin
             _skillRows.Add(new SkillRow
             {
                 Label = $"#{i + 1} {ResolveSkillName(rows[i].Key)}",
+                BuffIcon = SourceName(rows[i].Key).BuffIcon,
                 Sub = _loc.TFormat("skill.sub.share", pct, critPct, luckPct),
                 Total = FormatAmount(value),
                 Rate = FormatAmount(ComputeArchivedDps(value, durationMs)),
@@ -239,6 +245,7 @@ public sealed partial class Plugin
             _skillRows.Add(new SkillRow
             {
                 Label = $"#{i + 1} {ResolveSkillName(r.SkillId)}",
+                BuffIcon = SourceName(r.SkillId).BuffIcon,
                 Sub = _loc.TFormat("skill.sub.takenShare", sum > 0 ? 100f * r.Total / sum : 0f, FormatAmount(r.TopHit)),
                 Total = FormatAmount(r.Total),
                 Rate = FormatAmount(ComputeArchivedDps(r.Total, durationMs)),
@@ -247,33 +254,6 @@ public sealed partial class Plugin
                 SkillId = r.SkillId,
             });
         }
-    }
-
-    // Curated display-name overrides for damage-attributed ids whose game-table name is unhelpful — e.g. DoT/proc
-    // buffs whose English Name column is empty in this client (only a source-language NameDesign exists). Mirrors
-    // ZDPS's SkillOverrides; wins over the buff-table name so the lance lucky-counter proc reads "Lucky Strike
-    // (Lance)" instead of "骑枪-幸运" or a raw id. Extend as ids surface — the [name] diagnostic (gated on
-    // STELLAR_DIAGNOSTICS) logs each unresolved id once so they can be added here.
-    private static readonly Dictionary<int, string> SkillNameOverrides = new()
-    {
-        [2031104] = "Lucky Strike (Lance)",   // BuffTable "Lance - Luck" / NameDesign 骑枪-幸运 — Wind Knight lance proc
-    };
-
-    // Resolve a damage-attributed "skill" id to a display name. Order: real skill (GetSkill also resolves leveled
-    // skill_level_ids via the framework base map) → curated override → buff name (GetBuff().Name is the English
-    // buff name when present, else the framework's NameDesign fallback). Raw "#id" only when all miss.
-    private string ResolveSkillName(int skillId)
-    {
-        var skill = _services.GameData.Combat.GetSkill(skillId);
-        if (skill is { Name: { Length: > 0 } skillName }) return skillName;
-
-        if (SkillNameOverrides.TryGetValue(skillId, out var overrideName)) return overrideName;
-
-        var buff = _services.GameData.Combat.GetBuff(skillId);
-        if (buff is { Name: { Length: > 0 } buffName }) return buffName;
-
-        LogUnresolvedSkillName(skillId);
-        return $"#{skillId}";
     }
 
     // Metric-aware per-skill value: HPS reads the heal total, everything else (DPS/Taken) the damage total.

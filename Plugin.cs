@@ -328,6 +328,7 @@ public sealed partial class Plugin : IStellarPlugin
         UnwireSocialCapture();
         _services.Loadout.LiveStateChanged         -= OnLoadoutLiveStateChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;
+        UnhookGameText();      // IGameText.Ready (Plugin.SkillBreakdown.Names.cs)
         OnInspectRequested -= HandleInspectRequested;
 
         _roleDpsSlot.Dispose();
