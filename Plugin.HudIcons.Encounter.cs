@@ -4,7 +4,7 @@ using UnityEngine;
 namespace Stellar.CombatMeter;
 
 // Procedural flat-white glyphs for the header's round Pause / Resume and Archive buttons (approved redesign addendum
-// 2026-11-17 "Pause + Archive header icons"), plus the 1 px leader-tools divider. Same recipe as ↺ / ⋯
+// 2026-11-17 "Pause + Archive header icons"). Same recipe as ↺ / ⋯
 // (Plugin.HudIcons.cs): a 64 px white SDF shape encoded to PNG once at construction (main thread); the button tints it.
 // The archive flash reuses the Ready Check ✓ (_checkmarkPng, Plugin.LocationPinIcon.cs).
 //
@@ -16,7 +16,7 @@ namespace Stellar.CombatMeter;
 // own protected texture, so nothing here outlives the call.
 public sealed partial class Plugin
 {
-    private byte[]? _pausePng, _resumePng, _archivePng, _dividerPng;
+    private byte[]? _pausePng, _resumePng, _archivePng;
 
     // One call from the constructor (keeps Plugin.cs under the 500-LoC cap).
     private void BuildEncounterIcons()
@@ -25,7 +25,6 @@ public sealed partial class Plugin
         _pausePng   = EncodeGlyphPng(PauseSdf);
         _resumePng  = EncodeGlyphPng(ResumeSdf);
         _archivePng = EncodeGlyphPng(ArchiveSdf);
-        _dividerPng = EncodeGlyphPng(static _ => -1f);   // solid white swatch, tinted MenuText @14 % by the divider
         BuildHistoryIcons();                              // History run panel Copy link / Delete (Plugin.HudIcons.History.cs)
     }
 

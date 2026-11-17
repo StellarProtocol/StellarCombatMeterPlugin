@@ -61,8 +61,11 @@ public sealed partial class Plugin
             CaptureModeGeometry();
             if (_viewMode == ViewMode.PartyFocus)
             {
-                // Follow a live 5↔20 size switch: re-fit the window when the party size changes.
-                if (_lastViewWas20 != IsRaid20View) { _lastViewWas20 = IsRaid20View; RefreshPartyFocusHeight(); }
+                // Re-fit the window height (ONE SetRect) when the party size switches 5↔20 or the LEADER line latch flips
+                // (Plugin.LeaderLine.cs — the line and the height change on this same tick).
+                bool refit = SyncLeaderLine();
+                if (_lastViewWas20 != IsRaid20View) { _lastViewWas20 = IsRaid20View; refit = true; }
+                if (refit) RefreshPartyFocusHeight();
                 RebuildPartyFocusRows();
             }
             else RebuildListRows();

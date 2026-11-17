@@ -5,9 +5,9 @@ namespace Stellar.CombatMeter;
 // Main-window per-mode geometry (List vs Party-focus rects). Split out of Plugin.cs (500-LoC cap); behaviour unchanged.
 public sealed partial class Plugin
 {
-    // Party-focus minimum width (addendum 2026-11-17): the header gained Pause + Archive, so with the four leader tools
-    // it needs 560 px before the status ellipsizes to nothing. The window spec's MinWidth stays 500 for the List view
-    // (IWindowControl has no runtime min-size), so the Party view enforces its own floor here and at load (Plugin.cs).
+    // Party-focus minimum width (addendum 2026-11-17): first sized for line 1 with the four leader tools; since the "LEADER
+    // line" addendum those tools sit on line 2 (Plugin.LeaderLine.cs), whose pill widths are budgeted to fit 560 too.
+    // The window spec's MinWidth stays 500 for the List view (IWindowControl has no runtime min-size), so the Party view enforces its own floor here and at load (Plugin.cs).
     private const float PartyFocusMinW = 560f;
 
     // Capture the live window rect into the active view's remembered geometry (so a mode switch can restore it)
@@ -52,7 +52,9 @@ public sealed partial class Plugin
         if (extraPerRow < 0f) extraPerRow = 0f;
         // No menu term any more: the old ▾ inline menu grew the HUD by 72 px; its contents now live in the ⋯ popover, so
         // the HUD height depends only on the party size and tile size (approved redesign §1).
-        return (IsRaid20View ? PartyFocusH : PartyFocus5H) + rows * extraPerRow;
+        // + the LEADER line (28 + the 6 px Column gap) while it is latched on: the window grows by exactly the line, so the
+        // group/rows container below keeps its height (Plugin.LeaderLine.cs).
+        return (IsRaid20View ? PartyFocusH : PartyFocus5H) + rows * extraPerRow + (_leaderLine ? LeaderLineH : 0f);
     }
 
     // Re-apply the party-focus window height in place (keep current pos + width) when the party size changes.

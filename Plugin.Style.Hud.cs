@@ -52,19 +52,6 @@ public sealed partial class Plugin
         }, Width: HudControlH);
     }
 
-    // The same 28 × 28 round shape, RECESSED (rule 22: disabled = sunken fill + faint label, no ring) and showing a short
-    // live label — the ready-check button while its cooldown runs ("18"). `label` must return a cached string.
-    private HudElement HudRecessedLabel(Func<string> label) => new CellElement(new BubbleElement(new RowElement(new HudElement[]
-        {
-            new SpacerElement(0f, HudControlH),
-            new TextElement(label, Color: () => DisabledLabel(PanelColor()), Width: HudControlH, Align: TextAlign.Center,
-                NoWrap: true, FontSize: 12) { Bold = true, CenterGlyphs = true },
-        }, Gap: 0.01f, Justify: RowJustify.Center))
-    {
-        FillColorFn = () => Fade(DisabledFill(PanelColor())),
-        CornerRadius = RoundRadius(HudControlH), PaddingX = 0f, PaddingY = 0f, MaxWidth = HudControlH,
-    }, Width: HudControlH);
-
     // ── List | Party segmented control ──────────────────────────────────────────────────────────────────────────────
     // A 28 px Track bubble (r13, 2 px inset) holding 24 px segments (r11): active = SOLID accent + contrast label, inactive
     // = muted label (hover Text@8 %). Both states bold 12, so a switch never resizes a segment (R10).

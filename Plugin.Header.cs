@@ -7,8 +7,8 @@ namespace Stellar.CombatMeter;
 /// <summary>
 /// Main meter window root + its 28 px header (approved redesign 2026-11-17 §1,
 /// _scratch\prototypes\combatmeter-redesign-APPROVED.md): metric pill dropdown · List | Party segmented control · live
-/// muted status (flexible, ellipsizes first) · leader tools + divider (Party-focus leader only) · Pause · Archive ·
-/// ↺ Reset · ⋯ More. The old ▾ inline menu is GONE — it grew the HUD by 72 px; scope / party size / history / settings
+/// muted status (flexible, ellipsizes first) · Pause · Archive · ↺ Reset · ⋯ More. The Party-focus leader tools live on
+/// their own second line (Plugin.LeaderLine.cs, addendum "LEADER line"), so the status always fits on line 1. The old ▾ inline menu is GONE — it grew the HUD by 72 px; scope / party size / history / settings
 /// live in the ⋯ popover (Plugin.MorePopover.cs), Pause / Archive in the header (Plugin.HudEncounter.cs), so the HUD
 /// never changes height. Metric/scope/mode changes persist via PersistPrefs().
 /// </summary>
@@ -49,6 +49,9 @@ public sealed partial class Plugin
         // framework toast cannot do). Sits above the header so it's the first thing seen.
         new ConditionalElement(() => ShowCompatBanner, BuildCompatBanner()),
         BuildHeaderBar(),
+        // Header line 2, Party-focus leader only (Plugin.LeaderLine.cs). No Else → hidden it leaves the layout entirely, so
+        // the window's +34 (LeaderLineH) is exactly this line + one Column gap and the party body keeps its height.
+        new ConditionalElement(() => _leaderLine, BuildLeaderLine()),
         new ConditionalElement(() => _viewMode == ViewMode.List, BuildListBody(), Fill: true),
         new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildPartyFocusBody()),
     }, Gap: 6f);
@@ -78,31 +81,13 @@ public sealed partial class Plugin
             () => _viewMode == ViewMode.List ? 0 : 1,
             i => { if ((i == 0) != (_viewMode == ViewMode.List)) ToggleViewMode(); }),
         new ConditionalElement(HudStatusHasDot, StatusDot(HudStatusDotColor)),
-        // The status takes the slack (weighted) and ellipsizes, so it is also the flexible gap before the tools.
+        // The status takes the slack (weighted) and ellipsizes, so it is also the flexible gap before the buttons.
         new CellElement(new TextElement(HudStatusText, Color: HudStatusColor, NoWrap: true, FontSize: 12)
             { RichEmoji = true, Ellipsize = true }, Weight: 1f),
-        new ConditionalElement(() => ShowLeaderTools, BuildLeaderTools()),
         BuildPauseButton(),     // Plugin.HudEncounter.cs (addendum: Pause + Archive header icons)
         BuildArchiveButton(),
         HudIconButton(() => _resetPng, Clear),
         HudIconButton(() => _morePng, static () => { }, ToggleMorePopover),
-    }, Gap: 6f);
-
-    // Party-focus + in a party + leader — exactly the old header gate. Mark / ready check / convene / countdown as round
-    // 28 px icon buttons; while the ready-check cooldown runs, that button is RECESSED and shows the seconds left. A 1 px
-    // MenuText@14 % divider, 18 px tall, separates them from Pause / Archive / ↺ / ⋯ (addendum 2026-11-17).
-    private bool ShowLeaderTools => _viewMode == ViewMode.PartyFocus
-                                    && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader;
-
-    private HudElement BuildLeaderTools() => new RowElement(new HudElement[]
-    {
-        HudIconButton(() => _locationPinPng, TogglePunctuate),
-        new ConditionalElement(() => _readyCheckCooldown <= 0f,
-            HudIconButton(() => _checkmarkPng, LeaderReadyCheck),
-            HudRecessedLabel(ReadyCheckLabel)),
-        HudIconButton(() => _megaphonePng, LeaderConvene),
-        HudIconButton(() => _countdownPng, LeaderCountdown),
-        new ImageElement(() => _dividerPng, 1, 18) { Tint = () => Fade(TextColor() with { A = 0.14f }) },
     }, Gap: 6f);
 
     // DPS / HPS / Taken captions, rebuilt only when the language changes (the dropdown polls this every refresh).
@@ -141,6 +126,7 @@ public sealed partial class Plugin
     {
         CaptureModeGeometry();   // remember the view we're leaving
         _viewMode = _viewMode == ViewMode.List ? ViewMode.PartyFocus : ViewMode.List;
+        LatchLeaderLineForMode();   // the LEADER line follows the view, before ApplyModeSize sizes from it
         PersistPrefs();
         ApplyModeSize();         // restore the view we're entering
     }
