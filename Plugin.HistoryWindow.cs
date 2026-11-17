@@ -47,7 +47,9 @@ public sealed partial class Plugin
     private const int   HistRunRows  = 12;                             // visible run tiles
     private const int   HistRunPool  = HistRunRows + 2;
 
-    private static float HistRunViewport(int rows) => rows * HistRunPitch - ListRowGap;
+    // rows × pitch, NOT − the last gap: each tile is centred in its pitch by RingListSlot (1 px clear above and below), so
+    // the first tile's top and the last tile's bottom never sit ON the viewport's clip edge (the selected ring was cut).
+    private static float HistRunViewport(int rows) => rows * HistRunPitch;
     // The list + footer block below the search box: list viewport + gap + the 28 px "Clear all" row.
     private static float HistRunsBlockH => HistRunViewport(HistRunRows) + PanelGap + PillHeight;
 
@@ -229,8 +231,21 @@ public sealed partial class Plugin
             OutlineColorFn = () => RunSelected(slot) ? Fade(AccentColor() with { A = 0.75f }) : null,
             CornerRadius = TileRadius, PaddingX = 0f, PaddingY = 0f,
         };
-        return ListSlot(tile);
+        return RingListSlot(tile);
     }
+
+    // A pooled row for a CLIPPED list whose tiles wear a selection ring: [1 px, tile, 1 px] instead of ListSlot's
+    // [tile, 2 px]. Same pitch and the same 2 px between tiles, but with a viewport of rows × pitch no tile edge lies on
+    // the RectMask2D edge — flush, the scroll content's sub-pixel offset shaved the ring's top/bottom row (2026-11-17).
+    // With a 2 px row gap 1 px is all the room there is; it covers the sub-pixel cut (the ring is drawn INSIDE the tile).
+    private const float RingListPad = ListRowGap / 2f;
+
+    private static HudElement RingListSlot(HudElement tile) => new ColumnElement(new HudElement[]
+    {
+        new SpacerElement(0f, RingListPad),
+        tile,
+        new SpacerElement(0f, ListRowGap - RingListPad),
+    }, Gap: 0.01f);
 
     private SessionEntry? RunAt(int slot)
     {

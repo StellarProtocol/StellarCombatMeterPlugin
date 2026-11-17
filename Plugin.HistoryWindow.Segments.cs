@@ -23,6 +23,11 @@ public sealed partial class Plugin
     private const float SegCardMinW   = 125f;
     private const float SegCardGap    = 6f;
     private const float SegPitch      = SegCardH + SegCardGap;   // the VirtualList RowHeight: a card row + its gap below
+    // The card row sits SegRingPad below its slot's top (the rest of the gap stays below it), so no card edge lies ON the
+    // viewport's RectMask2D clip edge: flush, the selected card's 1.5 px ring + top AA corner pixels were cut by the
+    // scroll content's sub-pixel offset (user screenshot 2026-11-17: ring top row (124,59,98) vs bottom (197,87,152)).
+    // Pitch, grid and block heights are unchanged; row 2's card ends 4 px above the viewport bottom.
+    private const float SegRingPad    = 2f;
     private const int   SegRowsShown  = 2;
     private const float SegScrollLane = 12f;   // the viewport's scrollbar lane (framework inset 9 px + slack)
     private const float SegHeadH      = 18f;
@@ -94,11 +99,13 @@ public sealed partial class Plugin
                 cells[c] = new CellElement(new ConditionalElement(() => Slot() < SegShown,
                     SegmentCard(Slot, cardW)), Width: cardW);
             }
-            // Row + the 6 px gap below it = one 42 px pitch (a VirtualList slot stretches its child to RowHeight).
+            // 2 px ring pad + row + the remaining 4 px of the gap = one 42 px pitch (a VirtualList slot stretches its child
+            // to RowHeight). Cards are still 6 px apart vertically.
             pool[line] = new ColumnElement(new HudElement[]
             {
+                new SpacerElement(0f, SegRingPad),
                 new RowElement(cells, Gap: SegCardGap),
-                new SpacerElement(0f, SegCardGap),
+                new SpacerElement(0f, SegCardGap - SegRingPad),
             }, Gap: 0.01f);
         }
         return new VirtualListElement(

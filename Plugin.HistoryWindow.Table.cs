@@ -44,7 +44,9 @@ public sealed partial class Plugin
     {
         var pool = new HudElement[TblRows + 2];
         for (int i = 0; i < pool.Length; i++) pool[i] = TableSlot(i);
-        return PanelBox(new HudElement[]
+        // Header + list in their own column at PanelGap − 2: the list viewport is 2 px taller (rows × pitch, RingListSlot
+        // keeps a charted row's ring off the clip edges), so the panel — and the fixed-height window — stay the same height.
+        return PanelBox(new HudElement[] { new ColumnElement(new HudElement[]
         {
             // Header columns line up with the tile columns: the tile's AccentRow pads 6 px each side, so the PLAYER caption
             // starts at the crest (6 + 1 px strut + 6 gap) and the right spacer covers both buttons + the 6 px pad.
@@ -60,8 +62,8 @@ public sealed partial class Plugin
             new VirtualListElement(
                 Count:     () => _sessionRows.Count,
                 RowHeight: TblPitch, Pool: pool,
-                OnWindow:  i => _srcOffset = i, Height: TblRows * TblPitch - ListRowGap),
-        });
+                OnWindow:  i => _srcOffset = i, Height: TblRows * TblPitch),
+        }, Gap: PanelGap - ListRowGap) });
     }
 
     private HudElement HeaderText(Func<string> text, float width, TextAlign align)
@@ -112,7 +114,7 @@ public sealed partial class Plugin
             OutlineColorFn = () => TblOutline(slot),
             CornerRadius = TileRadius, PaddingX = 0f, PaddingY = 0f,
         };
-        return ListSlot(tile);
+        return RingListSlot(tile);
     }
 
     private bool TblCharted(int slot) => TblRow(slot) is var i and >= 0 && _chartedSources.Contains(_sessionRows[i].Id);
