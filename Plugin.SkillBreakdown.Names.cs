@@ -29,7 +29,7 @@ public sealed partial class Plugin
     {
         if (_sourceNames.TryGetValue(id, out var cached)) return cached;
         var text = _services.GameText;
-        if (!_gameTextHooked) { _gameTextHooked = true; text.Ready += OnGameTextReady; }   // also starts the load
+        EnsureGameTextHooked();   // also starts the load
 
         var skill = _services.GameData.Combat.GetSkill(id);
         var buff = _services.GameData.Combat.GetBuff(id);
@@ -44,11 +44,20 @@ public sealed partial class Plugin
         return entry;
     }
 
-    // Main thread (framework-marshalled), once: names resolved during the load window may have been "#id".
+    private void EnsureGameTextHooked()
+    {
+        if (_gameTextHooked) return;
+        _gameTextHooked = true;
+        _services.GameText.Ready += OnGameTextReady;
+    }
+
+    // Main thread (framework-marshalled), once: names resolved during the load window may have been "#id" — the
+    // breakdown's and the hidden-effect labels (Plugin.EffectNames.cs).
     private void OnGameTextReady()
     {
         _sourceNames.Clear();
         _sbBuiltFor = null;
+        RefreshEffectLabels();
     }
 
     private void UnhookGameText()

@@ -154,7 +154,7 @@ public sealed partial class Plugin
 
         _getBuffFn ??= _services.GameData.Combat.GetBuff;
         var all = DebuffStrip.BuildAll(_services.CombatLookup.BuffsFor(id), _getBuffFn,
-                                       _debuffSelection, _buffSelection, _services.CombatSnapshot.ServerNowMs);
+                                       _debuffSelection, _buffSelection, _services.CombatSnapshot.ServerNowMs, IsUnnamedFn);
         // Debuffs first, then buffs (each in the strip's own order).
         _tipCount = 0;
         int debuffs = 0, buffs = 0;
@@ -176,12 +176,15 @@ public sealed partial class Plugin
     private void FillTipEntry(int slot, in DebuffEntry e)
     {
         var info = (_getBuffFn ??= _services.GameData.Combat.GetBuff)(e.BaseId);
+        var desc = info?.Description;
         _tipEntries[slot] = new DebuffTipEntry
         {
             Tex     = ResolveDebuffIcon(e.BaseId, e.SourceSkillId, out var uv),
             Uv      = uv,
-            Name    = TipStrip(info?.Name),
-            Desc    = TipStrip(info?.Description),
+            // A game-hidden effect (only listed under "Hidden effects") reads its EffectLabel — "Design name (id)" /
+            // "#id" — and, with no game description, the framework's English one (or design note). Once per open.
+            Name    = TipStrip(EffectLabel(e.BaseId, info?.Name)),
+            Desc    = TipStrip(string.IsNullOrWhiteSpace(desc) ? _services.GameText.GetDescription(GameTextKind.Buff, e.BaseId) : desc),
             IsBuff    = e.IsBuff,
             ExpireMs  = e.ExpireMs,     // TipSeconds recomputes live
             DurationMs = e.DurationMs,

@@ -176,4 +176,22 @@ public class DebuffStripTests
 
         Assert.Equal(1, DebuffStrip.Build(buffs, t, sel, sel, nowMs: 1_791_000_000_000).Count);
     }
+
+    [Fact]
+    public void IsUnnamed_gate_treats_placeholder_names_as_hidden()
+    {
+        // The plugin passes IGameText.IsPlaceholderName: a filler / "Buff <id>" name is game-hidden, like an empty one.
+        var buffs = new[] { Buff(10, 1, 0, 1000, 1), Buff(11, 1, 0, 1000, 2) };
+        System.Func<int, BuffInfo?> t = id => id == 10
+            ? new BuffInfo(10, "Buff 10", "", "path/x", default, true, 0)
+            : new BuffInfo(11, "B11", "", "path/x", default, true, 0);
+        System.Func<string?, bool> isUnnamed = n => string.IsNullOrEmpty(n) || n.StartsWith("Buff ");
+
+        Assert.Equal(2, DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs: 0).Count);
+        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs: 0, isUnnamed: isUnnamed);
+        Assert.Equal(1, r.Count);
+        Assert.Equal(11, r.E0.BaseId);
+        Assert.Equal(2, DebuffStrip.Build(buffs, t, new DebuffSelection { ShowHidden = true }, new DebuffSelection(),
+                                          nowMs: 0, isUnnamed: isUnnamed).Count);
+    }
 }

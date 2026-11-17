@@ -9,11 +9,11 @@ namespace Stellar.CombatMeter.Tests;
 public class DebuffConfigFilterTests
 {
     // All rows default to DEBUFFS (isBuff:false); pass isBuff:true for a buff row.
-    private static Dictionary<int, (string name, bool hasIcon, bool isBuff)> Seen(
+    private static Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)> Seen(
         params (int id, string name, bool hasIcon)[] rows)
     {
-        var d = new Dictionary<int, (string name, bool hasIcon, bool isBuff)>();
-        foreach (var r in rows) d[r.id] = (r.name, r.hasIcon, false);
+        var d = new Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)>();
+        foreach (var r in rows) d[r.id] = (r.name, r.hasIcon, false, r.name.Length == 0);   // "" = game-hidden, unlabelled
         return d;
     }
 
@@ -100,11 +100,11 @@ public class DebuffConfigFilterTests
     [Fact]
     public void Tab_filters_by_kind()
     {
-        var seen = new Dictionary<int, (string name, bool hasIcon, bool isBuff)>
+        var seen = new Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)>
         {
-            [1] = ("Poison", true, false),          // debuff
-            [2] = ("Attack Up", true, true),        // buff
-            [3] = ("Bleed", true, false),           // debuff
+            [1] = ("Poison", true, false, false),        // debuff
+            [2] = ("Attack Up", true, true, false),      // buff
+            [3] = ("Bleed", true, false, false),         // debuff
         };
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out var d, out var dCount);
         Assert.Equal(2, dCount);
@@ -113,5 +113,32 @@ public class DebuffConfigFilterTests
         Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: true, out var b, out var bCount);
         Assert.Equal(1, bCount);
         Assert.Equal("Attack Up", b[0].Name);
+    }
+
+    [Fact]
+    public void Hidden_rows_keep_their_label_stay_per_id_sort_first_and_search_by_label()
+    {
+        // A game-hidden effect is listed under its EffectLabel ("Design name (id)"); two with the same label stay
+        // separate rows, cluster before named rows, and the search box matches the shown label.
+        var seen = new Dictionary<int, (string name, bool hasIcon, bool isBuff, bool hidden)>
+        {
+            [5]  = ("Burn", true, false, false),
+            [7]  = ("Firmament Sub-Buff (7)", true, false, true),
+            [8]  = ("Firmament Sub-Buff (7)", true, false, true),
+            [9]  = ("Ablaze", true, false, false),
+        };
+        Plugin.FilterSeenEffects(seen, "", showHidden: false, wantBuff: false, out _, out var namedOnly);
+        Assert.Equal(2, namedOnly);
+
+        Plugin.FilterSeenEffects(seen, "", showHidden: true, wantBuff: false, out var all, out var n);
+        Assert.Equal(4, n);
+        Assert.True(all[0].Hidden && all[1].Hidden);
+        Assert.Equal(new[] { 7, 8 }, new[] { all[0].RepId, all[1].RepId });
+        Assert.Equal("Firmament Sub-Buff (7)", all[0].Name);
+        Assert.Equal("Ablaze", all[2].Name);
+
+        Plugin.FilterSeenEffects(seen, "firmament", showHidden: true, wantBuff: false, out var hit, out var hits);
+        Assert.Equal(2, hits);
+        Assert.All(hit, g => Assert.True(g.Hidden));
     }
 }

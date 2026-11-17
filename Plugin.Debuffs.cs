@@ -31,7 +31,8 @@ public sealed partial class Plugin
         var buffs = _services.CombatLookup.BuffsFor(id);
         _getBuffFn ??= _services.GameData.Combat.GetBuff;
         DiagEffects(buffs);
-        var r = DebuffStrip.Build(buffs, _getBuffFn, _debuffSelection, _buffSelection, _services.CombatSnapshot.ServerNowMs, maxCells);
+        var r = DebuffStrip.Build(buffs, _getBuffFn, _debuffSelection, _buffSelection, _services.CombatSnapshot.ServerNowMs, maxCells,
+                                  IsUnnamedFn);   // "hidden" = game name empty/placeholder, as Settings › Effects decides it
         row.Debuff0 = ToSlot(r, 0);
         row.Debuff1 = ToSlot(r, 1);
         row.Debuff2 = ToSlot(r, 2);

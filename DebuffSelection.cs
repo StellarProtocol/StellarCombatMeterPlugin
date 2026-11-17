@@ -28,7 +28,8 @@ public sealed class DebuffSelection
     /// (<see cref="DebuffTrackMode.ShowOnlySelected"/>) for a fresh install.</summary>
     public DebuffTrackMode Mode { get; set; } = DebuffTrackMode.ShowAllExceptSelected;
 
-    /// <summary>When true, effects with no display name (icon-only rows) are also eligible. Bare-model default
+    /// <summary>When true ("Hidden effects"), effects the game leaves unnamed — internal sub-buffs/procs — are also
+    /// eligible (the plugin decides "unnamed" with IGameText.IsPlaceholderName). Bare-model default
     /// false; <see cref="Load"/> supplies the product default (<see cref="DefaultTrackedEffects.ShowHidden"/>).</summary>
     public bool ShowHidden { get; set; }
 

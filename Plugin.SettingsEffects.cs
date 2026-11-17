@@ -6,7 +6,7 @@ namespace Stellar.CombatMeter;
 
 // Settings › Effects (the old "Configure buffs & debuffs" window, approved redesign §3). PARTY EFFECTS (Show buffs &
 // debuffs, Max shown — per view, the view picked on the Look tab's EDITING strip), then the pick-list panel: kind chips
-// Debuffs (red) / Buffs (green) + "shown / total" hint; mode chips "All except ticked" / "Only ticked"; Unnamed on/off;
+// Debuffs (red) / Buffs (green) + "shown / total" hint; mode chips "All except ticked" / "Only ticked"; Hidden effects on/off;
 // search + round ✕; a 10-row VirtualList of 26 px tiles (16 px tick box, 20 px icon, name, muted ×N); footer feedback +
 // Caution "Untick all" with a modal confirm (Plugin.Confirm.cs). The list is the CooldownBar picker (Plugin.Settings.Rows.cs /
 // .Feedback.cs) recipe: a click flashes the row green with "Hidden" / "Shown" for ~1 s (keyed by kind + the group's
