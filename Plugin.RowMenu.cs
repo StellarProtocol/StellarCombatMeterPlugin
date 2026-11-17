@@ -191,16 +191,18 @@ public sealed partial class Plugin
     private HudElement BuildRowMenuRoot()
     {
         var rows = new HudElement[1 + MaxRowMenuItems];
-        // Caption: crest (when the row has a class) + bold name, inset to line up with the item labels.
+        // Caption: crest (when the row has a class) + bold name, flush with the shell's inner left edge (no indent — the
+        // user asked for it tight, not lined up with the item icons). Gap 0.01f (0 = the default 8 px RowGap) and an
+        // explicit 6 px spacer for crest→name, which also carries the caption's 24 px height strut.
         rows[0] = new RowElement(new HudElement[]
         {
-            new SpacerElement(4f, RowMenuCaptionH),
             new ConditionalElement(() => _rowMenuCrest != null,
                 new GameTextureElement(() => _rowMenuCrest, (int)RowMenuCrest, (int)RowMenuCrest, () => _rowMenuCrestUv)
                     { CornerRadius = 5, Fill = true }),
+            new SpacerElement(6f, RowMenuCaptionH),
             new CellElement(new TextElement(() => _rowMenuName, Color: () => TextColor(), NoWrap: true, FontSize: 13)
                 { Bold = true, Ellipsize = true }, Weight: 1f),
-        }, Gap: 6f);
+        }, Gap: 0.01f);
         for (var i = 0; i < MaxRowMenuItems; i++)
         {
             var idx = i;   // a for-loop variable is shared by every closure — capture a copy
