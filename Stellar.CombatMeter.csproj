@@ -219,6 +219,9 @@
     <EmbeddedResource Include="Resources/mute.png" LogicalName="Stellar.CombatMeter.mute.png" />
     <EmbeddedResource Include="Resources/settings-gear.png" LogicalName="Stellar.CombatMeter.settings-gear.png" />
     <EmbeddedResource Include="Resources/history.png" LogicalName="Stellar.CombatMeter.history.png" />
+    <!-- The CombatMeter mark (three meter bars), pre-drawn per size by tools/icons/gen-meter-bars.py; Plugin.MeterIcon.cs
+         picks the exact size. -->
+    <EmbeddedResource Include="Resources/meter/*.png" LogicalName="Stellar.CombatMeter.meter.%(Filename)%(Extension)" />
     <!-- Row context-menu glyphs, pre-drawn per size (<stem>_<16|24|32>.png); Plugin.RowMenuIcons.cs picks the exact size. -->
     <EmbeddedResource Include="Resources/rowmenu/*.png" LogicalName="Stellar.CombatMeter.rowmenu.%(Filename)%(Extension)" />
   </ItemGroup>

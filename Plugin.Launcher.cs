@@ -19,18 +19,23 @@ public sealed partial class Plugin
     private IDisposable? _historyLauncherEntry;
     private byte[]? _historyIconPng;
 
+    // The launcher's tile glyph slot in canvas units (framework LauncherView.Tile.cs TileGlyph).
+    private const float LauncherTileGlyphUnits = 32f;
+
     private void RegisterLauncher()
     {
         _historyIconPng = LoadHistoryIconPng();
 
-        // Settings tile → the uploads/auto-archive Settings window (gear icon reused from the header).
+        // Settings tile → the CombatMeter Settings window, under the CombatMeter mark (the three-bar meter glyph,
+        // Plugin.MeterIcon.cs). LauncherEntry.IconPng is ONE fixed array that the launcher draws mipmapped in its 32-unit
+        // tile glyph slot, so pick the pre-drawn size for that slot at the UI scale of registration time (exact at the
+        // common scales; a later scale change only costs mip-scaling, as any plugin icon does).
         // Title stays the fixed literal "CombatMeter" — the stable pin-identity key (ILauncher.cs:49-50) —
         // so a pinned tile survives a language change. "CombatMeter" is the plugin brand and every catalog
-        // keeps it identical (see settings.window.title / settings.appearance.title); launcher.settings.title
-        // mirrors that for TitleProvider's live-localized DISPLAY text, even though the value itself never
-        // changes per-locale today.
+        // keeps it identical (launcher.settings.title, TitleProvider's live-localized DISPLAY text, never changes
+        // per-locale today); the window it opens is titled "CombatMeter Settings" (settings.window.title).
         _settingsLauncherEntry = _services.Launcher.Register(new LauncherEntry(
-            "CombatMeter", IconPng: _settingsGearPng, IconKey: null,
+            "CombatMeter", IconPng: MeterIconPng(LauncherTileGlyphUnits), IconKey: null,
             // Opens the merged settings window on the Archive tab (what this tile opened before the merge), centred on
             // the screen — the launcher is not a CombatMeter window to centre on.
             OnOpen: () => ToggleSettings(SettingsTab.Archive))

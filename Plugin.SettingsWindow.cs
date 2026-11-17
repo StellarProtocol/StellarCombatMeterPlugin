@@ -51,12 +51,12 @@ public sealed partial class Plugin
         var w = _services.Windows.Register(new WindowRegistration(
             new WindowSpec(
                 Id:          "combatmeter.config",
-                Title:       "CombatMeter",   // the plugin brand, identical in every catalog (launcher.settings.title)
+                Title:       "CombatMeter Settings",   // English fallback; TitleProvider localizes (settings.window.title)
                 DefaultRect: new WindowRect(900f, 160f, SettingsWindowW, SettingsWindowH),
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
             { StartVisible = false, Closable = true, Draggable = true, FixedHeight = true,
-              TitleProvider = () => _loc.T("launcher.settings.title"),
+              TitleProvider = () => _loc.T("settings.window.title"),
               // Five KeepAlive tabs ≈ a few hundred parts: build them in the background after login instead of in the
               // click that first opens the window (Plugin-Performance-Rules §5). Value lambdas are hidden-safe.
               Prebuild = !CmDiag.NoSettingsPrebuild,   // crash-bisect switch (Plugin.Diag.cs)
@@ -131,7 +131,7 @@ public sealed partial class Plugin
             new SpacerElement(1f, SettingsBodyH),
             new CellElement(new ColumnElement(new HudElement[]
             {
-                ToolHeader(MeterIconTile(), () => _loc.T("launcher.settings.title"), SettingsStatusLine()),
+                ToolHeader(MeterIconTile(), () => _loc.T("settings.window.title"), SettingsStatusLine()),
                 TabStrip(new Func<string>[]
                 {
                     () => _loc.T("cfg.tab.look"), () => _loc.T("cfg.tab.effects"), () => _loc.T("cfg.tab.archive"),

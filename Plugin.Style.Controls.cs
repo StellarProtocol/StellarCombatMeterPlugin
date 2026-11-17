@@ -218,21 +218,23 @@ public sealed partial class Plugin
     }, Gap: 0.01f);
 
     // ── icon tile + tool header ───────────────────────────────────────────────────────────────────────────────────
-    // The CombatMeter mark: a 40 px tile in the LIVE accent with two flat meter bars drawn as bubbles (no PNG, so it is
-    // crisp at every UI scale and the bars take the solid-fill label colour — white, or near-black on a light accent).
+    // The CombatMeter mark: a 40 px tile in the LIVE accent with the white three-bar meter glyph (Plugin.MeterIcon.cs,
+    // pre-drawn per size) tinted with the solid-fill label colour — white, or near-black on a light accent. The glyph is
+    // 60% of the tile (24 in 40). Live: the bitmap is re-picked for the UI scale each refresh (cached arrays, no alloc).
     private const float ToolIconSize = 40f;
 
     private HudElement MeterIconTile(float size = ToolIconSize)
     {
-        float barW = MathF.Round(size * 0.15f), barH = MathF.Round(size * 0.4f), gap = MathF.Round(size * 0.1f);
-        HudElement Bar() => new BubbleElement(new SpacerElement(barW, barH))
-        {
-            FillColorFn = () => SolidLabel(AccentColor()), CornerRadius = 2f, PaddingX = 0f, PaddingY = 0f,
-        };
-        return new CellElement(new BubbleElement(new RowElement(new HudElement[] { Bar(), Bar() }, Gap: gap))
+        float glyph = MathF.Round(size * 0.6f), pad = (size - glyph) / 2f;
+        return new CellElement(new BubbleElement(new RowElement(new HudElement[]
+            {
+                new SpacerElement(0f, glyph),
+                new ImageElement(() => MeterIconPng(glyph), (int)glyph, (int)glyph)
+                    { Live = true, Tint = () => SolidLabel(AccentColor()) },
+            }, Gap: 0.01f, Justify: RowJustify.Center))
         {
             FillColorFn = () => Fade(AccentColor()), CornerRadius = MathF.Round(size * 0.22f),
-            PaddingX = (size - 2f * barW - gap) / 2f, PaddingY = (size - barH) / 2f,
+            PaddingX = pad, PaddingY = pad, MaxWidth = size,
         }, Width: size);
     }
 
