@@ -31,7 +31,7 @@ public sealed partial class Plugin
     // panel is SectionPanel rows → its height follows from the row counts (Plugin.Settings.cs, keep them in step):
     // padding + caption + rows × (28 px row + 6 px gap), panels 8 px apart in the column.
     private const int LookLeftPanels = 2, LookLeftRows = 8 + 4;           // ROW 8 · BATTLE IMAGINE 4
-    private const int LookRightPanels = 3, LookRightRows = 6 + 3 + 2;     // BARS 6 · NUMBERS 3 · METER WINDOW 2
+    private const int LookRightPanels = 3, LookRightRows = 6 + 3 + 3;     // BARS 6 · NUMBERS 3 · METER WINDOW 3
     private const float LookPanelChromeH = 2f * PanelPadY + CaptionHeight;
     private const float LookColLeftH  = LookLeftPanels  * LookPanelChromeH + LookLeftRows  * (SettingRowH + PanelGap) + (LookLeftPanels  - 1) * SettingsGap;
     private const float LookColRightH = LookRightPanels * LookPanelChromeH + LookRightRows * (SettingRowH + PanelGap) + (LookRightPanels - 1) * SettingsGap;

@@ -63,7 +63,7 @@ public sealed partial class Plugin
             children[slot + 1] = new ConditionalElement(() => !_gridSlotHidden[idx], new DragSlotElement(
                 // fw 2.33.0 opt-in house-style row; empty slots render as recessed tiles (MeterRowData.IsEmptySlot).
                 new MeterRowElement(() => _gridRows[idx], OnRightClick: () => OnGridSlotRightClick(idx))
-                    { Style = MeterRowStyle.Rounded },
+                    { Style = MeterRowStyle.Rounded, BackingOpacity = MeterRowBackingFn },
                 Key: idx,
                 OnDrop: OnGridDrop,
                 // Leader-only, Raid20-only, and only an OCCUPIED slot is a drag source (an empty "—" slot

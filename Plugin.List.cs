@@ -46,7 +46,7 @@ public sealed partial class Plugin
             slots[i] = new MeterRowElement(
                 () => idx < _listRows.Count ? _listRows[idx] : default,
                 OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default))
-                { Style = MeterRowStyle.Rounded };
+                { Style = MeterRowStyle.Rounded, BackingOpacity = MeterRowBackingFn };
         }
         // Empty → ONE row-sized slot at the top of the list area (EmptyStateSlot), else the rows. The slot sits in a scroll of
         // the SAME height as the rows' scroll, so both branches have identical geometry — same top edge, same 9 px

@@ -166,6 +166,7 @@ public sealed partial class Plugin
     // to open the theme editor, so the row was dropped as the approved spec allows.
     private readonly FmtCache _bgPctFmt = new();
     private readonly FmtCache _fgPctFmt = new();
+    private readonly FmtCache _rowBgPctFmt = new();
 
     private HudElement LookMeterWindowPanel() => SectionPanel(() => _loc.T("cfg.look.meterWindow"), null,
         SettingRow(() => _loc.T("cfg.look.background"), false,
@@ -174,6 +175,15 @@ public sealed partial class Plugin
             new TextElement(() => _bgPctFmt.Get("{0}%", (long)MathF.Round(MeterBackgroundOpacity * 100f)),
                 Color: () => TextColor(), Width: 38f, Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
             HelpDot("look.background", "cfg.look.meterWindow", "cfg.look.background", "help.look.background")),
+        // "Row background" 0–100 %, default 60 %: fades only each row's dark backing (row tile, bar + spine tracks, empty
+        // effect squares, the recessed empty slot) through the framework's MeterRowElement.BackingOpacity; bars, crest,
+        // names, numbers, icons, filled effect tiles and the self wash/ring stay solid. 100 % = the look before 2.33.
+        SettingRow(() => _loc.T("cfg.look.rowBackground"), false,
+            new CellElement(RoundSlider(() => MathF.Round(MeterRowBackingOpacity * 100f), v => SetMeterRowBacking(v / 100f), 0f, 100f)
+                with { Width = 150f }, Width: 150f),
+            new TextElement(() => _rowBgPctFmt.Get("{0}%", (long)MathF.Round(MeterRowBackingOpacity * 100f)),
+                Color: () => TextColor(), Width: 38f, Align: TextAlign.Right, NoWrap: true, FontSize: 13) { Bold = true },
+            HelpDot("look.rowBackground", "cfg.look.meterWindow", "cfg.look.rowBackground", "help.look.rowBackground")),
         // "Foreground" 20–100 %, default 100 %: fades the whole meter content (header, icons, bars, names, numbers,
         // effect tiles) through the framework's WindowSpec.ContentOpacity. The Background panel sits outside that faded
         // group, so neither slider changes what the other one shows.
@@ -252,8 +262,34 @@ public sealed partial class Plugin
         MarkMeterLookDirty();
     }
 
-    // Shared by the Background and Foreground sliders. A drag fires every frame, so the prefs file is written at most twice
-    // a second, plus once when the Settings window closes (FlushMeterBackgroundSave) — never a disk write per frame.
+    // ── meter row background ──────────────────────────────────────────────────────────────────────────────────────
+    private const string PrefMeterRowBackground = "meter.rowBackground";
+    private const float DefaultMeterRowBackground = 0.6f;   // rows read "too solid" at 100 % (user 2026-11-17)
+    private float? _meterRowBacking;
+    private Func<float>? _meterRowBackingFn;
+
+    /// <summary>Opacity (0..1) of each meter row's dark backing, applied by the framework as
+    /// MeterRowElement.BackingOpacity (Rounded rows). Default 0.6; 1 = the look before the setting existed. Config key
+    /// <c>meter.rowBackground</c> (0..1) in the "combatmeter" section. ONE value for every view.</summary>
+    internal float MeterRowBackingOpacity
+        => _meterRowBacking ??= Math.Clamp(_prefs.Get(PrefMeterRowBackground, DefaultMeterRowBackground), 0f, 1f);
+
+    // The MeterRowElement.BackingOpacity delegate, built once and shared by every row (List + party grids); the
+    // framework polls it with each row's refresh and repaints only on a change.
+    private Func<float> MeterRowBackingFn => _meterRowBackingFn ??= () => MeterRowBackingOpacity;
+
+    private void SetMeterRowBacking(float v)
+    {
+        v = Math.Clamp(MathF.Round(v * 100f) / 100f, 0f, 1f);
+        if (_meterRowBacking == v) return;
+        _meterRowBacking = v;
+        _prefs.Set(PrefMeterRowBackground, v);
+        MarkMeterLookDirty();
+    }
+
+    // Shared by the Background, Row background and Foreground sliders. A drag fires every frame, so the prefs file is
+    // written at most twice a second, plus once when the Settings window closes (FlushMeterBackgroundSave) — never a
+    // disk write per frame.
     private void MarkMeterLookDirty()
     {
         _meterBgDirty = true;
