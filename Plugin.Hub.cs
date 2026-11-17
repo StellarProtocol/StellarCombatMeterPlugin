@@ -39,7 +39,11 @@ public sealed partial class Plugin
             { StartVisible = false, Closable = true, Draggable = true,
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World
                                 && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
-            BuildHubRoot()));
+            BuildHubRoot(),
+            // REQUIRED for a Closable window: with no OnClose the framework's title-bar ✕ only deactivates the root GameObject
+            // (WindowBuilder.Chrome.cs BuildCloseButton) and never clears the window's Visible flag — so the next apply
+            // (WindowRenderer.SetShown: Visible + inactive root = a re-show) re-activates it: "✕ closes, then it pops right back".
+            OnClose: CloseHub));
         _hubCenterer = new WindowCenterer(_services.Framework, w);
         _services.ClientState.Logout += OnLogoutHideHub;
         return w;
@@ -48,17 +52,20 @@ public sealed partial class Plugin
     // Launcher tile: open centred on the screen and in front, or close when it is already open.
     private void ToggleHub()
     {
-        if (_hubWindow.IsShown) { _hubWindow.SetVisible(false); return; }
+        if (_hubWindow.IsShown) { CloseHub(); return; }
         _hubCenterer?.OpenCentred(null);
     }
 
-    // Logout: close it so it neither lingers through the logout transition (the phase stays World until the login view)
-    // nor pops back open at the next login. Synchronous (Update is world-gated; Game-Phases-and-Tick-Gating.md §4).
-    private void OnLogoutHideHub()
+    // The title-bar ✕. Stop the centerer first so a close mid-settle leaves no tick subscribed.
+    private void CloseHub()
     {
         _hubCenterer?.Stop();
         _hubWindow.SetVisible(false);
     }
+
+    // Logout: close it so it neither lingers through the logout transition (the phase stays World until the login view)
+    // nor pops back open at the next login. Synchronous (Update is world-gated; Game-Phases-and-Tick-Gating.md §4).
+    private void OnLogoutHideHub() => CloseHub();
 
     private void DisposeHub()
     {
