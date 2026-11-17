@@ -17,10 +17,11 @@ namespace Stellar.CombatMeter;
 /// SEGMENTS cards in .Segments.cs; the run grouping + the throttled snapshot
 /// rebuild in Plugin.HistoryWindow.Runs.cs.
 ///
-/// <para>Content-fit height, fixed width: every block has a fixed height (lists are fixed viewports; confirms are modal
-/// cards over the content, Plugin.Confirm.cs), so the window never grows or shrinks with the data (SDL rule 14). It is no longer drag-resizable:
-/// a rounded SectionPanel (BubbleElement) hugs its content and can't hand slack height to the table, so a taller
-/// window would only add an empty strip at the bottom.</para>
+/// <para>Fixed size: every block has a fixed height (lists are fixed viewports; the run panel's variable parts sit in
+/// equal-height FixedBoxes; confirms are modal cards over the content, Plugin.Confirm.cs), so the content never changes
+/// height with the data (SDL rule 14), and <c>WindowSpec.FixedHeight</c> pins the window to <see cref="HistWindowH"/> on
+/// top of that. It is not drag-resizable: a rounded SectionPanel (BubbleElement) hugs its content and can't hand slack
+/// height to the table, so a taller window would only add an empty strip at the bottom.</para>
 /// </summary>
 public sealed partial class Plugin
 {
@@ -33,6 +34,10 @@ public sealed partial class Plugin
     // Geometry (rule 18: widen, don't cram). 780 → 880 for the runs column + run pills; 880 → 1000 with the runs column
     // 220 → 280 (addendum "run panel B", 2026-11-17) so map names stop truncating and five segment cards fit a row.
     private const float HistWindowW  = 1000f;
+    // The content-fit height of the fixed layout (title bar + ToolHeader + the right column: run panel 188 + chart 278 +
+    // table 216 + gaps). Derived from the saved v3 rect (804.5 with the old 189 px run panel) − 1, rounded up; NOT yet
+    // measured in game. Too small → the player table's viewport (min 0) gives way; too big → an empty strip below it.
+    private const float HistWindowH  = 804f;
     private const float HistBodyW    = HistWindowW - 24f;              // GlassMenu body padding 12 each side
     private const float HistRunsW    = 280f;
     private const float HistGap      = 8f;
@@ -89,10 +94,10 @@ public sealed partial class Plugin
             new WindowSpec(
                 Id:          "combatmeter.history.v3",
                 Title:       _loc.T("history.window.title"),   // baked at registration; rebuilt on LanguageChanged
-                DefaultRect: new WindowRect(900f, 160f, HistWindowW, 760f),
+                DefaultRect: new WindowRect(900f, 160f, HistWindowW, HistWindowH),
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
-            { StartVisible = false, Closable = true, Draggable = true,
+            { StartVisible = false, Closable = true, Draggable = true, FixedHeight = true,   // rule 14 belt + braces (HistWindowH)
               // NOT prebuilt (crash fix 2026-11-17). The LineChart's plot is the framework's ChartGraphic, an
               // Il2CppInterop-INJECTED MaskableGraphic: the injector leaves the class's has_references = 0, so IL2CPP
               // allocates it pointer-free and the GC never scans it — the UnityEvent Unity's serializer stores in its
@@ -151,19 +156,19 @@ public sealed partial class Plugin
         PaddingX = 0f, PaddingY = 0f, MaxWidth = ToolIconSize,
     }, Width: ToolIconSize);
 
-    // A block pinned to (at least) `height`, its children top-aligned: Row[height strut, Column[children…, filler]].
-    // Variants swapped by a Conditional all use it, so the swap never changes the window height.
-    private static HudElement FixedBox(float height, params HudElement[] children)
+    // A block exactly `height` tall (as long as its children fit), children top-aligned: Row[height strut, Fill
+    // Conditional[Column[children…]]]. The always-true Fill Conditional stretches to the strut's height and its column
+    // keeps the children at the top (KB "top-align inside a row"). Variants swapped by a Conditional all use it with the
+    // same height, so the swap never changes the window height.
+    // ⚠️ It used to be Column[children…, VerticalFill] with Gap PanelGap: the gap before the filler + the filler's 1 px
+    // made a FULL box 7 px taller than `height` while an empty one stayed at `height` — the History window was 7 px
+    // taller for a multi-segment run than for a single-segment one (and the RUNS panel likewise with vs without runs).
+    private static HudElement FixedBox(float height, params HudElement[] children) => new RowElement(new HudElement[]
     {
-        var col = new List<HudElement>(children.Length + 1);
-        col.AddRange(children);
-        col.Add(VerticalFill());
-        return new RowElement(new HudElement[]
-        {
-            new SpacerElement(1f, height),
-            new CellElement(new ColumnElement(col, Gap: PanelGap), Weight: 1f),
-        }, Gap: 0.01f);
-    }
+        new SpacerElement(1f, height),
+        new CellElement(new ConditionalElement(() => true, new ColumnElement(children, Gap: PanelGap), Fill: true),
+            Weight: 1f),
+    }, Gap: 0.01f);
 
     // ── RUNS panel ────────────────────────────────────────────────────────────────────────────────────────────────
     private readonly FmtCache _runsHintFmt = new();

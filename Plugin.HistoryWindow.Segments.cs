@@ -10,9 +10,9 @@ namespace Stellar.CombatMeter;
 //   36 px, r6, Tile fill · bold "N · <reason>" (readable reason, SegmentLabel) · muted "<start m:ss> · <length>" ·
 //   state dot top-right (green = uploaded, amber = uploading, hollow muted ring = not yet). Selected = accent wash + ring.
 // Duplicate reasons are expected and honest (two run-end stages really are two "Stage" segments); the number tells them
-// apart. Columns fit the width (≥ SegCardMinW each); at most two rows show, then the card area scrolls, so the chart and
-// table never move further down. A single-segment run hides the area — its height stays reserved (rule 14: the window
-// never grows or shrinks with the selection).
+// apart. Columns fit the width (≥ SegCardMinW each); up to two rows show in full with no scrollbar, a third row makes the
+// card area scroll, so the chart and table never move further down. A single-segment run hides the area — its height
+// stays reserved, exactly (rule 14: the window never grows or shrinks with the selection).
 public sealed partial class Plugin
 {
     // Card slots (built once, polled). A real RAID banks 13 archives per session (measured 2026-08-25, Clash! Field of
@@ -22,14 +22,26 @@ public sealed partial class Plugin
     private const float SegCardH      = 36f;
     private const float SegCardMinW   = 125f;
     private const float SegCardGap    = 6f;
-    private const float SegScrollLane = 12f;   // the ScrollElement's scrollbar lane
+    private const float SegPitch      = SegCardH + SegCardGap;   // the VirtualList RowHeight: a card row + its gap below
+    private const int   SegRowsShown  = 2;
+    private const float SegScrollLane = 12f;   // the viewport's scrollbar lane (framework inset 9 px + slack)
     private const float SegHeadH      = 18f;
-    private const float SegGridH      = 2f * SegCardH + SegCardGap;
+    // Two WHOLE pitches (2 × 42 = 84), not 2 × 36 + 6 = 78: the virtual list's content is Count × RowHeight, the last
+    // row's 6 px gap included, so 78 was short of two rows → the AutoHide scrollbar showed with only 2 rows and the
+    // clamped scroll sat at the bottom, cutting the first row's top edge (2026-11-17). With 84 two rows fit exactly
+    // (the last gap is empty space under them); a third row overflows by a whole pitch and scrolls.
+    private const float SegGridH      = SegRowsShown * SegPitch;
+    // Header + gap + grid, exactly: FixedBox adds nothing, so both branches below are this tall (rule 14).
     private const float SegBlockH     = SegHeadH + PanelGap + SegGridH;
 
     // Card texts, rebuilt on selection / language change only (RebuildSegmentTexts).
     private readonly string[] _segTitles = new string[MaxSegmentChips];
     private readonly string[] _segTimes  = new string[MaxSegmentChips];
+
+    private int _segRowOffset;        // first card ROW shown by the virtual list
+    private int[]? _segListRun;       // the segment array the list last showed (a new run → scroll back to the top)
+
+    private int SegShown => Math.Min(_selectedSegments.Length, MaxSegmentChips);
 
     private HudElement BuildSegmentArea() => new ConditionalElement(() => _selectedSegments.Length > 1,
         FixedBox(SegBlockH, SegmentHeader(), SegmentGrid()),
@@ -67,31 +79,51 @@ public sealed partial class Plugin
         float avail = HistDetailW - 2f * PanelPadX - SegScrollLane;
         int cols = Math.Max(1, (int)((avail + SegCardGap) / (SegCardMinW + SegCardGap)));
         float cardW = MathF.Floor((avail - (cols - 1) * SegCardGap) / cols);
-        var lines = new HudElement[(MaxSegmentChips + cols - 1) / cols];
-        for (int r = 0; r < lines.Length; r++)
+        // A virtual list of card ROWS (pool = the 2 visible + 2), not a ScrollElement over a ListElement: each pooled
+        // slot is exactly RowHeight tall whatever its cards measure, so the content height is exactly rows × pitch (the
+        // old list summed the cards' own heights, and the 0.01 gaps inside a card already made a row 36.02 tall), and
+        // ResetScroll puts a newly selected run back at its first row.
+        var pool = new HudElement[SegRowsShown + 2];
+        for (int line = 0; line < pool.Length; line++)
         {
             var cells = new HudElement[cols];
             for (int c = 0; c < cols; c++)
             {
-                int slot = r * cols + c;
-                cells[c] = new CellElement(new ConditionalElement(() => slot < _selectedSegments.Length,
-                    SegmentCard(slot, cardW)), Width: cardW);
+                int ln = line, col = c;
+                int Slot() => (_segRowOffset + ln) * cols + col;   // card index this cell shows now
+                cells[c] = new CellElement(new ConditionalElement(() => Slot() < SegShown,
+                    SegmentCard(Slot, cardW)), Width: cardW);
             }
-            lines[r] = new RowElement(cells, Gap: SegCardGap);
+            // Row + the 6 px gap below it = one 42 px pitch (a VirtualList slot stretches its child to RowHeight).
+            pool[line] = new ColumnElement(new HudElement[]
+            {
+                new RowElement(cells, Gap: SegCardGap),
+                new SpacerElement(0f, SegCardGap),
+            }, Gap: 0.01f);
         }
-        return new ScrollElement(new ListElement(
-            () => Math.Min(lines.Length, (_selectedSegments.Length + cols - 1) / cols), lines) { Gap = SegCardGap },
-            SegGridH) { FixedHeight = true };
+        return new VirtualListElement(
+            Count:     () => (SegShown + cols - 1) / cols,
+            RowHeight: SegPitch, Pool: pool,
+            OnWindow:  i => _segRowOffset = i, Height: SegGridH)
+        {
+            FixedHeight = true,   // never squeezed by the fixed-height window
+            ResetScroll = () =>
+            {
+                if (ReferenceEquals(_segListRun, _selectedSegments)) return false;   // same run: keep the scroll
+                _segListRun = _selectedSegments;
+                return true;
+            },
+        };
     }
 
     // One card. The texts get a FIXED width (card − insets − dot) so the bubble is exactly cardW wide whatever the label
-    // (a Bubble hugs its content inside a Row).
-    private HudElement SegmentCard(int slot, float cardW)
+    // (a Bubble hugs its content inside a Row). `slot` = the card index the pooled cell shows now (it moves with the scroll).
+    private HudElement SegmentCard(Func<int> slot, float cardW)
     {
         const float inset = 8f, gap = 6f;
         float textW = cardW - 2f * inset - gap - DotSize;
         var hover = new HoverFlag();
-        bool Selected() => slot < _selectedSegments.Length && _selectedSegments[slot] == _historyIndex;
+        bool Selected() => slot() is var s && s < SegShown && _selectedSegments[s] == _historyIndex;
         ColorRgba Fill()
         {
             var f = Selected() ? Over(AccentColor() with { A = SelectedWashMix }, TileColor()) : TileColor();
@@ -102,9 +134,9 @@ public sealed partial class Plugin
                 new SpacerElement(inset - gap, SegCardH),   // height strut + (with the gap) the left inset
                 new ColumnElement(new HudElement[]
                 {
-                    new TextElement(() => _segTitles[slot], Color: () => TextColor(), Width: textW, NoWrap: true, FontSize: 12)
+                    new TextElement(() => SegAt(_segTitles, slot()), Color: () => TextColor(), Width: textW, NoWrap: true, FontSize: 12)
                         { Bold = true, Ellipsize = true },
-                    new TextElement(() => _segTimes[slot], Color: () => MutedColor(), Width: textW, NoWrap: true, FontSize: 11)
+                    new TextElement(() => SegAt(_segTimes, slot()), Color: () => MutedColor(), Width: textW, NoWrap: true, FontSize: 11)
                         { RichEmoji = true, Ellipsize = true },
                 }, Gap: 0.01f),
                 // Dot pinned to the top-right: a column of [6 px, dot, filler] the card's height.
@@ -112,11 +144,11 @@ public sealed partial class Plugin
                 {
                     new SpacerElement(0f, 6f),
                     SegmentDot(slot),
-                    new SpacerElement(0f, SegCardH - 6f - DotSize),
+                    new SpacerElement(0f, SegCardH - 6f - DotSize - 0.02f),   // − the two 0.01 gaps: exactly 36
                 }, Gap: 0.01f),
                 new SpacerElement(inset - gap, 1f),          // right inset
             }, Gap: gap),
-            OnClick: () => { if (slot < _selectedSegments.Length) SelectSession(_selectedSegments[slot]); })
+            OnClick: () => { if (slot() is var s && s < SegShown) SelectSession(_selectedSegments[s]); })
             { Bare = true, OnHover = over => hover.On = over })
         {
             FillColorFn = () => Fade(Fill()),
@@ -125,10 +157,14 @@ public sealed partial class Plugin
         };
     }
 
-    private HudElement SegmentDot(int slot) => new ConditionalElement(
-        () => _segPhases[slot] is UploadPhase.Done or UploadPhase.InFlight,
-        StatusDot(() => _segPhases[slot] == UploadPhase.Done ? SuccessColor() : CautionColor()),
+    private HudElement SegmentDot(Func<int> slot) => new ConditionalElement(
+        () => PhaseAt(slot()) is UploadPhase.Done or UploadPhase.InFlight,
+        StatusDot(() => PhaseAt(slot()) == UploadPhase.Done ? SuccessColor() : CautionColor()),
         HollowDot());
+
+    // Bounds-safe reads for a pooled cell: the last pool row can index past MaxSegmentChips (5 columns × 5 rows = 25 > 24).
+    private static string SegAt(string[] a, int s) => (uint)s < (uint)a.Length ? a[s] ?? "" : "";
+    private UploadPhase PhaseAt(int s) => (uint)s < (uint)_segPhases.Length ? _segPhases[s] : UploadPhase.Idle;
 
     /// <summary>"N · Boss kill" and "0:42 · 1m 12s" per card. The start is the offset from the run's first recorded
     /// combat start; the length is the segment's real elapsed span (<see cref="RealDurationMs"/>). Both read
