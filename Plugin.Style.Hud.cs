@@ -97,20 +97,31 @@ public sealed partial class Plugin
     }
 
     // ── empty state ─────────────────────────────────────────────────────────────────────────────────────────────────
-    // A RECESSED rounded box (black @28 % over the panel, r6) that fills the list area, so the meter keeps its size:
-    // bold title + an optional muted line, centred. Two vertical fillers centre the text (Conditional Fill =
-    // flexibleHeight, the Settings window's VerticalFill), and also make the bubble report a flexible height, so the
-    // list area's Fill stretches it. Its texts are catalog lookups (no per-refresh formatting).
-    private HudElement EmptyStateBox(Func<string> title, Func<string> line) => new BubbleElement(new ColumnElement(new HudElement[]
+    // ONE row-sized slot (owner 2026-11-17: "only the size of one player slot, more transparent"): the 48 px height and
+    // r6 of a list meter row (fw WindowBuilder.MeterRow MeterRowHeight / MeterRoundTileR), on one line — bold title, then
+    // the optional muted line after a "·", ellipsized when narrow (it sits in a weighted cell). The 0-width height strut
+    // pins the row at 48 whatever the text. The caller drops it at the top of the list area; the rest stays empty.
+    // The fill is the RECESSED family (black @28 % over the panel) at only EmptySlotAlpha of its old opacity, × window
+    // opacity, so the game shows through like the empty party slots. Texts are catalog lookups / a cached composite.
+    private const float EmptySlotH = 48f;
+    private const float EmptySlotAlpha = 0.4f;
+
+    private ColorRgba EmptySlotFill()
     {
-        VerticalFill(),
-        new TextElement(title, Color: () => TextColor(), Align: TextAlign.Center, NoWrap: true, FontSize: 13) { Bold = true },
-        new ConditionalElement(() => line().Length > 0,
-            new TextElement(line, Color: () => MutedColor(), Align: TextAlign.Center, NoWrap: true, FontSize: 12) { RichEmoji = true }),
-        VerticalFill(),
-    }, Gap: 4f))
+        var c = DisabledFill(PanelColor());
+        return Fade(c with { A = c.A * EmptySlotAlpha });
+    }
+
+    private HudElement EmptyStateSlot(Func<string> title, Func<string> line) => new BubbleElement(new RowElement(new HudElement[]
     {
-        FillColorFn = () => Fade(DisabledFill(PanelColor())), CornerRadius = 6f, PaddingX = 10f, PaddingY = 10f,
+        new SpacerElement(0f, EmptySlotH),
+        new TextElement(title, Color: () => TextColor(), NoWrap: true, FontSize: 13) { Bold = true },
+        new CellElement(new ConditionalElement(() => line().Length > 0,
+            new TextElement(line, Color: () => MutedColor(), NoWrap: true, FontSize: 12) { RichEmoji = true, Ellipsize = true }),
+            Weight: 1f),
+    }, Gap: 6f))
+    {
+        FillColorFn = () => EmptySlotFill(), CornerRadius = 6f, PaddingX = 12f, PaddingY = 0f,
     };
 
     // ── house popover shell ─────────────────────────────────────────────────────────────────────────────────────────

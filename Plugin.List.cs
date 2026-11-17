@@ -48,19 +48,30 @@ public sealed partial class Plugin
                 OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default))
                 { Style = MeterRowStyle.Rounded };
         }
-        // Empty → a recessed box that fills the list area (the meter keeps its size); else the scroll. Fill:true so
-        // both grow with the (resizable) window height.
+        // Empty → ONE row-sized slot at the top of the list area (EmptyStateSlot), else the rows. The slot sits in a scroll of
+        // the SAME height as the rows' scroll, so both branches have identical geometry — same top edge, same 9 px
+        // scrollbar inset on the right, same flexible height — and switching empty ↔ rows never moves or resizes anything.
+        // Fill:true so both grow with the (resizable) window height; below the slot the area is empty (transparent).
         // Prebuild (fw 2.30.0): the rows' branch is built in the background while the list is still empty (the window
         // pre-build's fill, or an open before combat), so the first combat tick doesn't build 20 meter rows in one frame.
         return new ConditionalElement(() => _listEmpty,
-            EmptyStateBox(() => _loc.T(_listEmptyCaptionKey), ListEmptyLine),
+            new ScrollElement(EmptyStateSlot(() => _loc.T(_listEmptyCaptionKey), ListEmptyLine), ListScrollHeight),
             new ScrollElement(new ListElement(() => _listRows.Count, slots) { Gap = MeterRowGap }, ListScrollHeight),
             Fill: true) { Prebuild = true, PrebuildName = "cm.listRows" };
     }
 
-    // Only "Waiting for combat" carries a second line ("The meter starts on the first hit.").
+    // Only "Waiting for combat" carries a second line, shown after the title as "· The meter starts on the first hit.".
+    // The composite is rebuilt only when the localized line changes (a language switch) — never per refresh.
+    private string? _emptyLineSrc;
+    private string _emptyLine = "";
+
     private string ListEmptyLine()
-        => ReferenceEquals(_listEmptyCaptionKey, EmptyWaitingKey) ? _loc.T("hud.empty.waitingLine") : "";
+    {
+        if (!ReferenceEquals(_listEmptyCaptionKey, EmptyWaitingKey)) return "";
+        var s = _loc.T("hud.empty.waitingLine");
+        if (!ReferenceEquals(s, _emptyLineSrc)) { _emptyLineSrc = s; _emptyLine = s.Length > 0 ? "· " + s : ""; }
+        return _emptyLine;
+    }
 
     private void RebuildListRows()
     {
