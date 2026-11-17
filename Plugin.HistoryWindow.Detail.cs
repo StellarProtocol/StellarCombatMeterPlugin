@@ -207,7 +207,8 @@ public sealed partial class Plugin
             new CellElement(BuildHistoryMetricTabs(), Weight: 1f),
             new TextElement(ChartHint, Color: () => MutedColor(), NoWrap: true),
         }, Gap: 6f),
-        BuildHistoryChart(),
+        // `nohistchart` diag switch (Plugin.Diag.cs): same height, no injected ChartGraphic.
+        CmDiag.NoHistChart ? new SpacerElement(1f, 150f) : BuildHistoryChart(),
     });
 
     // "Damage / sec · click a player to add their line" — composed once per metric / language.

@@ -59,7 +59,7 @@ public sealed partial class Plugin
               TitleProvider = () => _loc.T("launcher.settings.title"),
               // Five KeepAlive tabs ≈ a few hundred parts: build them in the background after login instead of in the
               // click that first opens the window (Plugin-Performance-Rules §5). Value lambdas are hidden-safe.
-              Prebuild = true,
+              Prebuild = !CmDiag.NoSettingsPrebuild,   // crash-bisect switch (Plugin.Diag.cs)
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World
                                 && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
             BuildSettingsWindowRoot(),
@@ -122,7 +122,7 @@ public sealed partial class Plugin
         {
             var tab = t;
             bodies.Add(new ConditionalElement(() => _settingsTabSel == tab, BuildSettingsTabBody(tab), Fill: true)
-                { Prebuild = true, KeepAlive = true, PrebuildName = "combatmeter.config." + tab.ToString().ToLowerInvariant() });
+                { Prebuild = !CmDiag.NoSettingsPrebuild, KeepAlive = true, PrebuildName = "combatmeter.config." + tab.ToString().ToLowerInvariant() });
         }
         return new RowElement(new HudElement[]
         {

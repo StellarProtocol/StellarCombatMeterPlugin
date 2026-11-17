@@ -170,7 +170,7 @@ public sealed partial class Plugin : IStellarPlugin
     {
         _services = services;
         _loc = services.Localization;   // i18n P1: plugin-scoped catalog façade (auto-discovers embedded Lang/*.json)
-        _services.Log.Info("[CombatMeter] plugin constructed");
+        _services.Log.Info("[CombatMeter] plugin constructed [diag] " + CmDiag.Summary);   // crash-bisect switches (Plugin.Diag.cs)
 
         _inspectIconPng  = BuildInspectMagnifierPng();   // procedural magnifier for the history Inspect button (main thread)
         _locationPinPng  = BuildLocationPinPng();        // flat-white location pin for the Marking header button
@@ -178,8 +178,8 @@ public sealed partial class Plugin : IStellarPlugin
         _megaphonePng    = BuildMegaphonePng();          // flat-white megaphone for the Convene header button
         _countdownPng    = BuildCountdownPng();          // flat-white stopwatch for the Countdown header button
         _settingsGearPng = LoadSettingsGearPng();        // embedded gear icon for the ⋯ popover's Settings card + launcher tile
-        _resetPng        = BuildResetPng();              // flat-white ↺ for the header Reset button (Plugin.HudIcons.cs)
-        _morePng         = BuildMorePng();               // flat-white ⋯ for the header More button
+        _resetPng        = CmDiag.NoNewIcons ? null : BuildResetPng(); // flat-white ↺ for the header Reset button (Plugin.HudIcons.cs)
+        _morePng         = CmDiag.NoNewIcons ? null : BuildMorePng();  // flat-white ⋯ for the header More button
         BuildEncounterIcons();                           // header Pause / Resume / Archive glyphs + divider (Plugin.HudIcons.Encounter.cs)
 
         _prefs = _services.Config.GetSection("combatmeter");

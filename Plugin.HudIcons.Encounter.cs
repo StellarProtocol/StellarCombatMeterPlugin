@@ -21,6 +21,7 @@ public sealed partial class Plugin
     // One call from the constructor (keeps Plugin.cs under the 500-LoC cap).
     private void BuildEncounterIcons()
     {
+        if (CmDiag.NoNewIcons) return;   // crash-bisect switch (Plugin.Diag.cs): the buttons draw blank
         _pausePng   = EncodeGlyphPng(PauseSdf);
         _resumePng  = EncodeGlyphPng(ResumeSdf);
         _archivePng = EncodeGlyphPng(ArchiveSdf);

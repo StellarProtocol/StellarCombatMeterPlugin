@@ -100,9 +100,14 @@ public sealed partial class Plugin
                 Category:    WindowCategory.Tools,
                 Style:       WindowPanelStyle.GlassMenu)
             { StartVisible = false, Closable = true, Draggable = true,
-              // ~40 pooled tiles + the chart: build it in the background instead of in the click that opens it
-              // (Plugin-Performance-Rules §5). Every value lambda is hidden-safe (the lists read 0 rows until shown).
-              Prebuild = true,
+              // NOT prebuilt (crash fix 2026-11-17). The LineChart's plot is the framework's ChartGraphic, an
+              // Il2CppInterop-INJECTED MaskableGraphic: the injector leaves the class's has_references = 0, so IL2CPP
+              // allocates it pointer-free and the GC never scans it — the UnityEvent Unity's serializer stores in its
+              // (base-ctor-less, null) m_OnCullStateChanged is reaped, and the next serializer walk (scene load
+              // UnloadUnusedAssets) runs UnityEventBase.DirtyPersistentCalls on freed memory → native crash ~1 s into
+              // the first world load. Prebuild made that graphic exist from the title screen on, every login; the old
+              // build only made it when History was opened. Restore with the `histprebuild` diag switch (Plugin.Diag.cs).
+              Prebuild = CmDiag.HistPrebuild,
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World
                                 && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
             BuildHistoryRoot(),
