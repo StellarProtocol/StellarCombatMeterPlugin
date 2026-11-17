@@ -54,9 +54,28 @@ public sealed partial class Plugin
         if (extraPerRow < 0f) extraPerRow = 0f;
         // No menu term any more: the old ▾ inline menu grew the HUD by 72 px; its contents now live in the ⋯ popover, so
         // the HUD height depends only on the party size and tile size (approved redesign §1).
-        // + the LEADER line (28 + the 6 px Column gap) while it is latched on: the window grows by exactly the line, so the
-        // group/rows container below keeps its height (Plugin.LeaderLine.cs).
-        return (IsRaid20View ? PartyFocusH : PartyFocus5H) + rows * extraPerRow + (_leaderLine ? LeaderLineH : 0f);
+        // + the RESERVED LEADER-line slot (28 + the 6 px Column gap), always — leader or not (Plugin.LeaderLine.cs), so the
+        // group/rows container below keeps its pre-line height and leadership never resizes the window.
+        // 5-player Small/Medium/Large = 368/428/488, 20-player = 646/766/886.
+        return (IsRaid20View ? PartyFocusH : PartyFocus5H) + rows * extraPerRow + LeaderLineH;
+    }
+
+    // First SETTLED Party tick of the session re-fits the height once: the framework restores the rect it saved last, which
+    // may predate the reserved slot (34 px short) or a tile-size change. Only after the settle gate below — a re-fit before
+    // it persisted the (20,20) mount placeholder (2026-11-17 top-left bug).
+    private bool _partyHeightSynced;
+
+    // ~10 Hz from RebuildSnapshots (Party view, geometry settled): ONE height-only SetRect when the first sync is owed or
+    // the party size switched 5↔20. Held while the user is in layout edit-mode, so a resize never lands under a drag; the
+    // owed re-fit applies on the first tick after they leave it.
+    private void SyncPartyFocusHeight()
+    {
+        bool is20 = IsRaid20View;
+        if (_partyHeightSynced && _lastViewWas20 == is20) return;
+        if (_services.Windows.IsLayoutEditing) return;
+        _partyHeightSynced = true;
+        _lastViewWas20 = is20;
+        RefreshPartyFocusHeight();
     }
 
     // Re-apply the party-focus window height in place (keep current pos + width) when the party size changes.

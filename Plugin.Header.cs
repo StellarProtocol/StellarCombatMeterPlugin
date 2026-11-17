@@ -49,9 +49,10 @@ public sealed partial class Plugin
         // framework toast cannot do). Sits above the header so it's the first thing seen.
         new ConditionalElement(() => ShowCompatBanner, BuildCompatBanner()),
         BuildHeaderBar(),
-        // Header line 2, Party-focus leader only (Plugin.LeaderLine.cs). No Else → hidden it leaves the layout entirely, so
-        // the window's +34 (LeaderLineH) is exactly this line + one Column gap and the party body keeps its height.
-        new ConditionalElement(() => _leaderLine, BuildLeaderLine()),
+        // Header line 2, RESERVED in Party view (Plugin.LeaderLine.cs): the LEADER line when you lead, else a blank of the
+        // same 28 px. The window's +34 (LeaderLineH) is exactly this slot + one Column gap, so the party body keeps its
+        // height. List view: no Else → the slot leaves the layout entirely (no stray gap), as before.
+        new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildLeaderLineSlot()),
         new ConditionalElement(() => _viewMode == ViewMode.List, BuildListBody(), Fill: true),
         new ConditionalElement(() => _viewMode == ViewMode.PartyFocus, BuildPartyFocusBody()),
     }, Gap: 6f);
@@ -126,7 +127,7 @@ public sealed partial class Plugin
     {
         CaptureModeGeometry();   // remember the view we're leaving
         _viewMode = _viewMode == ViewMode.List ? ViewMode.PartyFocus : ViewMode.List;
-        LatchLeaderLineForMode();   // the LEADER line follows the view, before ApplyModeSize sizes from it
+        SyncLeaderLine();        // the reserved slot's content is current on the first Party frame (height doesn't depend on it)
         PersistPrefs();
         ApplyModeSize();         // restore the view we're entering
     }

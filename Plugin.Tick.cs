@@ -63,16 +63,15 @@ public sealed partial class Plugin
             if (MainGeometrySettled())
             {
                 CaptureModeGeometry();
-                if (_viewMode == ViewMode.PartyFocus)
-                {
-                    // Re-fit the window height (ONE SetRect) when the party size switches 5↔20 or the LEADER line latch
-                    // flips (Plugin.LeaderLine.cs — the line and the height change on this same tick).
-                    bool refit = SyncLeaderLine();
-                    if (_lastViewWas20 != IsRaid20View) { _lastViewWas20 = IsRaid20View; refit = true; }
-                    if (refit) RefreshPartyFocusHeight();
-                }
+                // Re-fit the window height (ONE SetRect) on the first settled tick / a 5↔20 switch. NOT on leadership —
+                // the LEADER line's slot is always reserved (Plugin.LeaderLine.cs).
+                if (_viewMode == ViewMode.PartyFocus) SyncPartyFocusHeight();
             }
-            if (_viewMode == ViewMode.PartyFocus) RebuildPartyFocusRows();
+            if (_viewMode == ViewMode.PartyFocus)
+            {
+                SyncLeaderLine();   // content of the reserved slot only (pills vs blank), no geometry → no settle gate needed
+                RebuildPartyFocusRows();
+            }
             else RebuildListRows();
         }
         else ResetGeometrySettle();

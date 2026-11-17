@@ -9,19 +9,20 @@ namespace Stellar.CombatMeter;
 // (drawn icon + text): Mark · Ready check · Convene · Countdown. During the ready-check cooldown that pill is RECESSED and
 // reads "Ready check 18s". It replaced the four round icon buttons on line 1, which squeezed the status to "● 0:00 i…".
 //
-// Height ("grow but beware the container height"): while the line shows, the window is exactly LeaderLineH (28 line + the
-// root Column's 6 px gap) taller, top edge kept, so the group/rows container below keeps EXACTLY its height in both states
-// (PartyFocusHeight adds the term; the line's Conditional has no Else, so when hidden it leaves the layout entirely — no
-// stray gap). The visible state is LATCHED in _leaderLine at the ~10 Hz snapshot tick, and both the line's Conditional
-// and PartyFocusHeight read the latch, so the line and the SetRect flip together (MarkDirty applies the Conditional on the
-// next window tick instead of the next ~10 Hz poll) — the line can never show in a window that hasn't grown yet.
+// Height — RESERVED, not grown (user 2026-11-17 "fixed", replacing the first "grow by 34 px while leader" build): in Party
+// view the line's slot (28 px + the root Column's 6 px gap = LeaderLineH) is ALWAYS in the layout and ALWAYS in
+// PartyFocusHeight. Leader → caption + pills; anyone else (member / solo / no party) → a blank 28 px spacer of the same
+// height (nothing drawn, no Selectable, so no input is blocked). Leadership changes therefore never resize the window
+// (house rule: windows never grow) — only the content inside the slot swaps. The grow build also needed a one-shot re-fit
+// whose too-early SetRect persisted the (20,20) mount placeholder (the 2026-11-17 top-left bug, Plugin.ModeGeometry.cs).
+// The group/rows container below keeps EXACTLY the height it had before the line existed: the window is +34, the slot 34.
 //
-// Performance (Plugin-Performance-Rules §7): built once; the predicates are field reads, the labels catalog lookups or
-// per-language caches (the cooldown "Ready check 18s" strings are formatted once per language), the fills struct maths.
-// The window is only resized when the latch flips (leadership changes are rare), never per poll.
+// Performance (Plugin-Performance-Rules §7): built once; the predicates are field reads (_leaderLine is latched at the
+// ~10 Hz tick, not read off the party snapshot per poll), the labels catalog lookups or per-language caches (the cooldown
+// "Ready check 18s" strings are formatted once per language), the fills struct maths. No SetRect anywhere on this path.
 public sealed partial class Plugin
 {
-    private const float LeaderLineH = HudControlH + 6f;   // the line + the root Column gap = the window's growth (34)
+    private const float LeaderLineH = HudControlH + 6f;   // the reserved slot + the root Column gap (34), always in Party view
 
     // Pill geometry: 8 | 16 icon | 5 | label (fixed) | 8. Each label width = the longest translation in ANY shipped locale
     // (and, for Ready check, its cooldown form "Ready check 25s" / th "เช็กความพร้อม 25 วิ"), so a language switch or
@@ -30,36 +31,22 @@ public sealed partial class Plugin
     private const float LeaderPillPad = 8f, LeaderPillIconGap = 5f;
     private const float LeaderMarkW = 40f, LeaderReadyW = 112f, LeaderConveneW = 68f, LeaderCountdownW = 88f;
 
-    private bool _leaderLine;         // latched "line shown" (see header); read by the Conditional + PartyFocusHeight
-    private bool _leaderLineSynced;   // first SETTLED Party-focus tick re-fits once: the framework restores the rect it saved
-                                      // last, which may have been taken in the other state (34 px off). Only after the
-                                      // settle gate (Plugin.ModeGeometry.cs) — an earlier refit persisted the (20,20) mount
-                                      // placeholder and parked the meter in the top-left corner (2026-11-17)
+    private bool _leaderLine;   // latched "you lead a party" — picks the slot's content (pills vs blank); never the height
 
-    // The old header gate (Party-focus + in a party + leader), evaluated only at the ~10 Hz tick / on a mode switch.
-    private bool WantLeaderLine => _viewMode == ViewMode.PartyFocus
-                                   && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader;
-
-    // ~10 Hz from RebuildSnapshots (Party-focus, window shown). True when the latch flipped (or the first sync is owed) and
-    // the caller must re-fit the height. Held while the user is in layout edit-mode, so a resize never lands under a drag;
-    // the change applies on the first tick after they leave it (line + height together, as always).
-    private bool SyncLeaderLine()
+    // ~10 Hz from RebuildSnapshots (Party view, window shown) and on a mode switch. Content-only: a flip just swaps the
+    // slot's Conditional branch (MarkDirty applies it on the next window tick instead of the next ~10 Hz poll).
+    private void SyncLeaderLine()
     {
-        bool want = WantLeaderLine;
-        if (want == _leaderLine && _leaderLineSynced) return false;
-        if (_services.Windows.IsLayoutEditing) return false;
-        _leaderLineSynced = true;
-        if (want != _leaderLine) { _leaderLine = want; _mainWindow.MarkDirty(); }
-        return true;
-    }
-
-    // Mode switch (ToggleViewMode): re-latch for the view being entered BEFORE ApplyModeSize sizes the window from it.
-    private void LatchLeaderLineForMode()
-    {
-        _leaderLine = WantLeaderLine;
-        _leaderLineSynced = true;
+        bool want = _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader;
+        if (want == _leaderLine) return;
+        _leaderLine = want;
         _mainWindow.MarkDirty();
     }
+
+    // The root Column's Party-view slot (Plugin.Header.cs): the LEADER line, or a same-height blank. The 0-wide spacer pins
+    // the blank at HudControlH exactly like the line's own pinning spacer, so the slot never changes height.
+    private HudElement BuildLeaderLineSlot()
+        => new ConditionalElement(() => _leaderLine, BuildLeaderLine(), new SpacerElement(0f, HudControlH));
 
     private HudElement BuildLeaderLine() => new RowElement(new HudElement[]
     {
