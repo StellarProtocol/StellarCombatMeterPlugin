@@ -62,7 +62,7 @@ public sealed partial class Plugin
     });
 
     private readonly FmtCache _runsSavedFmt = new();
-    private string HistoryCardStatus() => _runsSavedFmt.Get(_loc.T("hud.more.runsSaved"), _history.Count);
+    private string HistoryCardStatus() => _runsSavedFmt.Get(_loc.T(PluralKey(_history.Count, "hud.more.runsSavedOne", "hud.more.runsSaved")), _history.Count);
 
     // ── building blocks ─────────────────────────────────────────────────────────────────────────────────────────────
     // A 56 × 24 choice chip with a centred label (the PARTY SIZE "5" / "20"): ChoiceChip hugs its label, which would make

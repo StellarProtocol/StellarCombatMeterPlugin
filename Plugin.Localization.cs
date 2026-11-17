@@ -36,6 +36,12 @@ public sealed partial class Plugin
         _chartSourcesVersion++;
     }
 
+    // Singular/plural key pick for a count string ("1 player" vs "2 players"). Both keys are literals → no allocation,
+    // and a FmtCache keyed on the format reference stays hit. Locales without plural forms (ja/ko/th/id/fil) carry the
+    // same text under both keys; only en actually differs. Every "<key>One" value keeps the {0} slot so call sites format
+    // both the same way.
+    private static string PluralKey(int n, string one, string other) => n == 1 ? one : other;
+
     // Framework-sanctioned Remove()+Register() rebuild that preserves the window's rect + visibility
     // (mirrors RebuildHistoryWindow). Used to re-localize baked window titles on a language change.
     private static void RebuildWindow(ref IWindowControl window, Func<IWindowControl> register)

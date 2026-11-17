@@ -47,7 +47,7 @@ public sealed partial class Plugin
         _hudStatusText = kind switch
         {
             HudStatusKind.Paused => _loc.TFormat("hud.status.paused", Clock(secs)),
-            HudStatusKind.Raid   => _loc.TFormat("hud.status.players", players),
+            HudStatusKind.Raid   => _loc.TFormat(PluralKey(players, "hud.status.playersOne", "hud.status.players"), players),
             HudStatusKind.Combat => players > 1 ? _loc.TFormat("hud.status.combat", Clock(secs), players)
                                                 : _loc.TFormat("hud.status.combatSolo", Clock(secs)),
             _                    => "",

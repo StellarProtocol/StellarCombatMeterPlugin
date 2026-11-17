@@ -48,7 +48,7 @@ public sealed partial class Plugin
             : DateTimeOffset.FromUnixTimeMilliseconds(h.ArchivedAtMs).LocalDateTime
                 .ToString(_loc.T("history.date.format"), CultureInfo.InvariantCulture);
         int segs = Math.Max(1, _selectedSegments.Length);
-        _runMeta = when + " · " + _loc.TFormat("history.players", h.MemberCount) + " · "
+        _runMeta = when + " · " + _loc.TFormat(PluralKey(h.MemberCount, "history.playersOne", "history.players"), h.MemberCount) + " · "
                  + (segs == 1 ? _loc.T("history.run.segmentOne") : _loc.TFormat("history.run.segments", segs));
         RebuildSegmentTexts();
         RefreshRunUploadState(force: true);

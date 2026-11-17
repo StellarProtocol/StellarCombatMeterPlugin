@@ -166,7 +166,10 @@ public sealed partial class Plugin
         _tipName = EntityLabel.Resolve(id, _services.CombatSnapshot.LocalEntityId,
             _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members);
         _tipCrest = LoadCrest(id, out _tipCrestUv);
-        _tipSubtitle = _loc.TFormat("hud.tip.subtitle", debuffs, buffs);   // once per open
+        // Each count is its own singular/plural piece ("1 debuff · 3 buffs"); the subtitle key just joins them.
+        _tipSubtitle = _loc.TFormat("hud.tip.subtitle",                     // once per open
+            _loc.TFormat(PluralKey(debuffs, "hud.tip.debuffsOne", "hud.tip.debuffs"), debuffs),
+            _loc.TFormat(PluralKey(buffs, "hud.tip.buffsOne", "hud.tip.buffs"), buffs));
         ShowDebuffTipAtCursor();
     }
 

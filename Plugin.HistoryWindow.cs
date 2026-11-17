@@ -135,7 +135,8 @@ public sealed partial class Plugin
     private HudElement BuildHistoryRoot() => new ConfirmHostElement(new ColumnElement(new HudElement[]
     {
         ToolHeader(HistoryIconTile(), () => _loc.T("history.window.title"),
-            new TextElement(() => _histStatusFmt.Get(_loc.T("history.status"), _historyRunCount, HistoryRetention),
+            new TextElement(() => _histStatusFmt.Get(
+                    _loc.T(PluralKey(_historyRunCount, "history.statusOne", "history.status")), _historyRunCount, HistoryRetention),
                 Color: () => MutedColor(), NoWrap: true) { Ellipsize = true }),
         new RowElement(new HudElement[]
         {

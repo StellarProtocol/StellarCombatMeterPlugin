@@ -173,7 +173,7 @@ public sealed partial class Plugin
             if (state.Metric == Metric.Taken) RebuildIncomingRows(src, durationMs);
             else                              RebuildOutgoingSkillRows(src, state.Metric, durationMs);
         }
-        _sbCount = _loc.TFormat("skill.count", _skillRows.Count);
+        _sbCount = _loc.TFormat(PluralKey(_skillRows.Count, "skill.countOne", "skill.count"), _skillRows.Count);
     }
 
     private void RebuildSkillHeader(SkillBreakdownState sb)
@@ -192,7 +192,7 @@ public sealed partial class Plugin
         var when = s.ArchivedAtMs <= 0 ? "—"
             : DateTimeOffset.FromUnixTimeMilliseconds(s.ArchivedAtMs).LocalDateTime
                 .ToString(_loc.T("history.date.format"), CultureInfo.InvariantCulture);
-        _sbMeta = when + " · " + FormatSessionDurationShort(s.CombatDurationMs) + " · " + _loc.TFormat("history.players", s.MemberCount);
+        _sbMeta = when + " · " + FormatSessionDurationShort(s.CombatDurationMs) + " · " + _loc.TFormat(PluralKey(s.MemberCount, "history.playersOne", "history.players"), s.MemberCount);
         _sbGauge = ClassPalette.TryGet(sb.ProfId, out var cc) && ActiveToggles().BarColor == BarColorMode.Class ? cc : GaugeColorFor(sb.Source);
     }
 

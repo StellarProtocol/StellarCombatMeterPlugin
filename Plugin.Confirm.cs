@@ -35,7 +35,7 @@ public sealed partial class Plugin
     private void AskClearAll()
     {
         HistoryConfirm.Show(new ConfirmRequest(
-            _loc.TFormat("history.clearAll.ask", _historyRunCount),
+            _loc.TFormat(PluralKey(_historyRunCount, "history.clearAll.askOne", "history.clearAll.ask"), _historyRunCount),
             _loc.T("history.clearAll.message"),
             ClearAllHistory)
         {
@@ -86,7 +86,7 @@ public sealed partial class Plugin
     private void AskUploadAll()
     {
         HistoryConfirm.Show(new ConfirmRequest(
-            _loc.TFormat("history.uploadAll.ask", _selectedSegments.Length),
+            _loc.TFormat(PluralKey(_selectedSegments.Length, "history.uploadAll.askOne", "history.uploadAll.ask"), _selectedSegments.Length),
             _loc.T("history.uploadAll.message"),
             QueueRunUpload)
         {
@@ -103,8 +103,11 @@ public sealed partial class Plugin
     {
         bool buffs = _dcTab == 1;
         string kind = buffs ? "buffs" : "debuffs";
+        int ticked = DcTickedCount();
+        string askKey = buffs ? PluralKey(ticked, "cfg.effects.confirm.buffsOne", "cfg.effects.confirm.buffs")
+                              : PluralKey(ticked, "cfg.effects.confirm.debuffsOne", "cfg.effects.confirm.debuffs");
         SettingsConfirm.Show(new ConfirmRequest(
-            _loc.TFormat("cfg.effects.confirm." + kind, DcTickedCount()),
+            _loc.TFormat(askKey, ticked),
             _loc.T((DcExcludeMode ? "cfg.effects.untick.msgAll." : "cfg.effects.untick.msgOnly.") + kind),
             ConfirmUntickAll)
         {
