@@ -10,15 +10,15 @@ namespace Stellar.CombatMeter;
 /// <c>_scratch\prototypes\combatmeter-redesign-APPROVED.md</c> §4):
 /// <code>
 ///   ToolHeader  [history icon tile] Combat History / "N runs saved · keeps M"
-///   Row[ RUNS panel 280 px (search · 40 px run tiles · Danger "Clear all" → inline confirm)
+///   Row[ RUNS panel 280 px (search · 40 px run tiles · Danger "Clear all" → modal confirm)
 ///      | run panel (status + upload pills + icon buttons, SEGMENTS cards) · chart panel (DPS/HPS/Taken + LineChart) · player table ]
 /// </code>
 /// The chart / table panels live in Plugin.HistoryWindow.Detail.cs (+ .Table.cs), the run panel in .RunPanel.cs, the
 /// SEGMENTS cards in .Segments.cs; the run grouping + the throttled snapshot
 /// rebuild in Plugin.HistoryWindow.Runs.cs.
 ///
-/// <para>Content-fit height, fixed width: every block has a fixed height (lists are fixed viewports, the confirm swaps
-/// keep their size), so the window never grows or shrinks with the data (SDL rule 14). It is no longer drag-resizable:
+/// <para>Content-fit height, fixed width: every block has a fixed height (lists are fixed viewports; confirms are modal
+/// cards over the content, Plugin.Confirm.cs), so the window never grows or shrinks with the data (SDL rule 14). It is no longer drag-resizable:
 /// a rounded SectionPanel (BubbleElement) hugs its content and can't hand slack height to the table, so a taller
 /// window would only add an empty strip at the bottom.</para>
 /// </summary>
@@ -40,20 +40,14 @@ public sealed partial class Plugin
     private const float HistRunTileH = 40f;
     private const float HistRunPitch = HistRunTileH + ListRowGap;
     private const int   HistRunRows  = 12;                             // visible run tiles
-    private const int   HistRunRowsConfirming = HistRunRows - 4;       // while the Clear-all confirm takes the bottom
     private const int   HistRunPool  = HistRunRows + 2;
 
     private static float HistRunViewport(int rows) => rows * HistRunPitch - ListRowGap;
-    // The list + footer block below the search box: list viewport + gap + the 28 px "Clear all" row. The confirm variant
-    // trades four run rows for the confirm box, inside the same height.
+    // The list + footer block below the search box: list viewport + gap + the 28 px "Clear all" row.
     private static float HistRunsBlockH => HistRunViewport(HistRunRows) + PanelGap + PillHeight;
 
     private int _historyIndex = -1;   // -1 = no session selected (original history-list index)
     private EncounterHistoryEntry? _selectedSession;
-
-    // Clear all: Danger pill → an inline confirm panel ("Delete all N runs?" + consequence + Danger/Neutral). Any other
-    // interaction (selecting a run) cancels it.
-    private bool _clearAllConfirm;
 
     private readonly List<SessionEntry> _historyView = new(MaxSessionSlots);
     private readonly List<SourceRow> _sessionRows = new(MaxSourceSlots);
@@ -130,7 +124,8 @@ public sealed partial class Plugin
     private readonly FmtCache _histStatusFmt = new();
     private int _historyRunCount;   // grouped runs (unfiltered), set by the snapshot rebuild
 
-    private HudElement BuildHistoryRoot() => new ColumnElement(new HudElement[]
+    // The whole content sits in the window's ConfirmHostElement: an open confirm (Plugin.Confirm.cs) scrims all of it.
+    private HudElement BuildHistoryRoot() => new ConfirmHostElement(new ColumnElement(new HudElement[]
     {
         ToolHeader(HistoryIconTile(), () => _loc.T("history.window.title"),
             new TextElement(() => _histStatusFmt.Get(_loc.T("history.status"), _historyRunCount, HistoryRetention),
@@ -140,7 +135,7 @@ public sealed partial class Plugin
             new CellElement(BuildRunsPanel(), Width: HistRunsW),
             new CellElement(BuildHistoryDetail(), Width: HistDetailW),
         }, Gap: HistGap),
-    }, Gap: HistGap);
+    }, Gap: HistGap), HistoryConfirm) { ConfirmLabelWidth = HistoryConfirmLabelW };
 
     // 40 px accent tile + the white history glyph (Resources/history.png, the launcher icon) tinted with the solid-fill
     // label colour — live with the theme like MeterIconTile. Live: the PNG is loaded by RegisterLauncher, which runs after
@@ -157,7 +152,7 @@ public sealed partial class Plugin
     }, Width: ToolIconSize);
 
     // A block pinned to (at least) `height`, its children top-aligned: Row[height strut, Column[children…, filler]].
-    // Two variants swapped by a Conditional both use it, so the swap never changes the window height.
+    // Variants swapped by a Conditional all use it, so the swap never changes the window height.
     private static HudElement FixedBox(float height, params HudElement[] children)
     {
         var col = new List<HudElement>(children.Length + 1);
@@ -183,16 +178,13 @@ public sealed partial class Plugin
         }, Gap: 6f),
         new ConditionalElement(() => _history.Count == 0,
             FixedBox(HistRunsBlockH, MutedLine(() => _loc.T("history.empty.noEncounters"))),
-            new ConditionalElement(() => _clearAllConfirm,
-                FixedBox(HistRunsBlockH, RunList(HistRunRowsConfirming), ClearAllConfirmBox()),
-                FixedBox(HistRunsBlockH, RunList(HistRunRows), new RowElement(new HudElement[]
-                {
-                    new SpacerElement(0f),   // flexible: the pill sits at the right edge
-                    DangerButton(() => _loc.T("history.clearAll"), () => _clearAllConfirm = true,
-                        EstimateBoldLabelW(_loc.T("history.clearAll"), 13)),
-                }, Gap: 0.01f)))));
+            FixedBox(HistRunsBlockH, RunList(HistRunRows), new RowElement(new HudElement[]
+            {
+                new SpacerElement(0f),   // flexible: the pill sits at the right edge
+                DangerButton(() => _loc.T("history.clearAll"), AskClearAll,
+                    EstimateBoldLabelW(_loc.T("history.clearAll"), 13)),
+            }, Gap: 0.01f))));
 
-    // Each variant gets its OWN pool (a pooled element can live in one place only); only one is ever shown.
     private HudElement RunList(int rows)
     {
         var pool = new HudElement[Math.Min(HistRunPool, rows + 2)];
@@ -249,38 +241,9 @@ public sealed partial class Plugin
         return hovered ? HoverFill(fill) : fill;
     }
 
-    // Inline confirm (SDL "destructive actions confirm"): bold question + muted consequence + the Danger/Neutral pair, on
-    // a faint red wash. Lives inside the fixed list block, so it never changes the window height. The pair is STACKED
-    // (full-width pills): side by side each pill got ~60 px of label in the old 220 px column (~90 px now) — too narrow for
-    // "キャンセル" / "Kanselahin".
-    private readonly FmtCache _clearAllAskFmt = new();
-    // 280 − 2 × panel padding − 2 × confirm-box padding, minus the pill's own padding.
-    private const float ConfirmPairLabelW = HistRunsW - 4f * PanelPadX - 2f * PillPadX;
-
-    private HudElement ClearAllConfirmBox() => new BubbleElement(new ColumnElement(new HudElement[]
-    {
-        new TextElement(() => _clearAllAskFmt.Get(_loc.T("history.clearAll.ask"), _historyRunCount),
-            Color: () => TextColor(), FontSize: 13) { Bold = true },
-        new TextElement(() => _loc.T("history.clearAll.consequence"), Color: () => MutedColor()),
-        DangerButton(() => _loc.T("history.delete.confirm"), ConfirmClearAll, ConfirmPairLabelW),
-        NeutralButton(() => _loc.T("cfg.cancel"), () => _clearAllConfirm = false, ConfirmPairLabelW),
-    }, Gap: PanelGap))
-    {
-        FillColorFn = () => Fade(Over(DangerColor() with { A = 0.10f }, PanelColor())),
-        CornerRadius = TileRadius, PaddingX = PanelPadX, PaddingY = PanelPadY,
-    };
-
-    private void ConfirmClearAll()
-    {
-        _clearAllConfirm = false;
-        ClearAllHistory();
-    }
-
     // ── selection ─────────────────────────────────────────────────────────────────────────────────────────────────
     private void SelectSession(int historyIndex)
     {
-        _clearAllConfirm = false;   // any other interaction cancels the pending confirms
-        _deleteRunConfirm = false;
         _historyIndex = historyIndex;
         _selectedSession = historyIndex >= 0 && historyIndex < _history.Count ? _history[historyIndex] : null;
         // The run's segments NOW (the snapshot tick would only catch up ~100 ms later, showing the old run's cards).

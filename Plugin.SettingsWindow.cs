@@ -124,7 +124,9 @@ public sealed partial class Plugin
             bodies.Add(new ConditionalElement(() => _settingsTabSel == tab, BuildSettingsTabBody(tab), Fill: true)
                 { Prebuild = !CmDiag.NoSettingsPrebuild, KeepAlive = true, PrebuildName = "combatmeter.config." + tab.ToString().ToLowerInvariant() });
         }
-        return new RowElement(new HudElement[]
+        // The whole content sits in the window's ConfirmHostElement: an open confirm (Plugin.Confirm.cs, e.g. Effects
+        // "Untick all") scrims all of it. The host lays its content out exactly as without it (fixed height kept).
+        return new ConfirmHostElement(new RowElement(new HudElement[]
         {
             new SpacerElement(1f, SettingsBodyH),
             new CellElement(new ColumnElement(new HudElement[]
@@ -137,7 +139,7 @@ public sealed partial class Plugin
                 }, () => (int)_settingsTabSel, i => SelectSettingsTab((SettingsTab)i)),
                 new ColumnElement(bodies, Gap: 0.01f),
             }, Gap: SettingsGap), Weight: 1f),
-        }, Gap: 0.01f);
+        }, Gap: 0.01f), SettingsConfirm) { ConfirmLabelWidth = SettingsConfirmLabelW };
     }
 
     private HudElement BuildSettingsTabBody(SettingsTab tab) => tab switch

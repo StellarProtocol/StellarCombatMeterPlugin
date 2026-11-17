@@ -8,7 +8,7 @@ namespace Stellar.CombatMeter;
 // debuffs, Max shown — per view, the view picked on the Look tab's EDITING strip), then the pick-list panel: kind chips
 // Debuffs (red) / Buffs (green) + "shown / total" hint; mode chips "All except ticked" / "Only ticked"; Unnamed on/off;
 // search + round ✕; a 10-row VirtualList of 26 px tiles (16 px tick box, 20 px icon, name, muted ×N); footer feedback +
-// Caution "Untick all" with an inline confirm. The list is the CooldownBar picker (Plugin.Settings.Rows.cs /
+// Caution "Untick all" with a modal confirm (Plugin.Confirm.cs). The list is the CooldownBar picker (Plugin.Settings.Rows.cs /
 // .Feedback.cs) recipe: a click flashes the row green with "Hidden" / "Shown" for ~1 s (keyed by kind + the group's
 // representative id + time, so scrolling / re-filtering keeps it on the right row) and the footer says
 // "✓ Hidden “X” · N hidden" for ~3 s. Rows never re-sort under the cursor.
@@ -23,7 +23,6 @@ public sealed partial class Plugin
     private const float EffectsIconSize   = 20f;
     private const float EffectsFlashDurS  = 1.0f;
     private const float EffectsNoteDurS   = 3.0f;
-    private const float EffectsConfirmDurS = 4.0f;
     private const float FlashWashAlpha    = 0.26f;
     private static readonly ColorRgba DebuffKindColor = Rgb(0xff5959);   // the meter's debuff tile ring
     private static readonly ColorRgba BuffKindColor   = Rgb(0x59ff80);   // the meter's buff tile ring
@@ -87,8 +86,8 @@ public sealed partial class Plugin
             new RowElement(new HudElement[]
             {
                 new SpacerElement(0f, CaptionHeight),
-                ChoiceChip(() => _loc.T("debuffcfg.tab.debuffs"), () => _dcTab == 0, () => SetEffectsKind(0), color: () => DebuffKindColor),
-                ChoiceChip(() => _loc.T("debuffcfg.tab.buffs"),   () => _dcTab == 1, () => SetEffectsKind(1), color: () => BuffKindColor),
+                ChoiceChip(() => _loc.T("debuffcfg.tab.debuffs"), () => _dcTab == 0, () => SetDebuffConfigTab(0), color: () => DebuffKindColor),
+                ChoiceChip(() => _loc.T("debuffcfg.tab.buffs"),   () => _dcTab == 1, () => SetDebuffConfigTab(1), color: () => BuffKindColor),
                 new SpacerElement(0f),
                 new TextElement(() => _effCountFmt.Get("{0} / {1}", _dcFiltCount, _dcTab == 1 ? _dcBuffTotal : _dcDebuffTotal),
                     Color: () => MutedColor(), NoWrap: true),
@@ -96,8 +95,8 @@ public sealed partial class Plugin
             new RowElement(new HudElement[]
             {
                 new SpacerElement(0f, SettingRowH),
-                ChoiceChip(() => _loc.T("cfg.effects.modeAll"),  () => DcExcludeMode,  () => SetEffectsMode(DebuffTrackMode.ShowAllExceptSelected)),
-                ChoiceChip(() => _loc.T("cfg.effects.modeOnly"), () => !DcExcludeMode, () => SetEffectsMode(DebuffTrackMode.ShowOnlySelected)),
+                ChoiceChip(() => _loc.T("cfg.effects.modeAll"),  () => DcExcludeMode,  () => SetDebuffMode(DebuffTrackMode.ShowAllExceptSelected)),
+                ChoiceChip(() => _loc.T("cfg.effects.modeOnly"), () => !DcExcludeMode, () => SetDebuffMode(DebuffTrackMode.ShowOnlySelected)),
                 new SpacerElement(0f),
                 HelpDot("effects.mode", "cfg.effects.list", "cfg.effects.mode", "help.effects.mode"),
             }, Gap: 6f),
@@ -122,9 +121,6 @@ public sealed partial class Plugin
     }
 
     private string EffectsSearchPlaceholder() => _loc.T(_dcTab == 1 ? "cfg.effects.searchBuffs" : "cfg.effects.searchDebuffs");
-
-    private void SetEffectsKind(int tab) { _dcConfirmAt = -1.0; SetDebuffConfigTab(tab); }
-    private void SetEffectsMode(DebuffTrackMode mode) { _dcConfirmAt = -1.0; SetDebuffMode(mode); }
 
     // ── one row ───────────────────────────────────────────────────────────────────────────────────────────────────
     private HudElement EffectRow(int slot) => new BubbleElement(new SelectableElement(
@@ -233,7 +229,6 @@ public sealed partial class Plugin
     private bool   _dcFlashHidden;                         // the click hid the effect (else showed it)
     private string _dcNote = "";                           // footer note, composed once per click
     private double _dcNoteAt = double.NegativeInfinity;
-    private double _dcConfirmAt = -1.0;                    // ≥ 0 while the inline "Untick all" confirm is showing
 
     private void ToggleEffectSlot(int slot)
     {
@@ -248,7 +243,6 @@ public sealed partial class Plugin
         _dcFlashHidden = DcExcludeMode == on;   // "All except": ticking hides; "Only": ticking shows
         _dcNote = _loc.TFormat(_dcFlashHidden ? "cfg.effects.didHide" : "cfg.effects.didShow", name) + " · " + DcCountText();
         _dcNoteAt = now;
-        _dcConfirmAt = -1.0;      // any other action dismisses a pending confirm
     }
 
     private bool DcSlotFlashing(int slot)
@@ -287,37 +281,21 @@ public sealed partial class Plugin
         => _dcCountFmt.Get(_loc.T(DcExcludeMode ? "cfg.effects.countHidden" : "cfg.effects.countShown"), DcTickedCount());
 
     private bool DcNoteShowing() => _services.Framework.TimeNow - _dcNoteAt < EffectsNoteDurS;
-    private bool DcConfirming() => _dcConfirmAt >= 0.0 && _services.Framework.TimeNow - _dcConfirmAt < EffectsConfirmDurS;
 
-    // ── footer: feedback + Untick all (inline confirm, same 28 px height so nothing moves) ───────────────────────
+    // ── footer: feedback + Untick all (the Caution modal confirm is Plugin.Confirm.cs AskUntickAll) ─────────────
     private const float UntickLabelW = 96f;   // longest "Untick all" in any locale (id "Hapus centang") + headroom
-    private const float CancelLabelW = 72f;   // fil "Kanselahin" ≈ 69
-    private readonly FmtCache _dcConfirmFmt = new();
 
-    private HudElement EffectsFooter() => new ConditionalElement(DcConfirming,
-        new RowElement(new HudElement[]
-        {
-            new SpacerElement(0f, PillHeight),
-            new CellElement(new TextElement(() => _dcConfirmFmt.Get(_loc.T(_dcTab == 1 ? "cfg.effects.confirm.buffs"
-                    : "cfg.effects.confirm.debuffs"), DcTickedCount()),
-                Color: () => TextColor(), NoWrap: true, FontSize: 13) { Bold = true, Ellipsize = true }, Weight: 1f),
-            CautionButton(() => _loc.T("cfg.effects.untickAll"), ConfirmUntickAll, UntickLabelW),
-            NeutralButton(() => _loc.T("cfg.cancel"), () => _dcConfirmAt = -1.0, CancelLabelW),
-        }, Gap: 8f),
-        new RowElement(new HudElement[]
-        {
-            new SpacerElement(0f, PillHeight),
-            new CellElement(new TextElement(() => DcNoteShowing() ? _dcNote : DcCountText(),
-                Color: () => DcNoteShowing() ? SuccessText() : MutedColor(), NoWrap: true) { Ellipsize = true }, Weight: 1f),
-            CautionButton(() => _loc.T("cfg.effects.untickAll"), () => _dcConfirmAt = _services.Framework.TimeNow,
-                UntickLabelW, enabled: () => DcTickedCount() > 0),
-        }, Gap: 8f))
-    { Prebuild = true };
+    private HudElement EffectsFooter() => new RowElement(new HudElement[]
+    {
+        new SpacerElement(0f, PillHeight),
+        new CellElement(new TextElement(() => DcNoteShowing() ? _dcNote : DcCountText(),
+            Color: () => DcNoteShowing() ? SuccessText() : MutedColor(), NoWrap: true) { Ellipsize = true }, Weight: 1f),
+        CautionButton(() => _loc.T("cfg.effects.untickAll"), AskUntickAll, UntickLabelW, enabled: () => DcTickedCount() > 0),
+    }, Gap: 8f);
 
     // Clears the ACTIVE kind's whole selection (every id, so a partially ticked group is cleared too) and persists it.
     private void ConfirmUntickAll()
     {
-        _dcConfirmAt = -1.0;
         ActiveSel.Clear();
         ActiveSel.Save(_prefs, ActiveSelPrefix);
         ApplyDebuffCfgFilter(_dcFilter);   // bumps _dcSelVer → slot caches + count recompute

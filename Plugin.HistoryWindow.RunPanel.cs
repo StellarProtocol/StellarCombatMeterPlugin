@@ -10,8 +10,8 @@ namespace Stellar.CombatMeter;
 //   row 1  bold map title · muted "date · N players · M segments"
 //   row 2  status TEXT (green "✓ Uploaded" / amber "Uploading…" / muted "Not uploaded") + muted " · segment N · sea/<id>",
 //          or — when the selected segment can be uploaded and isn't — the Primary "Upload segment" pill in its place;
-//          then Neutral "Upload all (N)" (recessed once every segment is uploaded), round Copy link and Delete (red,
-//          still confirms) icon buttons. "Uploaded" is never a pill (rule 22: status that isn't clickable is plain text).
+//          then Neutral "Upload all (N)" (recessed once every segment is uploaded; Primary modal confirm with "Don't ask
+//          again"), round Copy link and Delete (red, Danger modal confirm — Plugin.Confirm.cs) icon buttons. "Uploaded" is never a pill (rule 22: status that isn't clickable is plain text).
 //   then the SEGMENTS cards (Plugin.HistoryWindow.Segments.cs).
 //
 // Performance: the upload phases come from a ConcurrentDictionary written by the upload callback, so they are polled —
@@ -19,8 +19,6 @@ namespace Stellar.CombatMeter;
 // only when a phase, the run URL or the upload block actually changed. Every Func below reads a cached field.
 public sealed partial class Plugin
 {
-    private bool _deleteRunConfirm;
-
     // Cached upload state of the selected run (see RefreshRunUploadState).
     private readonly UploadPhase[] _segPhases = new UploadPhase[MaxSegmentChips];
     private UploadPhase _selPhase = (UploadPhase)(-1);
@@ -41,8 +39,7 @@ public sealed partial class Plugin
                 { Bold = true, Ellipsize = true }, Weight: 1f),
             new TextElement(() => _runMeta, Color: () => MutedColor(), NoWrap: true),
         }, Gap: 6f),
-        // The status row and its delete confirm are the same 28 px row, so confirming never moves the panels below.
-        new ConditionalElement(() => _deleteRunConfirm, DeleteRunConfirmRow(), RunStatusRow()),
+        RunStatusRow(),
         BuildSegmentArea(),
     });
 
@@ -63,13 +60,13 @@ public sealed partial class Plugin
             new CellElement(new TextElement(() => _statusTail, Color: () => MutedColor(), NoWrap: true) { Ellipsize = true },
                 Weight: 1f),
             new CellElement(new ConditionalElement(() => _selectedSegments.Length > 1,
-                NeutralButton(UploadAllLabel, QueueRunUpload, allW,
+                NeutralButton(UploadAllLabel, AskUploadAll, allW,
                     () => _runUploadQueue.Count == 0 && !_allUploaded && !UploadBelowFloor && _uploadBlock != UploadBlock.Off))),
             RunIconButton(() => CopiedFlashing() ? _checkmarkPng : _linkPng,
                 hover => CopiedFlashing() ? Readable(SuccessColor(), NeutralFill()) : hover ? TextColor() : MutedColor(),
                 danger: false, CopyUploadLink, () => _selUrl != null),
             RunIconButton(() => _trashPng, _ => Readable(ProblemText, NeutralFill()),
-                danger: true, () => _deleteRunConfirm = true, () => _selectedSession != null),
+                danger: true, AskDeleteSelected, () => _selectedSession != null),
         }, Gap: 6f);
     }
 
@@ -200,27 +197,5 @@ public sealed partial class Plugin
         if (_selectedSession is not { } s || UploadUrlFor(s) is not { } u) return;
         UnityEngine.GUIUtility.systemCopyBuffer = u;   // plugins may reference UnityEngine; IL2CPP-safe clipboard
         _copiedAt = _services.Framework.TimeNow;
-    }
-
-    // ── delete (one archive = the selected segment) ───────────────────────────────────────────────────────────────
-    private HudElement DeleteRunConfirmRow()
-    {
-        float w = MaxBoldLabelW(13, _loc.T("history.delete.confirm"), _loc.T("cfg.cancel"));
-        return new RowElement(new HudElement[]
-        {
-            new SpacerElement(1f, PillHeight),
-            new TextElement(() => _loc.T(_selectedSegments.Length > 1 ? "history.delete.askSegment" : "history.delete.askRun"),
-                Color: () => TextColor(), NoWrap: true, FontSize: 13) { Bold = true },
-            new CellElement(new TextElement(() => _loc.T("history.delete.consequence"), Color: () => MutedColor(), NoWrap: true)
-                { Ellipsize = true }, Weight: 1f),
-            DangerButton(() => _loc.T("history.delete.confirm"), DeleteSelectedSession, w),
-            NeutralButton(() => _loc.T("cfg.cancel"), () => _deleteRunConfirm = false, w),
-        }, Gap: 6f);
-    }
-
-    private void DeleteSelectedSession()
-    {
-        _deleteRunConfirm = false;
-        if (_historyIndex >= 0) DeleteSession(_historyIndex);
     }
 }

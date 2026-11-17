@@ -58,9 +58,11 @@ public sealed partial class Plugin
 
     // True while a metric switch recomputes the table rows + chart series. Today that work runs synchronously on the
     // click (it is O(players + buckets) of plain managed maths), so the flag is only ever set inside this method — it is
-    // the hook a future "Loading…" overlay keys on if a measured switch ever proves slow (owner 2026-11-17, design
-    // pending: child window vs a framework layer element).
+    // the hook the "Loading" overlay (Plugin.Confirm.cs, a framework LayerStackElement over the chart + table) keys on:
+    // it shows only once a load has lasted > 150 ms, so today's fast switch never flashes it. Set the flag together with
+    // _historyLoadingSince (TimeNow) whenever a load starts.
     private bool _historyLoading;
+    private double _historyLoadingSince;
 
     // IN PLACE — the window is never torn down (fix 2026-11-17, "History disappears and comes back when I switch DPS →
     // HPS"). It used to Remove() + Register() the whole window so the LineChart's "baked" Y ticks would rescale; but
@@ -76,6 +78,7 @@ public sealed partial class Plugin
         if (_historyMetric == m) return;
         _historyMetric = m;
         _historyLoading = true;
+        _historyLoadingSince = _services.Framework.TimeNow;
         long t0 = CmDiag.HistPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         RebuildSessionRows();   // re-sort/re-label the contribution table
         BuildChartSeries();     // prime the series cache now (the chart's next poll gets this same list — no double work)

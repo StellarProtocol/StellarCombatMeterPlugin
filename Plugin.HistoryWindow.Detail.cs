@@ -21,8 +21,12 @@ public sealed partial class Plugin
     private HudElement BuildHistoryDetail() => new ColumnElement(new HudElement[]
     {
         BuildRunPanel(),
-        BuildChartPanel(),
-        BuildTablePanel(),
+        // The "Loading" overlay (Plugin.Confirm.cs) covers the chart + table only; the old content stays underneath.
+        WithHistoryLoadingOverlay(new ColumnElement(new HudElement[]
+        {
+            BuildChartPanel(),
+            BuildTablePanel(),
+        }, Gap: HistGap)),
     }, Gap: HistGap);
 
     // Selection-dependent header strings, the segment card texts and the upload block — on selection / metric /
