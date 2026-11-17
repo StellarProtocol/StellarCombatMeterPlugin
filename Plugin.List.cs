@@ -164,6 +164,7 @@ public sealed partial class Plugin
             Spec             = vis.Spec ? SpecLine(id) : "",
             AbilityScore     = FormatAbilityScore(_services.CombatLookup.GetFightPoint(id), _services.EntityDetail.GetAttribute(id, AttrSeasonStrengthId), vis.AbilityScore, vis.IllusionBreak),
             RoleColor        = toggles.MainBarIsHp ? hpColor   : gaugeColor, LabelStyle = toggles.BarLabelStyle,
+            HideSheen        = !toggles.BarShine,   // Look › Bars › "Bar shine" (per view)
             HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? gaugeColor : hpColor,
             NameColor        = ReadyVoteColor(id),
             VoiceIcon        = VoiceIconFor(id),

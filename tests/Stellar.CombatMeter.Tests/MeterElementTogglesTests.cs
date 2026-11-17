@@ -113,6 +113,30 @@ public class MeterElementTogglesTests
         Assert.Equal(1, cfg.Get<int>("party5.bar.color", -1));
     }
 
+    // ----- Bar shine (Look › Bars): on by default, per layout -----
+
+    [Fact]
+    public void BarShine_defaults_on_in_every_layout()
+    {
+        Assert.True(MeterElementToggles.Defaults().BarShine);
+        Assert.True(MeterElementToggles.ListDefaults().BarShine);
+        Assert.True(MeterElementToggles.Raid20Defaults().BarShine);
+        // A config written before the setting existed has no "bar.shine" key → still on.
+        Assert.True(MeterElementToggles.Load(new FakeConfigSection(), "party5", MeterElementToggles.Defaults()).BarShine);
+    }
+
+    [Fact]
+    public void BarShine_round_trips_through_the_config_prefix()
+    {
+        var cfg = new FakeConfigSection();
+        var t = MeterElementToggles.Defaults();
+        t.BarShine = false;
+        t.Save(cfg, "list");
+
+        Assert.False(MeterElementToggles.Load(cfg, "list", MeterElementToggles.Defaults()).BarShine);
+        Assert.True(MeterElementToggles.Load(cfg, "party20", MeterElementToggles.Raid20Defaults()).BarShine);
+    }
+
     // ----- Value text: Plain | Outline | Shadow (Appearance → Bars, 2.10.0, framework 2.8.0's
     // MeterRowData.LabelStyle) -----
 

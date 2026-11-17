@@ -102,6 +102,7 @@ public sealed partial class Plugin
     private static MeterRowData EmptySlot(int number, float tilePx, string name, string? hint) => new MeterRowData
     {
         IsEmptySlot = true, EmptyHint = hint,
+        HideSheen = true,   // no bar is drawn → don't keep sweeping (and masking) an invisible band every frame
         Rank = SmallNumber(number), Name = name, Spec = "", ClassName = "", AbilityScore = "",
         PrimaryValue = "", SecondaryValue = "", SharePercent = "",
         RoleColor = new ColorRgba(0f, 0f, 0f, 0f), HpColor = new ColorRgba(0f, 0f, 0f, 0f),

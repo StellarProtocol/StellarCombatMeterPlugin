@@ -130,6 +130,11 @@ public sealed partial class Plugin
             BarsChoice("settings.labelStyle.outline", () => LookT.BarLabelStyle == MeterLabelStyle.Outline, () => LookT.BarLabelStyle = MeterLabelStyle.Outline),
             BarsChoice("settings.labelStyle.shadow",  () => LookT.BarLabelStyle == MeterLabelStyle.Shadow,  () => LookT.BarLabelStyle = MeterLabelStyle.Shadow),
             BarsHelp("labelStyle", "settings.bar.labelStyle")),
+        // The soft light sweeping the main bar (framework sheen, MeterRowData.HideSheen). Per view like the rest of
+        // Look; default on. Off also skips the per-frame sweep + its clip for every row of that view.
+        SettingRow(() => _loc.T("settings.bar.shine"), false,
+            ToggleChip(() => LookT.BarShine, v => { LookT.BarShine = v; PersistToggles(); }),
+            BarsHelp("shine", "settings.bar.shine")),
         SettingRow(() => _loc.T("settings.bar.spineBar"), false,
             BarsChoice("common.off",      () => LookT.VerticalBar == VerticalBarMode.Off, () => LookT.VerticalBar = VerticalBarMode.Off),
             BarsChoice("list.metric.dps", () => LookT.VerticalBar == VerticalBarMode.Dps, () => LookT.VerticalBar = VerticalBarMode.Dps),

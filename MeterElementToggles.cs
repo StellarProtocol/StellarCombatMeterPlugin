@@ -46,6 +46,7 @@ public sealed class MeterElementToggles
     public BarColorMode BarColor;
     public MeterLabelStyle BarLabelStyle;
     public bool MainBarIsHp;
+    public bool BarShine;   // animated sheen sweeping the main bar (MeterRowData.HideSheen = !BarShine); default on
     public float SpineWidth;
     public ImagineSize ImagineSize;
     public TileSize TileSize;
@@ -58,7 +59,7 @@ public sealed class MeterElementToggles
     public static MeterElementToggles Defaults() => new()
     {
         Rank = true, Crest = true, Spec = true, VerticalBar = VerticalBarMode.Hp, MainBarIsHp = false, SpineWidth = 3f,
-        BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain,
+        BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain, BarShine = true,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
         ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true, Debuffs = true,
         ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight, TileSize = TileSize.Small,
@@ -132,6 +133,8 @@ public sealed class MeterElementToggles
         // never read "bar.labelStyle" either, so the key's presence is rollback-safe in both directions.
         d.BarLabelStyle    = (MeterLabelStyle)cfg.Get($"{prefix}.bar.labelStyle", (int)defaults.BarLabelStyle);
         d.MainBarIsHp     = cfg.Get($"{prefix}.bar.mainIsHp",                   defaults.MainBarIsHp);
+        // Absent key → on, the look every earlier build drew; older builds never read "bar.shine" (rollback-safe).
+        d.BarShine        = cfg.Get($"{prefix}.bar.shine",                      defaults.BarShine);
         d.SpineWidth      = cfg.Get($"{prefix}.bar.spineWidth",                 defaults.SpineWidth);
         d.Primary         = cfg.Get($"{prefix}.show.primary",         defaults.Primary);
         d.Total           = cfg.Get($"{prefix}.show.total",           defaults.Total);
@@ -171,6 +174,7 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.bar.color",            (int)BarColor);
         cfg.Set($"{prefix}.bar.labelStyle",       (int)BarLabelStyle);
         cfg.Set($"{prefix}.bar.mainIsHp",         MainBarIsHp);
+        cfg.Set($"{prefix}.bar.shine",            BarShine);
         cfg.Set($"{prefix}.bar.spineWidth",       SpineWidth);
         cfg.Set($"{prefix}.show.primary",         Primary);
         cfg.Set($"{prefix}.show.total",           Total);
