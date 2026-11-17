@@ -1,77 +1,105 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
 using Stellar.CombatMeter.LogUpload;   // UploadPhase
 
 namespace Stellar.CombatMeter;
 
 // History list GROUPING — one row per run (levelUuid) rather than one per archive, plus the snapshot that
-// feeds the list. Split out of Plugin.HistoryWindow.cs: that file was already 569 LoC, over the 500-LoC
-// major threshold in docs/coding-standards.md, and the standing rule is that a change must not grow a
-// pre-existing violation.
+// feeds the list. Split out of Plugin.HistoryWindow.cs (500-LoC cap).
 public sealed partial class Plugin
 {
     // ----- snapshots -----
 
+    // Dirty key of the last view rebuild. The window ticks this at ~10 Hz while shown, but the history only changes on an
+    // archive / delete / search / selection / language change — so the grouping + every row string are rebuilt
+    // only then, never per tick (Plugin-Performance-Rules §2: no per-poll allocation).
+    private int _hvCount = -1, _hvIndex = -2;
+    private EncounterHistoryEntry? _hvFirst, _hvLast;
+    private string? _hvSearch, _hvLang;
+
     private void RebuildHistorySnapshots()
     {
+        RefreshUploadBlock();   // cheap; the upload policy can change in Settings while History is open
+        RefreshRunUploadState(force: false);   // cheap poll; re-composes the status only when an upload phase changed
+        var first = _history.Count > 0 ? _history[0] : null;
+        var last  = _history.Count > 0 ? _history[^1] : null;
+        string lang = _loc.Language;
+        if (_history.Count == _hvCount && ReferenceEquals(first, _hvFirst) && ReferenceEquals(last, _hvLast)
+            && ReferenceEquals(_historySearch, _hvSearch) && _historyIndex == _hvIndex
+            && ReferenceEquals(lang, _hvLang))   // the metric is NOT a key: no run-list string depends on it (SelectHistoryMetric)
+            return;
+
         _historyView.Clear();
-        // Recomputed alongside the view rather than in a separate scan: this runs every shown frame, so the
-        // run containing the selection is identified for free while the rows are being built.
         _selectedSegments = Array.Empty<int>();
+        var runs = GroupHistoryByRun();
+        _historyRunCount = runs.Count;
+        string clockFmt = _loc.T("history.clock.format");
         // ONE ROW PER RUN, not per archive (owner request 2026-07-30). A single run banks several archives —
         // the fight, then a tail for each selected run-end stage, then the scene-exit tail — so the flat list
         // showed 6 rows for 2 runs and the owner could not tell which row to open. Grouped on levelUuid,
         // which is the runId and is shared by every archive of a run (verified in the owner's log: three
         // archives all carrying levelUuid=584088755955040256).
-        foreach (var run in GroupHistoryByRun())
+        foreach (var run in runs)
         {
+            // The selected run's segments are found over ALL runs, so a search that hides the selected row never hides
+            // its segment cards.
+            foreach (var seg in run.Segments) if (seg == _historyIndex) _selectedSegments = run.Segments;
             var primary = _history[run.Primary];
-            // REAL elapsed span only — the combat (damage) span lives in the detail pane. The row is
-            // capped at HistListWidth (180f) and a measured render showed the combined
-            // "8.3s (0s combat)" form truncating mid-parenthetical (owner ruling 2026-07-28, option 1).
-            // For a grouped row the span covers the WHOLE run (first archive's start -> last archive's end),
-            // because the row now represents the run rather than one of its segments.
+            // REAL elapsed span only — the combat (damage) span lives in the run panel. For a grouped row the span
+            // covers the WHOLE run (first archive's start -> last archive's end), because the row represents the run.
             var dur = FormatDurationWithTenths(RealDurationMs(
                 _history[run.Segments[0]].EnteredAtMs, _history[run.Segments[^1]].ArchivedAtMs));
             var map = ResolveSceneName(primary.SceneName);
-            // Search filter (owner 2026-08-15): match the query against "mapName verdict clock". A filtered-out
-            // row is simply not added; the selected run's DETAIL pane still shows (via _selectedSession below),
-            // so a search never deselects — it only narrows the list.
-            if (!HistoryRowMatches($"{map} {primary.Result} {FormatSessionClock(primary.ArchivedAtMs)}", _historySearch))
+            var clock = primary.ArchivedAtMs <= 0 ? "—"
+                : DateTimeOffset.FromUnixTimeMilliseconds(primary.ArchivedAtMs).LocalDateTime.ToString(clockFmt, CultureInfo.InvariantCulture);
+            // Search filter (owner 2026-08-15): match the query against "mapName verdict clock" (both the shown clock and
+            // the old compact "2:14p" form). A filtered-out row is simply not added; the selected run's detail still
+            // shows, so a search never deselects — it only narrows the list.
+            if (!HistoryRowMatches($"{map} {primary.Result} {clock} {FormatSessionClock(primary.ArchivedAtMs)}", _historySearch))
                 continue;
-            // The trigger tag is per-ARCHIVE, so it only means something on a single-archive row; a grouped
-            // row shows the archive count instead.
-            var tail = run.Segments.Length > 1 ? "" : TriggerSuffix(primary.Trigger);
-            var count = run.Segments.Length > 1 ? $"  ×{run.Segments.Length}" : "";
-            _historyView.Add(new SessionEntry(
-                run.Primary,
-                FormatSessionClock(primary.ArchivedAtMs) + count,
-                $"{map} · {dur} · {primary.MemberCount}p{tail}",
+            // The trigger tag is per-ARCHIVE, so it only means something on a single-archive row (readable name, e.g.
+            // "· Boss kill"); a grouped row shows the archive count "×N" beside the time instead.
+            var tail = run.Segments.Length > 1 || TriggerSuffix(primary.Trigger).Length == 0 ? "" : " · " + SegmentLabel(primary.Trigger);
+            var count = run.Segments.Length > 1 ? "×" + run.Segments.Length.ToString(CultureInfo.InvariantCulture) : "";
+            _historyView.Add(new SessionEntry(run.Primary, clock, count,
+                map + " · " + dur + " · " + _loc.TFormat("history.run.players", primary.MemberCount) + tail,
                 run.Segments));
-            foreach (var seg in run.Segments) if (seg == _historyIndex) _selectedSegments = run.Segments;
         }
         // Keep the selected session in sync (it may have been evicted).
         if (_historyIndex >= 0 && _historyIndex < _history.Count) _selectedSession = _history[_historyIndex];
         else { _selectedSession = null; _historyIndex = -1; _chartedSources.Clear(); _chartSourcesVersion++; }
-        RebuildSessionRows();
+
+        // Nothing selected (first open, or the selection was deleted) → open the newest run, so the right column always
+        // shows a run instead of an empty frame.
+        if (_selectedSession is null && _historyView.Count > 0)
+        {
+            _selectedSegments = _historyView[0].Segments;
+            SelectSession(_historyView[0].Index);
+        }
+        else RebuildSessionRows();
+
+        _hvCount = _history.Count; _hvFirst = first; _hvLast = last; _hvSearch = _historySearch;
+        _hvIndex = _historyIndex; _hvLang = lang;
     }
 
-    // Live history search (owner 2026-08-15): filters the grouped run rows by map/verdict/clock as-you-type
-    // (RebuildHistorySnapshots runs every shown frame, so setting this in OnChange reflows the list).
+    // Live history search (owner 2026-08-15): filters the grouped run rows by map/verdict/clock as-you-type (the next
+    // ~10 Hz snapshot tick sees the new string reference and rebuilds the list).
     private string _historySearch = "";
 
-    /// <summary>The "Search" input above the session list — a live filter, hidden when the list is empty.
-    /// Lives here (not in Plugin.HistoryWindow.cs) beside the filter it drives, and to keep that file off
-    /// the 500-LoC threshold.</summary>
-    private HudElement BuildHistorySearchRow() => new ConditionalElement(() => _history.Count > 0,
-        new RowElement(new HudElement[]
-        {
-            new TextElement(() => _loc.T("common.search"), MutedCol, Width: 52f),
-            new InputElement(() => _historySearch, _ => { }, 180f, OnChange: s => _historySearch = s),
-        }, Gap: 4f));
+    // Resolve a stored scene token (a raw id string like "7") to a friendly map/dungeon name via the live game
+    // World table. Falls back to "Scene {id}" for an unknown numeric id, or the raw token when non-numeric/empty.
+    private string ResolveSceneName(string? sceneToken)
+    {
+        if (string.IsNullOrEmpty(sceneToken)) return _loc.T("common.unknown");
+        if (!int.TryParse(sceneToken, out var id)) return sceneToken;
+        var name = _services.GameData.World.GetScene(id)?.Name;
+        return string.IsNullOrEmpty(name) ? _loc.TFormat("history.scene.numbered", id) : name;
+    }
 
-    /// <summary>One run's archives. <see cref="Segments"/> is oldest-first (so chip 1 is the run's first
+    /// <summary>One run's archives. <see cref="Segments"/> is oldest-first (so card 1 is the run's first
     /// archive); <see cref="Primary"/> is the archive the row opens.</summary>
     internal readonly struct RunGroup
     {
@@ -130,67 +158,6 @@ public sealed partial class Plugin
         return best;
     }
 
-    /// <summary>Segment chips for the selected run — one per archive, oldest first, so a grouped row can be
-    /// drilled into without putting every archive back in the list. Hidden for a single-archive run, where a
-    /// lone "1" chip would be noise.
-    ///
-    /// <para>Chips, not a dropdown: which segment you are on should be readable at a glance rather than
-    /// behind a click. Labels are 1-based positions; the archive's own trigger is already named in the
-    /// summary line below. WRAPPED since 2026-08-26 (owner report: a raid session banks 13 archives and the
-    /// old single row hard-hid everything past chip 8 — all of stage 3): chips lay out in up to
-    /// <c>MaxSegmentChips / SegmentChipsPerRow</c> rows of <c>SegmentChipsPerRow</c>, later rows shown only
-    /// when the session needs them (ListElement's VisibleCount; slots built once, poll-only).</para></summary>
-    private HudElement BuildSegmentPicker()
-    {
-        var rows = new HudElement[MaxSegmentChips / SegmentChipsPerRow];
-        for (var r = 0; r < rows.Length; r++)
-            rows[r] = BuildSegmentChipRow(firstSlot: r * SegmentChipsPerRow);
-        // Only meaningful when the run actually HAS multiple archives.
-        return new ConditionalElement(
-            () => _selectedSegments.Length > 1,
-            new ListElement(
-                () => Math.Min(rows.Length,
-                    (_selectedSegments.Length + SegmentChipsPerRow - 1) / SegmentChipsPerRow),
-                rows));
-    }
-
-    /// <summary>One picker row of <see cref="SegmentChipsPerRow"/> chip slots starting at
-    /// <paramref name="firstSlot"/>. The first row carries the "segments" caption; continuation rows carry
-    /// an equal-width blank so their chips align under the first row's.</summary>
-    private HudElement BuildSegmentChipRow(int firstSlot)
-    {
-        var kids = new HudElement[SegmentChipsPerRow + 1];
-        // NoWrap + enough width: at 60f the word wrapped and dropped its final "s" onto a second line
-        // (owner screenshot 2026-07-30). MEASURED via the history sandbox story, not guessed.
-        kids[0] = new TextElement(() => firstSlot == 0 ? "segments" : "", MutedCol, Width: 76f, NoWrap: true);
-        for (var i = 0; i < SegmentChipsPerRow; i++)
-        {
-            var slot = firstSlot + i;
-            kids[i + 1] = new ConditionalElement(
-                () => slot < _selectedSegments.Length,
-                // No fixed Width: the chip auto-sizes to its label. Widths cannot be per-frame (Width is a
-                // ctor value, not a Func) and the labels vary in length, so pinning one width would either
-                // clip "bosskill" or pad "idle" — owner: "each segment should tell user how it created".
-                new ButtonElement(
-                    () => SegmentChipLabel(slot),
-                    () => { if (slot < _selectedSegments.Length) SelectSession(_selectedSegments[slot]); },
-                    Active: () => slot < _selectedSegments.Length && _selectedSegments[slot] == _historyIndex));
-        }
-        return new RowElement(kids, Gap: 4f);
-    }
-
-    /// <summary>How this segment came to exist — the archive's own trigger (bosskill / stage / scene / wipe /
-    /// boss / idle / manual). Duplicates are expected and honest: selecting two run-end stages really does
-    /// produce two `stage` segments, and the chips are chronological so position tells them apart.</summary>
-    private string SegmentChipLabel(int slot)
-    {
-        if (slot >= _selectedSegments.Length) return "";
-        var idx = _selectedSegments[slot];
-        if (idx < 0 || idx >= _history.Count) return "";
-        var trigger = _history[idx].Trigger;
-        return string.IsNullOrEmpty(trigger) ? "manual" : trigger;
-    }
-
     /// <summary>The uploaded run's identity for the status line — <c>sea/HpPqOu76Bh</c> rather than the whole
     /// URL.
     ///
@@ -215,18 +182,9 @@ public sealed partial class Plugin
     // capacity-trimmed, so an index could point at a different (or evicted) run by the time its turn comes.
     private readonly List<EncounterHistoryEntry> _runUploadQueue = new();
 
-    /// <summary>Label for the per-SEGMENT button. Reads "segment" only when there is more than one, so a
+    /// <summary>Label for the per-SEGMENT upload pill. Reads "segment" only when there is more than one, so a
     /// single-archive run keeps the plain wording.</summary>
-    private string SegmentUploadVerb() => _selectedSegments.Length > 1 ? _loc.T("upload.segment") : _loc.T("upload.thisRun");
-
-    /// <summary>"Upload all (N)" — visible only for a grouped run. Owner: "sometimes I just don't wanna click
-    /// upload manually 6 seqments."</summary>
-    private HudElement BuildUploadRunButton() => new ConditionalElement(
-        () => _selectedSegments.Length > 1,
-        new ButtonElement(
-            () => _runUploadQueue.Count > 0 ? _loc.TFormat("upload.uploadingLeft", _runUploadQueue.Count) : _loc.TFormat("upload.uploadAll", _selectedSegments.Length),
-            QueueRunUpload,
-            Enabled: () => _runUploadQueue.Count == 0));
+    private string SegmentUploadVerb() => _selectedSegments.Length > 1 ? _loc.T("history.upload.segment") : _loc.T("history.upload.thisRun");
 
     /// <summary>Whether a segment in that upload phase is eligible for "Upload all". Everything EXCEPT an
     /// in-flight send is — including <see cref="UploadPhase.Done"/>.

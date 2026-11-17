@@ -15,7 +15,10 @@ public sealed partial class Plugin
     private readonly List<MeterRowData> _listRows = new(MaxListRows);
     private readonly Dictionary<EntityId, float> _barAnim = new();
     private bool _listEmpty = true;
-    private string _listEmptyCaptionKey = "list.empty.waiting";   // catalog key; resolved via _loc at draw time so it live-switches
+    private string _listEmptyCaptionKey = EmptyWaitingKey;   // catalog key; resolved via _loc at draw time so it live-switches
+    private const string EmptyWaitingKey = "hud.empty.waiting";
+    // Gap between meter rows (prototype ~3 px). The rounded row element sets no gap of its own.
+    private const float MeterRowGap = 3f;
 
     // Per-mode element toggle instances — lazy-loaded from config so they never touch the Plugin.cs constructor.
     // Task 8 settings panel will expose accessors to mutate/persist these.
@@ -35,28 +38,69 @@ public sealed partial class Plugin
 
     private HudElement BuildListBody()
     {
+        // Empty → ONE row-sized slot at the top of the list area (EmptyStateSlot), else the rows. The slot sits in a scroll of
+        // the SAME height as the rows' scroll, so both branches have identical geometry — same top edge, same 9 px
+        // scrollbar inset on the right, same flexible height — and switching empty ↔ rows never moves or resizes anything.
+        // Fill:true so both grow with the (resizable) window height; below the slot the area is empty (transparent).
+        // Prebuild (fw 2.30.0): the rows' branch is built in the background while the list is still empty (the window
+        // pre-build's fill, or an open before combat), so the first combat tick doesn't build 20 meter rows in one frame.
+        return new ConditionalElement(() => _listEmpty,
+            new ScrollElement(EmptyStateSlot(() => _loc.T(_listEmptyCaptionKey), ListEmptyLine), ListScrollHeight),
+            new ScrollElement(RowSizeSwitch(() => ListToggles.RowSize, BuildListRows), ListScrollHeight),
+            Fill: true) { Prebuild = true, PrebuildName = "cm.listRows" };
+    }
+
+    // The 24 List rows at one Row size. MeterRowElement.Density is chosen when a row is BUILT, so each size is its own row
+    // set behind RowSizeSwitch; only the size in use is ever built.
+    private HudElement BuildListRows(MeterRowDensity density)
+    {
         var slots = new HudElement[MaxListRows];
         for (var i = 0; i < MaxListRows; i++)
         {
             var idx = i;
+            // fw 2.33.0 opt-in house-style row (rounded tile, accent self ring, rounded spine / bar / effect cells).
             slots[i] = new MeterRowElement(
                 () => idx < _listRows.Count ? _listRows[idx] : default,
-                OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default));
+                OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default))
+                { Style = MeterRowStyle.Rounded, BackingOpacity = MeterRowBackingFn, Density = density };
         }
-        // Empty → caption; else the scroll. Fill:true so the scroll grows with the (resizable) window height.
-        // Prebuild (fw 2.30.0): the rows' branch is built in the background while the list is still empty (the window
-        // pre-build's fill, or an open before combat), so the first combat tick doesn't build 20 meter rows in one frame.
-        return new ConditionalElement(() => _listEmpty,
-            new TextElement(() => _loc.T(_listEmptyCaptionKey), MutedCol),
-            new ScrollElement(new ListElement(() => _listRows.Count, slots), ListScrollHeight),
-            Fill: true) { Prebuild = true, PrebuildName = "cm.listRows" };
+        return new ListElement(() => _listRows.Count, slots) { Gap = RowGapFor(density) };
+    }
+
+    // Normal / Compact / Mini row sets behind nested Conditionals. Conditional branches build LAZILY (first show), so a
+    // size nobody picks costs nothing, and switching Row size in Settings builds the new set once (that view only). The
+    // predicates are one field read + compare per refresh.
+    private static HudElement RowSizeSwitch(System.Func<MeterRowDensity> size, System.Func<MeterRowDensity, HudElement> build)
+        => new ConditionalElement(() => size() == MeterRowDensity.Normal, build(MeterRowDensity.Normal),
+            new ConditionalElement(() => size() == MeterRowDensity.Compact, build(MeterRowDensity.Compact), build(MeterRowDensity.Mini)));
+
+    // Gap between meter rows: 3 px for Normal (prototype), 2 px for Compact / Mini (approved mockup: 24 + 2 / 17 + 2).
+    private static float RowGapFor(MeterRowDensity d) => d == MeterRowDensity.Normal ? MeterRowGap : CompactRowGap;
+    private const float CompactRowGap = 2f;
+
+    // Compact rows draw ONE row of up to 3 effect tiles at 16 px (fw MeterRowElement.Density) — so the strip keeps 3 cells,
+    // the "+N" counted against 3, and the placeholder art is picked for 16 px.
+    private const int CompactEffectCells = 3;
+    private const float CompactEffectPx = 16f;
+
+    // Only "Waiting for combat" carries a second line, shown after the title as "· The meter starts on the first hit.".
+    // The composite is rebuilt only when the localized line changes (a language switch) — never per refresh.
+    private string? _emptyLineSrc;
+    private string _emptyLine = "";
+
+    private string ListEmptyLine()
+    {
+        if (!ReferenceEquals(_listEmptyCaptionKey, EmptyWaitingKey)) return "";
+        var s = _loc.T("hud.empty.waitingLine");
+        if (!ReferenceEquals(s, _emptyLineSrc)) { _emptyLineSrc = s; _emptyLine = s.Length > 0 ? "· " + s : ""; }
+        return _emptyLine;
     }
 
     private void RebuildListRows()
     {
         _listRows.Clear();
 
-        if (_stats.Count == 0) { _listEmpty = true; _listEmptyCaptionKey = "list.empty.waiting"; return; }
+        if (_stats.Count == 0) { _listEmpty = true; _listEmptyCaptionKey = EmptyWaitingKey; return; }
 
         double elapsed = EncounterElapsedSeconds();
         var rows = _agg.Rows(_metric, elapsed);
@@ -71,14 +115,14 @@ public sealed partial class Plugin
             visible++;
         }
         _listEmpty = visible == 0;
-        if (_listEmpty) _listEmptyCaptionKey = "list.empty.noScope";
+        if (_listEmpty) _listEmptyCaptionKey = "hud.empty.noScope";
     }
 
     private string EmptyMetricCaptionKey() => _metric switch
     {
-        Metric.Hps   => "list.empty.noHealing",
-        Metric.Taken => "list.empty.noTaken",
-        _            => "list.empty.noCombat",
+        Metric.Hps   => "hud.empty.noHealing",
+        Metric.Taken => "hud.empty.noTaken",
+        _            => "hud.empty.noCombat",
     };
 
     // Map an aggregator MeterRow → the framework MeterRowData (the renderer-neutral row snapshot).
@@ -98,11 +142,15 @@ public sealed partial class Plugin
         if (Mathf.Abs(cur - target) < 1f / DisplayQuantize.BarSteps) cur = target;
         _barAnim[id] = cur;
         var rowData = AssembleRow(row, rank, elapsed, vis, toggles);
-        ResolveDebuffs(id, vis.Debuffs, MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
         // Player-tile size drives the row height (party-focus grows every row uniformly). List keeps the base
         // height (its TileSize control isn't exposed, so it stays Small → 48px), but the block still renders
         // when its Debuffs toggle is on (owner 2026-09-24: buffs & debuffs supported in List too).
-        rowData.DebuffCellSize = MeterElementToggles.TileSizePx(toggles.TileSize);
+        // Set BEFORE ResolveDebuffs: an icon-less effect's placeholder tile is picked for this exact cell size.
+        // Compact: one row of 3 × 16 px tiles whatever the tile size / effect count (those two settings are Normal only).
+        bool compact = toggles.RowSize == MeterRowDensity.Compact;
+        rowData.DebuffCellSize = compact ? CompactEffectPx : MeterElementToggles.TileSizePx(toggles.TileSize);
+        ResolveDebuffs(id, vis.Debuffs && toggles.RowSize != MeterRowDensity.Mini,
+            compact ? CompactEffectCells : MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
         return rowData;
     }
 
@@ -137,12 +185,13 @@ public sealed partial class Plugin
         return new MeterRowData
         {
             Id               = id,
-            Rank             = $"{rank}.",
+            Rank             = SmallNumber(rank),   // cached "1".."100" (no dot in the rounded row, prototype 1a)
             Name             = label,
             ClassName        = vis.ClassName ? GetClassLine(id) : "",
             Spec             = vis.Spec ? SpecLine(id) : "",
             AbilityScore     = FormatAbilityScore(_services.CombatLookup.GetFightPoint(id), _services.EntityDetail.GetAttribute(id, AttrSeasonStrengthId), vis.AbilityScore, vis.IllusionBreak),
             RoleColor        = toggles.MainBarIsHp ? hpColor   : gaugeColor, LabelStyle = toggles.BarLabelStyle,
+            HideSheen        = !toggles.BarShine,   // Look › Bars › "Bar shine" (per view)
             HpColor          = toggles.VerticalBar == VerticalBarMode.Dps ? gaugeColor : hpColor,
             NameColor        = ReadyVoteColor(id),
             VoiceIcon        = VoiceIconFor(id),
@@ -164,7 +213,7 @@ public sealed partial class Plugin
             // Shield on the MAIN bar mirrors the spine's shield, but only in HP mode (0 in DPS mode). Same
             // shield/maxHp value clamped to the bar's HP fraction (owner 2026-09-24).
             BarShieldFraction = toggles.MainBarIsHp ? HpShieldFractionFor(id, frac) : 0f,
-            SharePercent     = $"{row.Share * 100d:F0}%",
+            SharePercent     = SharePercentLabel(row.Share),   // cached "0%".."100%"
             IsSelf           = id == self,
             IsLeader         = IsPartyLeader(id),
             Offline          = IsOffline(id),

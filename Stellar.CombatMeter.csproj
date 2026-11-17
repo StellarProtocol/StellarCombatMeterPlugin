@@ -200,9 +200,9 @@
          CI stays red until the release). MUST be flipped to plain "2.11.0" once framework 2.11.0 publishes (purge
          ~/.nuget/packages/stellar.abstractions/2.11.0-dev AND /2.11.0 first); the registry manifest's minimum
          framework becomes 2.11.0 at that same release. -->
-    <PackageReference Include="Stellar.Abstractions" Version="2.30.0" />
-    <PackageReference Include="Stellar.PluginContracts" Version="2.30.0" />
-    <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.30.0" />
+    <PackageReference Include="Stellar.Abstractions" Version="2.33.0" />
+    <PackageReference Include="Stellar.PluginContracts" Version="2.33.0" />
+    <PackageReference Include="Stellar.Plugin.InteropRefs" Version="2.33.0" />
     <!-- Managed ECDSA. System.Security.Cryptography's ECDsa is OS/CNG-backed and its SignData throws
          NTE_NOT_SUPPORTED (0x80090029) under Wine/Proton, breaking signed uploads + per-install claims
          (P2-SIGNING, 2026-06-30). BouncyCastle is pure-managed — works identically on Windows AND Wine.
@@ -217,8 +217,17 @@
     <EmbeddedResource Include="Resources/mic.png" LogicalName="Stellar.CombatMeter.mic.png" />
     <EmbeddedResource Include="Resources/headphone.png" LogicalName="Stellar.CombatMeter.headphone.png" />
     <EmbeddedResource Include="Resources/mute.png" LogicalName="Stellar.CombatMeter.mute.png" />
-    <EmbeddedResource Include="Resources/settings-gear.png" LogicalName="Stellar.CombatMeter.settings-gear.png" />
-    <EmbeddedResource Include="Resources/history.png" LogicalName="Stellar.CombatMeter.history.png" />
+    <!-- The CombatMeter mark (three meter bars), pre-drawn per size by tools/icons/gen-meter-bars.py; Plugin.MeterIcon.cs
+         picks the exact size. -->
+    <EmbeddedResource Include="Resources/meter/*.png" LogicalName="Stellar.CombatMeter.meter.%(Filename)%(Extension)" />
+    <!-- Row context-menu glyphs, pre-drawn per size (<stem>_<16|24|32>.png); Plugin.RowMenuIcons.cs picks the exact size. -->
+    <!-- Effect placeholder tiles (one glyph per category, green buff / red debuff, pre-drawn per size by
+         tools/icons/gen-effect-placeholders.py); Plugin.EffectIcons.cs picks the exact-size bitmap. -->
+    <EmbeddedResource Include="Resources/effects/*.png" LogicalName="Stellar.CombatMeter.effects.%(Filename)%(Extension)" />
+    <!-- The Settings gear + Combat History rewind-clock glyphs, pre-drawn per size by tools/icons/gen-hub-icons.py;
+         Plugin.MeterIcon.cs GearIconPng / HistoryIconPng pick the exact size. -->
+    <EmbeddedResource Include="Resources/hub/*.png" LogicalName="Stellar.CombatMeter.hub.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Resources/rowmenu/*.png" LogicalName="Stellar.CombatMeter.rowmenu.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <!-- i18n catalogs: auto-discovered by the framework via the Lang.<code>.json suffix (framework 2.1.0). -->

@@ -46,11 +46,13 @@ public sealed class MeterElementToggles
     public BarColorMode BarColor;
     public MeterLabelStyle BarLabelStyle;
     public bool MainBarIsHp;
+    public bool BarShine;   // animated sheen sweeping the main bar (MeterRowData.HideSheen = !BarShine); default on
     public float SpineWidth;
     public ImagineSize ImagineSize;
     public TileSize TileSize;
     public int DebuffMax;   // max buff/debuff cells shown (4/6/8 → 2/3/4 columns × 2 rows)
     public ImaginePosition ImaginePosition;
+    public MeterRowDensity RowSize;   // Look › Row › "Row size" (fw MeterRowElement.Density): Normal (default) / Compact / Mini
 
     private const float SpecTotalMinW = 230f;
     private const float ShareMinW     = 180f;
@@ -58,7 +60,7 @@ public sealed class MeterElementToggles
     public static MeterElementToggles Defaults() => new()
     {
         Rank = true, Crest = true, Spec = true, VerticalBar = VerticalBarMode.Hp, MainBarIsHp = false, SpineWidth = 3f,
-        BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain,
+        BarColor = BarColorMode.Role, BarLabelStyle = MeterLabelStyle.Plain, BarShine = true,
         Primary = true, Total = true, Share = true, Imagine = true, ImagineCooldown = true, LeaderFlag = true,
         ClassName = false, AbilityScore = false, IllusionBreak = false, VoiceIcon = true, Debuffs = true,
         ImagineSize = ImagineSize.Small, ImaginePosition = ImaginePosition.TopRight, TileSize = TileSize.Small,
@@ -132,6 +134,8 @@ public sealed class MeterElementToggles
         // never read "bar.labelStyle" either, so the key's presence is rollback-safe in both directions.
         d.BarLabelStyle    = (MeterLabelStyle)cfg.Get($"{prefix}.bar.labelStyle", (int)defaults.BarLabelStyle);
         d.MainBarIsHp     = cfg.Get($"{prefix}.bar.mainIsHp",                   defaults.MainBarIsHp);
+        // Absent key → on, the look every earlier build drew; older builds never read "bar.shine" (rollback-safe).
+        d.BarShine        = cfg.Get($"{prefix}.bar.shine",                      defaults.BarShine);
         d.SpineWidth      = cfg.Get($"{prefix}.bar.spineWidth",                 defaults.SpineWidth);
         d.Primary         = cfg.Get($"{prefix}.show.primary",         defaults.Primary);
         d.Total           = cfg.Get($"{prefix}.show.total",           defaults.Total);
@@ -150,6 +154,8 @@ public sealed class MeterElementToggles
         d.TileSize        = (TileSize)cfg.Get($"{prefix}.debuff.size",          (int)defaults.TileSize);
         d.DebuffMax       = cfg.Get($"{prefix}.debuff.max",                     defaults.DebuffMax);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
+        // Absent key → Normal (the look before Row size existed); older builds never read "row.size" (rollback-safe).
+        d.RowSize         = (MeterRowDensity)cfg.Get($"{prefix}.row.size",       (int)defaults.RowSize);
         return d;
     }
 
@@ -171,6 +177,7 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.bar.color",            (int)BarColor);
         cfg.Set($"{prefix}.bar.labelStyle",       (int)BarLabelStyle);
         cfg.Set($"{prefix}.bar.mainIsHp",         MainBarIsHp);
+        cfg.Set($"{prefix}.bar.shine",            BarShine);
         cfg.Set($"{prefix}.bar.spineWidth",       SpineWidth);
         cfg.Set($"{prefix}.show.primary",         Primary);
         cfg.Set($"{prefix}.show.total",           Total);
@@ -187,5 +194,6 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.debuff.size",          (int)TileSize);   // key kept for continuity — now the player-tile size
         cfg.Set($"{prefix}.debuff.max",           DebuffMax);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);
+        cfg.Set($"{prefix}.row.size",             (int)RowSize);
     }
 }

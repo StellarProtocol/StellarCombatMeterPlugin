@@ -16,6 +16,7 @@ public sealed partial class Plugin
         DrainSocialCatchup();
         EnsureReadyCheckSubscribed();
         TickRowMenuPlace();
+        TickMorePopover();      // Plugin.MorePopover.cs — re-assert the anchored rect after remount; close with the meter
         TickDebuffTipPlace();   // Plugin.DebuffTooltip.cs — re-assert cursor rect after destroy-on-hide remount
         PumpClassIcons();
         PumpDungeonIcon();
@@ -25,6 +26,7 @@ public sealed partial class Plugin
         TickReadyCheck(deltaTime);
         TickReplayCapture(deltaTime);
         TickReplayDiagnostics(deltaTime);
+        PumpEffectCatalog();    // Plugin.EffectCatalog.cs — sliced Settings › Effects catalog build; one bool test when idle
         _snapshotAccum += deltaTime;
         if (_snapshotAccum < SnapshotIntervalS) return;
         _snapshotAccum = 0f;
@@ -57,15 +59,23 @@ public sealed partial class Plugin
     {
         if (_mainWindow.IsShown)
         {
-            CaptureModeGeometry();
+            // Geometry only once the framework has placed the window at its saved layout (Plugin.ModeGeometry.cs settle
+            // gate): before that Rect is the (20,20) mount placeholder, and a SetRect would persist it (2026-11-17 bug).
+            if (MainGeometrySettled())
+            {
+                CaptureModeGeometry();
+                // Re-fit the window height (ONE SetRect) on the first settled tick / a 5↔20 switch. NOT on leadership —
+                // the LEADER line's slot is always reserved (Plugin.LeaderLine.cs).
+                if (_viewMode == ViewMode.PartyFocus) SyncPartyFocusHeight();
+            }
             if (_viewMode == ViewMode.PartyFocus)
             {
-                // Follow a live 5↔20 size switch: re-fit the window when the party size changes.
-                if (_lastViewWas20 != IsRaid20View) { _lastViewWas20 = IsRaid20View; RefreshPartyFocusHeight(); }
+                SyncLeaderLine();   // LEADER line on top vs blank at the bottom, no window geometry → no settle gate needed
                 RebuildPartyFocusRows();
             }
             else RebuildListRows();
         }
+        else ResetGeometrySettle();
         if (_historyWindow.IsShown) RebuildHistorySnapshots();
         if (_skillBreakdownWindow.IsShown) RebuildSkillRows();
         if (_snapshotWindow.IsShown) RebuildSnapshotRows();

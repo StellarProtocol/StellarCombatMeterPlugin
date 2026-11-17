@@ -24,9 +24,10 @@ public sealed partial class Plugin
         RebuildWindow(ref _historyWindow, RegisterHistoryWindow);
         RebuildWindow(ref _skillBreakdownWindow, RegisterSkillBreakdownWindow);
         RebuildWindow(ref _snapshotWindow, RegisterSnapshotWindow);
+        // The settings window bakes chip widths / dropdown options / wrapped chip lines in the active language at
+        // build time, so it is rebuilt too (its rect, visibility and tab are kept). The help popover just closes.
+        CloseHelp();
         RebuildWindow(ref _settingsWindow, BuildAndRegisterSettings);
-        RebuildWindow(ref _archiveSettingsWindow, BuildAndRegisterArchiveSettings);
-        RebuildWindow(ref _debuffConfigWindow, BuildAndRegisterDebuffConfig);
 
         // Context-menu items baked their labels at Register-time; re-register under the new language.
         ReRegisterTeamContextMenuItems();
@@ -34,6 +35,12 @@ public sealed partial class Plugin
         // The chart series caches "Team total" until dirtied; bump the version so it rebuilds localized.
         _chartSourcesVersion++;
     }
+
+    // Singular/plural key pick for a count string ("1 player" vs "2 players"). Both keys are literals → no allocation,
+    // and a FmtCache keyed on the format reference stays hit. Locales without plural forms (ja/ko/th/id/fil) carry the
+    // same text under both keys; only en actually differs. Every "<key>One" value keeps the {0} slot so call sites format
+    // both the same way.
+    private static string PluralKey(int n, string one, string other) => n == 1 ? one : other;
 
     // Framework-sanctioned Remove()+Register() rebuild that preserves the window's rect + visibility
     // (mirrors RebuildHistoryWindow). Used to re-localize baked window titles on a language change.

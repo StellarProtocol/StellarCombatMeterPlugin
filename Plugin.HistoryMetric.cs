@@ -1,3 +1,4 @@
+using System;
 using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
@@ -5,7 +6,7 @@ namespace Stellar.CombatMeter;
 /// <summary>
 /// History-window metric state + the pure metric→value/label selectors. The history surface owns its own
 /// metric (<see cref="_historyMetric"/>) independent of the live meter's <c>_metric</c>: switching it re-sorts /
-/// re-labels the contribution table and (Task 3) rebuilds the chart subtree so the chart's baked Y axis rescales.
+/// re-labels the contribution table and swaps the chart series in place (the chart re-pulls its Y ticks live).
 /// The selectors are <c>static</c> + pure so the projection logic is unit-testable without a Unity host.
 /// </summary>
 public sealed partial class Plugin
@@ -44,27 +45,49 @@ public sealed partial class Plugin
     private string MetricRateLabel(Metric m)   => _loc.T(MetricRateKey(m));
     private string MetricAxisTitle(Metric m)   => _loc.T(MetricAxisKey(m));
 
-    // History-window metric toggle (mirrors Plugin.Header.cs MetricItem).
-    private HudElement BuildHistoryMetricRow() => new RowElement(new HudElement[]
-    {
-        HistoryMetricItem("list.metric.dps", Metric.Dps),
-        HistoryMetricItem("list.metric.hps", Metric.Hps),
-        HistoryMetricItem("list.metric.taken", Metric.Taken),
-    }, Gap: 6f);
+    // History-window metric switch: the house segmented control (DPS / HPS / Taken) in the chart panel's caption row.
+    // Tab order = the Metric enum order (Dps, Hps, Taken).
+    private static readonly Metric[] HistoryMetricTabs = { Metric.Dps, Metric.Hps, Metric.Taken };
 
-    private HudElement HistoryMetricItem(string key, Metric m)
-        => new ButtonElement(() => _loc.T(key), () => SelectHistoryMetric(m), Active: () => _historyMetric == m);
+    private HudElement BuildHistoryMetricTabs() => TabStrip(new Func<string>[]
+        {
+            () => _loc.T("list.metric.dps"), () => _loc.T("list.metric.hps"), () => _loc.T("list.metric.taken"),
+        },
+        () => Array.IndexOf(HistoryMetricTabs, _historyMetric),
+        i => SelectHistoryMetric(HistoryMetricTabs[i]));
 
+    // True while a metric switch recomputes the table rows + chart series. Today that work runs synchronously on the
+    // click (it is O(players + buckets) of plain managed maths), so the flag is only ever set inside this method — it is
+    // the hook the "Loading" overlay (Plugin.Confirm.cs, a framework LayerStackElement over the chart + table) keys on:
+    // it shows only once a load has lasted > 150 ms, so today's fast switch never flashes it. Set the flag together with
+    // _historyLoadingSince (TimeNow) whenever a load starts.
+    private bool _historyLoading;
+    private double _historyLoadingSince;
+
+    // IN PLACE — the window is never torn down (fix 2026-11-17, "History disappears and comes back when I switch DPS →
+    // HPS"). It used to Remove() + Register() the whole window so the LineChart's "baked" Y ticks would rescale; but
+    // History is no longer prebuilt (crash fix 61935ab), so the fresh window had no tree until the framework built and
+    // mounted it on a later tick — the window vanished in between, and the run-list / segment scroll positions reset.
+    // That rebuild has been unnecessary since framework 1.13 (8fcab9a4): the chart's Y tick labels and both axis titles
+    // are re-pulled live every refresh. Everything metric-dependent here is a Func or a keyed cache: the table header
+    // (MetricColumnLabel via FmtCache), the rows (RebuildSessionRows), the chart hint (ChartHint keyed on the metric) and
+    // the series (BuildChartSeries keyed on the metric → a new list instance → the chart re-meshes). The selection,
+    // charted players and zoom window are untouched.
     private void SelectHistoryMetric(Metric m)
     {
         if (_historyMetric == m) return;
         _historyMetric = m;
+        _historyLoading = true;
+        _historyLoadingSince = _services.Framework.TimeNow;
+        long t0 = CmDiag.HistPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         RebuildSessionRows();   // re-sort/re-label the contribution table
-        // The LineChartElement bakes its Y-tick label values (and X tick labels) at element-BUILD time, so a
-        // plain MarkDirty (which only re-polls values) leaves the axis scaled to the previous metric's
-        // magnitude. Tear the window down + re-register a fresh tree so BuildYTicks re-derives from the new
-        // metric's peak — the framework-sanctioned Remove()+Register() rebuild (mirrors StatInspector's
-        // column-count change; see WindowService.Register).
-        RebuildHistoryWindow();
+        BuildChartSeries();     // prime the series cache now (the chart's next poll gets this same list — no double work)
+        _historyLoading = false;
+        if (CmDiag.HistPerf)
+        {
+            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            _services.Log.Info($"[HistPerf] metric switch → {m}: {ms:0.00} ms (rows={_sessionRows.Count}, " +
+                $"sources={_selectedSession?.Series.Count ?? 0}, charted={_chartedSources.Count})");
+        }
     }
 }

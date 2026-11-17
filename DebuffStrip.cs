@@ -49,9 +49,10 @@ public static class DebuffStrip
     /// gated by its own selection: debuffs by <paramref name="debuffSel"/>, buffs by <paramref name="buffSel"/>.</summary>
     public static DebuffStripResult Build(
         IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff,
-        DebuffSelection debuffSel, DebuffSelection buffSel, long nowMs, int maxCells = MaxCells)
+        DebuffSelection debuffSel, DebuffSelection buffSel, long nowMs, int maxCells = MaxCells,
+        Func<string?, bool>? isUnnamed = null)
     {
-        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel, nowMs);
+        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel, nowMs, isUnnamed);
         if (kept.Count == 0) return DebuffStripResult.Empty;
         int cap = maxCells < 1 ? 1 : (maxCells > MaxCellsCap ? MaxCellsCap : maxCells);
         // The renderer sacrifices the LAST cell for "+N" whenever there's overflow, so reserve it here too —
@@ -67,9 +68,9 @@ public static class DebuffStrip
     /// click tooltip's "show all" view. Same filter/order as <see cref="Build"/>. Empty when nothing passes.</summary>
     public static List<DebuffEntry> BuildAll(
         IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff,
-        DebuffSelection debuffSel, DebuffSelection buffSel, long nowMs)
+        DebuffSelection debuffSel, DebuffSelection buffSel, long nowMs, Func<string?, bool>? isUnnamed = null)
     {
-        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel, nowMs);
+        var kept = KeptSorted(buffs, getBuff, debuffSel, buffSel, nowMs, isUnnamed);
         var result = new List<DebuffEntry>(kept.Count);
         foreach (var k in kept) result.Add(ToEntry(k, nowMs));
         return result;
@@ -79,12 +80,12 @@ public static class DebuffStrip
     // ran out more than ExpiredGraceMs ago is dropped: it cannot still be active, whatever the live set says.
     private static List<(ActiveBuff b, bool isBuff)> KeptSorted(
         IReadOnlyList<ActiveBuff> buffs, Func<int, BuffInfo?> getBuff, DebuffSelection debuffSel, DebuffSelection buffSel,
-        long nowMs)
+        long nowMs, Func<string?, bool>? isUnnamed)
     {
         var kept = new List<(ActiveBuff, bool)>(buffs?.Count ?? 0);
         if (buffs == null || buffs.Count == 0) return kept;
         foreach (var b in buffs)
-            if (!IsExpired(b, nowMs) && Passes(b.BaseId, getBuff, debuffSel, buffSel, out var isBuff)) kept.Add((b, isBuff));
+            if (!IsExpired(b, nowMs) && Passes(b.BaseId, getBuff, debuffSel, buffSel, isUnnamed, out var isBuff)) kept.Add((b, isBuff));
         StableSortByCreateTime(kept);
         return kept;
     }
@@ -92,16 +93,19 @@ public static class DebuffStrip
     private static bool IsExpired(in ActiveBuff b, long nowMs)
         => b.DurationMs > 0 && b.CreateTimeMs > 0 && nowMs > b.CreateTimeMs + b.DurationMs + ExpiredGraceMs;   // no create time = unknown, keep
 
-    // Filter predicate: a buff OR debuff whose name/icon pass its OWN selection (debuffs → debuffSel, buffs →
-    // buffSel). Outputs the kind (isBuff = NOT a debuff) so the strip can colour the tile.
+    // Filter predicate: a buff OR debuff whose name passes its OWN selection (debuffs → debuffSel, buffs →
+    // buffSel). Outputs the kind (isBuff = NOT a debuff) so the strip can colour the tile. "Named" is decided by
+    // isUnnamed (the plugin passes IGameText.IsPlaceholderName, so filler / "Buff <id>" names count as game-hidden,
+    // matching Settings › Effects); null = the bare empty-name check (tests).
     private static bool Passes(int baseId, Func<int, BuffInfo?> getBuff,
-                              DebuffSelection debuffSel, DebuffSelection buffSel, out bool isBuff)
+                              DebuffSelection debuffSel, DebuffSelection buffSel, Func<string?, bool>? isUnnamed, out bool isBuff)
     {
         isBuff = false;
         if (getBuff(baseId) is not { } bi) return false;
         isBuff = !bi.IsDebuff;
         var sel = isBuff ? buffSel : debuffSel;
-        return sel.ShouldShow(baseId, !string.IsNullOrEmpty(bi.Name), !string.IsNullOrEmpty(bi.IconPath));
+        bool named = isUnnamed != null ? !isUnnamed(bi.Name) : !string.IsNullOrEmpty(bi.Name);
+        return sel.ShouldShow(baseId, named);
     }
 
     // In-place insertion sort by CreateTimeMs: stable (only shifts on strictly-greater, so equal-time

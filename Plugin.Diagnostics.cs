@@ -23,7 +23,7 @@ public sealed partial class Plugin
         if (!StellarDiagnostics.IsEnabled) return;
         if (!_loggedUnresolvedSkillNames.Add(skillId)) return;
         _services.Log.Info(
-            $"[CombatMeter][name] unresolved id={skillId} (no skill, override, or buff name) — add to SkillNameOverrides if needed");
+            $"[CombatMeter][name] unresolved id={skillId} (no skill, override, buff or design name) — add to SkillNameOverrides if needed");
     }
 
     // Scene-boundary replay reset (93:53 cross-scene-carryover fix). Logs the outgoing/incoming

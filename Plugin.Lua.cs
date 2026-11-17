@@ -11,10 +11,7 @@ public sealed partial class Plugin
     private const float ReadyCheckCooldownS = 25f;
     private float _readyCheckCooldown;
 
-    internal string ReadyCheckLabel()
-        => _readyCheckCooldown > 0f
-            ? $"{(int)Math.Ceiling(_readyCheckCooldown)}"
-            : "";
+    // (The recessed pill's "Ready check 18s" label: ReadyCheckLabel, Plugin.LeaderLine.cs.)
 
     private void TickReadyCheckCooldown(float dt)
     {

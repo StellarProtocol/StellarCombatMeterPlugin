@@ -20,7 +20,7 @@ public static class DefaultTrackedEffects
     /// <summary>Both tabs default to "Show only checked".</summary>
     public const DebuffTrackMode Mode = DebuffTrackMode.ShowOnlySelected;
 
-    /// <summary>Both tabs default to hiding unnamed (icon-only) effects — the owner's saved value on both tabs.</summary>
+    /// <summary>Both tabs default to hiding game-hidden (unnamed) effects — the owner's saved value on both tabs.</summary>
     public const bool ShowHidden = false;
 
     /// <summary>Debuffs tab: the four Battle-Imagine lockout debuffs (BuffType 0).</summary>

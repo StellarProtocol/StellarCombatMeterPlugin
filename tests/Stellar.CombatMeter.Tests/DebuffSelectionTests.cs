@@ -23,7 +23,7 @@ public class DebuffSelectionTests
     {
         var sel = new DebuffSelection();
         Assert.Equal(DebuffTrackMode.ShowAllExceptSelected, sel.Mode);
-        Assert.True(sel.ShouldShow(10, hasName: true, hasIcon: true));
+        Assert.True(sel.ShouldShow(10, hasName: true));
     }
 
     [Fact]
@@ -31,8 +31,8 @@ public class DebuffSelectionTests
     {
         var sel = new DebuffSelection();
         sel.SetSelected(10, true);
-        Assert.False(sel.ShouldShow(10, hasName: true, hasIcon: true));
-        Assert.True(sel.ShouldShow(11, hasName: true, hasIcon: true));
+        Assert.False(sel.ShouldShow(10, hasName: true));
+        Assert.True(sel.ShouldShow(11, hasName: true));
     }
 
     [Fact]
@@ -40,35 +40,25 @@ public class DebuffSelectionTests
     {
         var sel = new DebuffSelection { Mode = DebuffTrackMode.ShowOnlySelected };
         sel.SetSelected(10, true);
-        Assert.True(sel.ShouldShow(10, hasName: true, hasIcon: true));
-        Assert.False(sel.ShouldShow(11, hasName: true, hasIcon: true));
+        Assert.True(sel.ShouldShow(10, hasName: true));
+        Assert.False(sel.ShouldShow(11, hasName: true));
     }
 
     [Fact]
     public void ShowOnlySelected_empty_shows_nothing()
     {
         var sel = new DebuffSelection { Mode = DebuffTrackMode.ShowOnlySelected };
-        Assert.False(sel.ShouldShow(10, hasName: true, hasIcon: true));
-    }
-
-    [Fact]
-    public void No_icon_is_always_hidden()
-    {
-        var sel = new DebuffSelection();
-        Assert.False(sel.ShouldShow(10, hasName: true, hasIcon: false));
-
-        sel.ShowHidden = true;
-        Assert.False(sel.ShouldShow(10, hasName: false, hasIcon: false));
+        Assert.False(sel.ShouldShow(10, hasName: true));
     }
 
     [Fact]
     public void No_name_is_hidden_unless_show_hidden()
     {
         var sel = new DebuffSelection();
-        Assert.False(sel.ShouldShow(10, hasName: false, hasIcon: true));
+        Assert.False(sel.ShouldShow(10, hasName: false));
 
         sel.ShowHidden = true;
-        Assert.True(sel.ShouldShow(10, hasName: false, hasIcon: true));
+        Assert.True(sel.ShouldShow(10, hasName: false));
     }
 
     [Fact]

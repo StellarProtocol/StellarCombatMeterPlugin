@@ -36,11 +36,19 @@ public sealed partial class Plugin
         return skillId > 0 ? _services.GameAssets.LoadSkillIcon(skillId, out _snapSkillUv[idx]) : null;
     }
 
+    // Ticked at ~10 Hz while shown (Plugin.Tick.cs), but a frozen snapshot never changes: re-bake the rows only when the
+    // inspected player or the language changes. The stale-session guard runs every tick.
+    private SnapshotState? _snapBuiltFor;
+    private string? _snapBuiltLang;
+
     private void RebuildSnapshotRows()
     {
         if (_snapshot is not { } s) return;
         // Stale-session guard: the inspected session may have been evicted (cap) or deleted.
         if (!_history.Contains(s.Session)) { CloseSnapshot(); return; }
+        string lang = _loc.Language;
+        if (ReferenceEquals(s, _snapBuiltFor) && ReferenceEquals(lang, _snapBuiltLang)) return;
+        _snapBuiltFor = s; _snapBuiltLang = lang;
 
         BuildSnapIdentity(s);
         BuildSnapStats(s);
@@ -49,23 +57,22 @@ public sealed partial class Plugin
         BuildSnapFashion(s);
     }
 
-    // Identity header: live name (snapshot stores the frozen one as a fallback only) + profession · level · GS · HP.
+    // Identity header: live name (snapshot stores the frozen one as a fallback only) + level · ability score · HP (the
+    // class is the crest beside it).
     private void BuildSnapIdentity(SnapshotState s)
     {
         var snap = s.Snap;
         var liveName = _services.CombatLookup.GetEntityName(s.Source);
         var name = !string.IsNullOrEmpty(liveName) ? liveName! : snap.Name is { Length: > 0 } ? snap.Name : _loc.T("common.unknown");
-        s.Identity = _loc.TFormat("snapshot.identity", name);
+        s.Identity = _loc.TFormat("snapshot.header", name);
 
-        var prof = ResolveSnapProfession(snap);
         var level = SnapAttr(snap, AttrLevel);
         var ci = CultureInfo.InvariantCulture;
-        var parts = new System.Collections.Generic.List<string>(4);
-        if (prof.Length > 0) parts.Add(prof);
+        var parts = new System.Collections.Generic.List<string>(3);
         if (level > 0) parts.Add(_loc.TFormat("snapshot.sub.level", level.ToString(ci)));
         if (snap.FightPoint > 0) parts.Add(_loc.TFormat("snapshot.sub.abilityScore", snap.FightPoint.ToString("N0", ci)));
         if (snap.MaxHp > 0) parts.Add(_loc.TFormat("snapshot.sub.hp", snap.Hp.ToString("N0", ci), snap.MaxHp.ToString("N0", ci)));
-        s.SubIdentity = string.Join("   ·   ", parts);
+        s.SubIdentity = string.Join(" · ", parts);
     }
 
     private string ResolveSnapProfession(EntitySnapshot snap)
@@ -121,8 +128,8 @@ public sealed partial class Plugin
             var skillId = snap.SkillIds[i];
             var info = _services.GameData.Combat.GetSkill(skillId);
             var name = info is { Name.Length: > 0 } sk ? sk.Name : $"<unknown {skillId}>";
-            var sub = $"Lv {snap.SkillLevels[i].ToString(ci)}"
-                    + (snap.SkillTiers[i] > 0 ? $" · Tier {snap.SkillTiers[i].ToString(ci)}" : "");
+            var sub = _loc.TFormat("snapshot.skill.level", snap.SkillLevels[i].ToString(ci))
+                    + (snap.SkillTiers[i] > 0 ? " · " + _loc.TFormat("snapshot.skill.tier", snap.SkillTiers[i].ToString(ci)) : "");
             s.Skills.Add((name, sub));
         }
     }
@@ -137,6 +144,7 @@ public sealed partial class Plugin
             var item = _services.GameData.Inventory.GetItem(fashionId);
             s.Fashion.Add(item is { Name.Length: > 0 } it ? it.Name : $"<unknown {fashionId}>");
         }
+        s.FashionLine = string.Join(" · ", s.Fashion);
     }
 
     // Index-aligned attr lookup over the snapshot's parallel arrays (clamped on load, so lengths are equal here).
@@ -156,25 +164,33 @@ public sealed partial class Plugin
         _ => raw.ToString("N0", CultureInfo.InvariantCulture),
     };
 
-    // A read-only popup (opened from the History Inspect affordance): free-drag + ✕ close, GlassMenu chrome (same
-    // as Skill Breakdown). Shared by the initial registration (Plugin.cs) and the rebuild-on-open below.
-    private IWindowControl RegisterSnapshotWindow() => _services.Windows.Register(new WindowRegistration(
-        new WindowSpec(
-            Id:          "combatmeter.session-snapshot",
-            Title:       _loc.T("snapshot.title"),   // baked at registration; rebuilt on LanguageChanged
-            DefaultRect: new WindowRect(1040f, 120f, 460f, 520f),
-            Category:    WindowCategory.Tools,
-            Style:       WindowPanelStyle.GlassMenu)
-        { StartVisible = false, Closable = true, Draggable = true,
-          Resizable = true, MinWidth = 360f, MinHeight = 300f, MaxWidth = 900f, MaxHeight = 1000f,
-          ShouldRender = () => _services.ClientState.Phase == GamePhase.World
-                            && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
-        BuildSnapshotRoot(),
-        OnClose: CloseSnapshot));
+    // A read-only popup (opened from the History ⌕ inspect): free-drag + ✕ close, GlassMenu chrome (same as Skill
+    // Breakdown). Content-fit height with a fixed scroll viewport, so it keeps one size for every player. A NEW id: the
+    // old one carries a persisted resizable rect of the old layout. Shared by Plugin.cs and the language rebuild.
+    private WindowCenterer? _snapCenterer;
 
-    // Open / toggle the frozen view for a player row. Re-clicking the same source closes it (mirrors the ►
-    // drill-in toggle). The window subtree carries no baked colours, but we rebuild it for symmetry with the
-    // Skill Breakdown pattern so the lifecycle stays uniform (cheap; fires on user action only).
+    private IWindowControl RegisterSnapshotWindow()
+    {
+        var w = _services.Windows.Register(new WindowRegistration(
+            new WindowSpec(
+                Id:          "combatmeter.session-snapshot.v2",
+                Title:       _loc.T("snapshot.title"),   // baked at registration; rebuilt on LanguageChanged
+                DefaultRect: new WindowRect(1040f, 120f, SnapWindowW, 580f),
+                Category:    WindowCategory.Tools,
+                Style:       WindowPanelStyle.GlassMenu)
+            { StartVisible = false, Closable = true, Draggable = true,
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
+            BuildSnapshotRoot(),
+            OnClose: CloseSnapshot));
+        _snapCenterer?.Stop();
+        _snapCenterer = new WindowCenterer(_services.Framework, w);
+        _snapBuiltFor = null;   // a rebuilt tree re-reads the caches; re-bake on the next tick
+        return w;
+    }
+
+    // Open / toggle the frozen view for a player row. Re-clicking the same source closes it (mirrors the › drill-in
+    // toggle). A child of History: opens centred on it and in front.
     private void HandleInspectRequested(EntityId id, EncounterHistoryEntry session)
     {
         if (_snapshot is { } cur && cur.Source == id && ReferenceEquals(cur.Session, session))
@@ -193,14 +209,20 @@ public sealed partial class Plugin
             return;
         }
 
-        _snapshot = new SnapshotState { Source = id, Session = session, Snap = snap };
+        _snapshot = new SnapshotState
+        {
+            Source = id, Session = session, Snap = snap, ProfId = PlayableClass.ResolveActorProfession(snap),
+        };
         RebuildSnapshotRows();
-        _snapshotWindow.SetVisible(true);
+        // Already open (another player) → re-fill + front it (Rule 5 exception: a visible child re-opened from its parent).
+        if (_snapshotWindow.IsShown) _snapshotWindow.BringToFront();
+        else _snapCenterer?.OpenCentred(_historyWindow);
     }
 
     private void CloseSnapshot()
     {
         _snapshot = null;
+        _snapCenterer?.Stop();
         _snapshotWindow.SetVisible(false);
     }
 }

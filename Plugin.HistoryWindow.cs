@@ -2,351 +2,279 @@ using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
-using Stellar.CombatMeter.LogUpload;   // UploadPhase
 
 namespace Stellar.CombatMeter;
 
 /// <summary>
-/// History surface — a uGUI master-detail window (Party chrome). Left pane: a scrollable session list (newest
-/// first, SelectableElement rows). Right pane: the selected session's per-source table (rank·name·class +
-/// TOTAL DMG / DPS / %DMG columns) with a drill-in ► button that fires <see cref="OnSkillBreakdownRequested"/>.
-/// The plugin snapshots both panes into _historyView / _sessionRows each shown frame.
+/// Combat History (Shift+F9) — house style (approved redesign 2026-11-17,
+/// <c>_scratch\prototypes\combatmeter-redesign-APPROVED.md</c> §4):
+/// <code>
+///   ToolHeader  [history icon tile] Combat History / "N runs saved · keeps M"
+///   Row[ RUNS panel 280 px (search · 40 px run tiles · Danger "Clear all" → modal confirm)
+///      | run panel (status + upload pills + icon buttons, SEGMENTS cards) · chart panel (DPS/HPS/Taken + LineChart) · player table ]
+/// </code>
+/// The chart / table panels live in Plugin.HistoryWindow.Detail.cs (+ .Table.cs), the run panel in .RunPanel.cs, the
+/// SEGMENTS cards in .Segments.cs; the run grouping + the throttled snapshot
+/// rebuild in Plugin.HistoryWindow.Runs.cs.
+///
+/// <para>Fixed size: every block has a fixed height (lists are fixed viewports; the run panel's variable parts sit in
+/// equal-height FixedBoxes; confirms are modal cards over the content, Plugin.Confirm.cs), so the content never changes
+/// height with the data (SDL rule 14), and <c>WindowSpec.FixedHeight</c> pins the window to <see cref="HistWindowH"/> on
+/// top of that. It is not drag-resizable: a rounded SectionPanel (BubbleElement) hugs its content and can't hand slack
+/// height to the table, so a taller window would only add an empty strip at the bottom.</para>
 /// </summary>
 public sealed partial class Plugin
 {
     internal event Action<EntityId, EncounterHistoryEntry>? OnSkillBreakdownRequested;
     internal event Action<EntityId, EncounterHistoryEntry>? OnInspectRequested;
 
-    private const int MaxSessionSlots = MaxRetention;   // slot pool sized to the max retention (setting can change at runtime)
-    private const int MaxSourceSlots  = 24;                 // detail rows bound
-    private const float HistListHeight   = 300f;
-    private const float HistDetailHeight = 260f;
-    // Detail table columns (right-aligned numerics) — 3 metric-aware numerics + drill ►:
-    // DPS: DMG·DPS·% ; HPS: HEAL·HPS·% ; Taken: TAKEN·DTPS·%.
-    // Inspect + drill are equal-sized action buttons (same button Width + same cell width) so the row's two
-    // affordances read as a matched pair. ActionBtnW pins the button; the cell is a hair wider for centering slack.
-    private const float ColPrimary = 64f, ColRate = 56f, ColPct = 44f;
-    private const float ActionBtnW = 30f, ColDrill = 34f, ColInspect = 34f;
+    private const int MaxSessionSlots = MaxRetention;   // run-view capacity (the retention setting can change at runtime)
+    private const int MaxSourceSlots  = 24;              // player-table rows bound
+
+    // Geometry (rule 18: widen, don't cram). 780 → 880 for the runs column + run pills; 880 → 1000 with the runs column
+    // 220 → 280 (addendum "run panel B", 2026-11-17) so map names stop truncating and five segment cards fit a row.
+    private const float HistWindowW  = 1000f;
+    // The content-fit height of the fixed layout (title bar + ToolHeader + the right column: run panel 188 + chart 278 +
+    // table 216 + gaps). Derived from the saved v3 rect (804.5 with the old 189 px run panel) − 1, rounded up; NOT yet
+    // measured in game. Too small → the player table's viewport (min 0) gives way; too big → an empty strip below it.
+    private const float HistWindowH  = 804f;
+    private const float HistBodyW    = HistWindowW - 24f;              // GlassMenu body padding 12 each side
+    private const float HistRunsW    = 280f;
+    private const float HistGap      = 8f;
+    private const float HistDetailW  = HistBodyW - HistRunsW - HistGap; // the right column
+    private const float HistRunTileH = 40f;
+    private const float HistRunPitch = HistRunTileH + ListRowGap;
+    private const int   HistRunRows  = 12;                             // visible run tiles
+    private const int   HistRunPool  = HistRunRows + 2;
+
+    // rows × pitch, NOT − the last gap: each tile is centred in its pitch by RingListSlot (1 px clear above and below), so
+    // the first tile's top and the last tile's bottom never sit ON the viewport's clip edge (the selected ring was cut).
+    private static float HistRunViewport(int rows) => rows * HistRunPitch;
+    // The list + footer block below the search box: list viewport + gap + the 28 px "Clear all" row.
+    private static float HistRunsBlockH => HistRunViewport(HistRunRows) + PanelGap + PillHeight;
 
     private int _historyIndex = -1;   // -1 = no session selected (original history-list index)
     private EncounterHistoryEntry? _selectedSession;
 
-    // Clear-all is a 2-click confirm to guard against a misclick wiping up to 50 sessions: first click arms it
-    // (label flips to "Confirm?"), second click within the same visit clears. Any other interaction re-disarms.
-    private bool _clearAllArmed;
-
     private readonly List<SessionEntry> _historyView = new(MaxSessionSlots);
     private readonly List<SourceRow> _sessionRows = new(MaxSourceSlots);
+    private int _runOffset;   // first run row shown by the virtual list
 
     private readonly struct SessionEntry
     {
-        public SessionEntry(int idx, string clock, string meta, int[] segments)
-        { Index = idx; Clock = clock; Meta = meta; Segments = segments; }
-        // Clock = compact "⏱ 2:14p" emphasis line; Meta = pre-joined "{dur} · {n}p · {scene}" muted line.
-        // Segments = every archive of the SAME run (levelUuid), OLDEST FIRST so chip 1 is the run's first
-        // archive; Index is the one this row opens (the run's main fight).
-        public readonly int Index; public readonly string Clock, Meta; public readonly int[] Segments;
+        public SessionEntry(int idx, string clock, string count, string meta, int[] segments)
+        { Index = idx; Clock = clock; Count = count; Meta = meta; Segments = segments; }
+        // Clock = bold "3:13 AM"; Count = muted "×4" ("" for a single archive); Meta = muted "map · length · Np [· trigger]".
+        // Segments = every archive of the SAME run (levelUuid), OLDEST FIRST so card 1 is the run's first archive; Index is
+        // the one this row opens (the run's main fight). All strings are built on a (throttled, dirty-keyed) rebuild only.
+        public readonly int Index; public readonly string Clock, Count, Meta; public readonly int[] Segments;
     }
 
-    // Segments of the currently selected run, oldest first. Drives the detail pane's segment chips.
-    private int[] _selectedSegments = System.Array.Empty<int>();
+    // Segments of the currently selected run, oldest first. Drives the SEGMENTS cards.
+    private int[] _selectedSegments = Array.Empty<int>();
 
-    // Chip slots for the segment picker. The element tree is built ONCE and polled, so the count is fixed
-    // and surplus slots hide via ConditionalElement. Was 8 — a real RAID banks 13 archives per session
-    // (measured 2026-08-25, Clash! Field of Forgotten Illusions ×2: prepare/bosskill/cut per stage), so
-    // the owner's detail pane silently hid all of stage 3. 24 = three wrapping rows of
-    // SegmentChipsPerRow; a session with even more archives still shows only the first 24 (unseen in
-    // any capture; the history itself is capped at 50 entries total).
-    private const int MaxSegmentChips = 24;
-
-    // Chips per picker row. 8 measured to fit the default 780f pane width beside the 76f "segments"
-    // label (see BuildSegmentPicker's NoWrap note); rows beyond the first appear only when needed.
-    private const int SegmentChipsPerRow = 8;
-
-    // Field struct (no constructor) — keeps clear of the analyzer's ctor-dependency cap.
+    // Field struct (no constructor) — keeps clear of the analyzer's ctor-dependency cap. Every string is pre-formatted
+    // on rebuild so the row Funcs only index (Plugin-Performance-Rules §2).
     private struct SourceRow
     {
         public EntityId Id;
-        public string Rank, Name, Class, Dmg, Dps, Pct;
+        public string Label, Spec, Dmg, Dps, Pct;   // Label = "#1 Name"
         public float Share;
-        public ColorRgba Role;
+        public ColorRgba Wash;                       // class colour (share wash), gauge colour when the class is unknown
+        public int ProfId;                           // crest
     }
 
-    // The session list pane is a FIXED width (not proportional): wide enough for a typical map name + the meta
-    // line on one row each, so a name like "Asteria Plains" reads cleanly instead of wrapping to ~5 lines in a
-    // narrow proportional column. The detail pane keeps the remaining width via its Weight.
-    private const float HistListWidth = 180f;
+    // ── window ────────────────────────────────────────────────────────────────────────────────────────────────────
+    private WindowCenterer? _historyWinCenterer;
 
-    private HudElement BuildHistoryRoot() => new RowElement(new HudElement[]
+    // A popup dialog: free-drag + ✕ close. Shared by the initial registration (Plugin.cs) and
+    // the language rebuild. A NEW id per width change: a saved rect (the old "combatmeter.history" 780 resizable, then
+    // "combatmeter.history.v2" at 880) would otherwise override the new default width.
+    private IWindowControl RegisterHistoryWindow()
     {
-        new CellElement(BuildSessionList(), Width: HistListWidth),
-        new SeparatorElement(Vertical: true),
-        new CellElement(BuildSessionDetail(), Weight: 2f),
-    }, Gap: 8f);
-
-    private HudElement BuildSessionList()
-    {
-        var slots = new HudElement[MaxSessionSlots];
-        for (var i = 0; i < MaxSessionSlots; i++)
-        {
-            var idx = i;
-            slots[i] = new SelectableElement(
-                new ColumnElement(new HudElement[]
-                {
-                    new TextElement(() => idx < _historyView.Count ? "⏱ " + _historyView[idx].Clock : "", Emphasis: true, NoWrap: true),
-                    new TextElement(() => idx < _historyView.Count ? _historyView[idx].Meta : "", MutedCol, NoWrap: true),
-                }, Gap: 1f),
-                OnClick: () => { if (idx < _historyView.Count) SelectSession(_historyView[idx].Index); },
-                Selected: () => idx < _historyView.Count && _historyView[idx].Index == _historyIndex);
-        }
-        return new ColumnElement(new HudElement[]
-        {
-            new ConditionalElement(() => _history.Count == 0,
-                new TextElement(() => _loc.T("history.empty.noEncounters"), MutedCol)),
-            BuildHistorySearchRow(),
-            new ConditionalElement(() => _history.Count > 0,
-                new ScrollElement(new ListElement(() => _historyView.Count, slots), HistListHeight)),
-            BuildClearAllRow(),
-        }, Gap: 4f);
+        var w = _services.Windows.Register(new WindowRegistration(
+            new WindowSpec(
+                Id:          "combatmeter.history.v3",
+                Title:       _loc.T("history.window.title"),   // baked at registration; rebuilt on LanguageChanged
+                DefaultRect: new WindowRect(900f, 160f, HistWindowW, HistWindowH),
+                Category:    WindowCategory.Tools,
+                Style:       WindowPanelStyle.GlassMenu)
+            { StartVisible = false, Closable = true, Draggable = true, FixedHeight = true,   // rule 14 belt + braces (HistWindowH)
+              // NOT prebuilt (crash fix 2026-11-17). The LineChart's plot is the framework's ChartGraphic, an
+              // Il2CppInterop-INJECTED MaskableGraphic: the injector leaves the class's has_references = 0, so IL2CPP
+              // allocates it pointer-free and the GC never scans it — the UnityEvent Unity's serializer stores in its
+              // (base-ctor-less, null) m_OnCullStateChanged is reaped, and the next serializer walk (scene load
+              // UnloadUnusedAssets) runs UnityEventBase.DirtyPersistentCalls on freed memory → native crash ~1 s into
+              // the first world load. Prebuild made that graphic exist from the title screen on, every login; the old
+              // build only made it when History was opened. Restore with the `histprebuild` diag switch (Plugin.Diag.cs).
+              Prebuild = CmDiag.HistPrebuild,
+              ShouldRender = () => _services.ClientState.Phase == GamePhase.World
+                                && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
+            BuildHistoryRoot(),
+            OnClose: CloseHistory));
+        _historyWinCenterer?.Stop();   // a rebuild replaces the window; drop the old one's centerer
+        _historyWinCenterer = new WindowCenterer(_services.Framework, w);
+        return w;
     }
 
-    // Footer: the 2-click "Clear all" confirm (hidden when empty); the armed label warns before the 2nd click.
-    private HudElement BuildClearAllRow() => new ConditionalElement(() => _history.Count > 0,
+    /// <summary>Opens History centred on <paramref name="opener"/> (null = the screen centre) and in front; already open →
+    /// just fronts it. Every entry point goes through here: the HUD ⋯ › History card (opener = the meter), Shift+F9 and the
+    /// launcher tile (null).</summary>
+    internal void OpenHistory(IWindowControl? opener)
+    {
+        if (_historyWindow.IsShown) { _historyWindow.BringToFront(); return; }
+        RebuildHistorySnapshots();   // fill the list now, not on the first ~10 Hz tick after the show
+        _historyWinCenterer?.OpenCentred(opener);
+    }
+
+    // ── layout ────────────────────────────────────────────────────────────────────────────────────────────────────
+    private readonly FmtCache _histStatusFmt = new();
+    private int _historyRunCount;   // grouped runs (unfiltered), set by the snapshot rebuild
+
+    // The whole content sits in the window's ConfirmHostElement: an open confirm (Plugin.Confirm.cs) scrims all of it.
+    private HudElement BuildHistoryRoot() => new ConfirmHostElement(new ColumnElement(new HudElement[]
+    {
+        ToolHeader(HistoryIconTile(), () => _loc.T("history.window.title"),
+            new TextElement(() => _histStatusFmt.Get(
+                    _loc.T(PluralKey(_historyRunCount, "history.statusOne", "history.status")), _historyRunCount, HistoryRetention),
+                Color: () => MutedColor(), NoWrap: true) { Ellipsize = true }),
         new RowElement(new HudElement[]
         {
-            new SpacerElement(),   // push the button to the right edge
-            new ButtonElement(
-                () => _clearAllArmed ? _loc.T("history.clearAll.confirm") : _loc.T("history.clearAll"),
-                ClearAllClicked,
-                Active: () => _clearAllArmed),
-        }, Gap: 6f));
+            new CellElement(BuildRunsPanel(), Width: HistRunsW),
+            new CellElement(BuildHistoryDetail(), Width: HistDetailW),
+        }, Gap: HistGap),
+    }, Gap: HistGap), HistoryConfirm) { ConfirmLabelWidth = HistoryConfirmLabelW };
 
-    private void ClearAllClicked()
-    {
-        if (!_clearAllArmed) { _clearAllArmed = true; return; }   // first click arms
-        _clearAllArmed = false;
-        ClearAllHistory();
-    }
-
-    private HudElement BuildSessionDetail()
-    {
-        var slots = new HudElement[MaxSourceSlots];
-        for (var i = 0; i < MaxSourceSlots; i++) slots[i] = BuildSourceRowSlot(i);
-        var table = new ColumnElement(new HudElement[]
+    // 40 px accent tile + the white rewind-clock glyph (pre-drawn per size, Plugin.MeterIcon.cs HistoryIconPng) tinted
+    // with the solid-fill label colour — live with the theme like MeterIconTile. Live: re-picks the exact-size bitmap
+    // after a UI-scale change (the picker hands out the same cached arrays, so an unchanged scale costs no re-decode).
+    private HudElement HistoryIconTile() => new CellElement(new BubbleElement(new RowElement(new HudElement[]
         {
-            BuildUploadRow(),
-            BuildSegmentPicker(),
-            BuildHistoryMetricRow(),
-            BuildSessionSummaryRow(),
-            BuildHistoryChart(),
-            BuildDetailHeaderRow(),
-            new ScrollElement(new ListElement(() => _sessionRows.Count, slots), HistDetailHeight),
-        });
-        return new ColumnElement(new HudElement[]
+            new SpacerElement(8f, ToolIconSize),
+            new ImageElement(() => HistoryIconPng(24f), 24, 24) { Live = true, Tint = () => SolidLabel(AccentColor()) },
+            new SpacerElement(8f, 1f),
+        }, Gap: 0.01f))
+    {
+        FillColorFn = () => Fade(AccentColor()), CornerRadius = MathF.Round(ToolIconSize * 0.22f),
+        PaddingX = 0f, PaddingY = 0f, MaxWidth = ToolIconSize,
+    }, Width: ToolIconSize);
+
+    // A block exactly `height` tall (as long as its children fit), children top-aligned: Row[height strut, Fill
+    // Conditional[Column[children…]]]. The always-true Fill Conditional stretches to the strut's height and its column
+    // keeps the children at the top (KB "top-align inside a row"). Variants swapped by a Conditional all use it with the
+    // same height, so the swap never changes the window height.
+    // ⚠️ It used to be Column[children…, VerticalFill] with Gap PanelGap: the gap before the filler + the filler's 1 px
+    // made a FULL box 7 px taller than `height` while an empty one stayed at `height` — the History window was 7 px
+    // taller for a multi-segment run than for a single-segment one (and the RUNS panel likewise with vs without runs).
+    private static HudElement FixedBox(float height, params HudElement[] children) => new RowElement(new HudElement[]
+    {
+        new SpacerElement(1f, height),
+        new CellElement(new ConditionalElement(() => true, new ColumnElement(children, Gap: PanelGap), Fill: true),
+            Weight: 1f),
+    }, Gap: 0.01f);
+
+    // ── RUNS panel ────────────────────────────────────────────────────────────────────────────────────────────────
+    private readonly FmtCache _runsHintFmt = new();
+
+    private HudElement BuildRunsPanel() => SectionPanel(() => _loc.T("history.runs"),
+        () => _runsHintFmt.Get("{0}", _historyView.Count),
+        new RowElement(new HudElement[]
         {
-            new ConditionalElement(() => _selectedSession is null,
-                new TextElement(() => _loc.T("history.pickSession"), MutedCol)),
-            // Fill:true so the detail column grows to the (resizable) window height and the table's ScrollElement
-            // (the only flexible-height child in `table`) absorbs the slack — the chart + navigator keep their
-            // fixed heights and stay stacked above it. When the window is dragged SHORT the table area shrinks
-            // (and scrolls its rows) instead of the chart squishing and the top-anchored navigator overlapping
-            // the table. The chart root pins minHeight==preferredHeight (WindowBuilder.LineChart) so it can never
-            // be squished below the navigator's offset; this Fill routes the deficit to the scroll.
-            new ConditionalElement(() => _selectedSession is not null, table, Fill: true),
-        });
-    }
-
-    // ----- manual upload (detail-pane, acts on _selectedSession) -----
-
-    // Upload control row: the per-run upload button + status text + a Copy-link affordance once uploaded.
-    // State cycles per entry (UploadStateFor) so switching selection away and back shows the prior result.
-    private HudElement BuildUploadRow() => new RowElement(new HudElement[]
-    {
-        new ButtonElement(UploadButtonLabel, UploadSelectedClicked,
-            Active: () => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.InFlight),
-        BuildUploadRunButton(),
-        // Weighted cell, not a bare NoWrap text + Spacer: the status is often a full run URL, and NoWrap text
-        // in an unweighted cell forces the ROW wider instead of clipping. Adding "Upload all" pushed the row
-        // 39px past the pane at the default 780f width, clipping Copy link (MEASURED, history sandbox story).
-        // A weighted cell absorbs the leftover and lets the URL truncate, so Copy link keeps its place.
-        new CellElement(new TextElement(UploadStatusText, MutedCol, NoWrap: true), Weight: 1f),
-        new ConditionalElement(() => _selectedSession is { } s && UploadStateFor(s) == UploadPhase.Done,
-            new ButtonElement(() => _loc.T("common.copyLink"), CopyUploadLink)),
-    }, Gap: 8f);
-
-    private string UploadButtonLabel()
-    {
-        if (_selectedSession is not { } s) return SegmentUploadVerb();
-        if (s.LevelUuid == 0) return _loc.T("upload.noRunId.button");   // pre-update archive: identity wasn't persisted
-        return UploadStateFor(s) switch
-        {
-            UploadPhase.InFlight => _loc.T("upload.uploading"),
-            UploadPhase.Done     => _loc.T("upload.uploaded"),
-            UploadPhase.Failed   => _loc.T("upload.failedRetry"),
-            // Not a failure and not retryable: the send was withheld by this content's upload cell.
-            UploadPhase.Skipped  => _loc.T("upload.offForContent"),
-            // Recorded by a build below the server upload floor — the payload's baked-in old pluginVer is
-            // 426'd forever (even after upgrading), so this run can't upload and it isn't retryable.
-            UploadPhase.Outdated => _loc.T("upload.oldVersion"),
-            _                    => SegmentUploadVerb(),
-        };
-    }
-
-    private string UploadStatusText()
-    {
-        if (_selectedSession is not { } s) return "";
-        if (s.LevelUuid == 0) return _loc.T("upload.status.noRunId");
-        if (UploadStateFor(s) == UploadPhase.Skipped)
-            return _loc.T("upload.status.offForContent");
-        if (UploadStateFor(s) == UploadPhase.Outdated)
-            return _loc.T("upload.status.oldVersion");
-        return UploadStateFor(s) == UploadPhase.Done && UploadUrlFor(s) is { } u ? ShortRunLabel(u) : "";
-    }
-
-    private void UploadSelectedClicked()
-    {
-        if (_selectedSession is { } s && UploadStateFor(s) != UploadPhase.InFlight) UploadHistoryEntry(s);
-    }
-
-    private void CopyUploadLink()
-    {
-        if (_selectedSession is { } s && UploadUrlFor(s) is { } u)
-            UnityEngine.GUIUtility.systemCopyBuffer = u;   // plugins may reference UnityEngine; IL2CPP-safe clipboard
-    }
-
-    // The timeline chart: team-total (always) + a line per source toggled into _chartedSources. Axis scale +
-    // Y title follow _historyMetric; rebuilt (not refreshed) on metric change so the baked axis rescales.
-    private HudElement BuildHistoryChart() => new LineChartElement(
-        Series:          BuildChartSeries,
-        BucketSeconds:   () => _selectedSession is { } h ? SeriesBucketSeconds(h) : 1f,
-        FormatY:         v => FormatAmount((long)v),
-        FormatX:         FormatChartX,
-        TitleY:          () => MetricAxisTitle(_historyMetric),
-        TitleX:          () => _loc.T("history.chart.xTitle"),
-        VisibleRange:    () => _chartVisibleRange,
-        SetVisibleRange: r => _chartVisibleRange = r,
-        Width:           360f,    // minimum/initial width; FillWidth lets the plot grow with the window
-        Height:          180f,
-        ShowNavigator:   true,    // Highcharts-style overview + brush (replaces the −/+/Reset bar + scrollbar)
-        FillWidth:       true);   // plot + navigator stretch to fill the detail pane; reflows on resize
-
-    // Metric-aware column header — the primary value column + rate column relabel with _historyMetric.
-    private HudElement BuildDetailHeaderRow() => new RowElement(new HudElement[]
-    {
-        new CellElement(new TextElement(() => _loc.T("history.col.source"), MutedCol), Weight: 1f),
-        NumCell(() => MetricColumnLabel(_historyMetric), ColPrimary, muted: true),
-        NumCell(() => MetricRateLabel(_historyMetric), ColRate, muted: true),
-        NumCell(() => "%", ColPct, muted: true),
-        new CellElement(new TextElement(() => ""), Width: ColInspect),
-        new CellElement(new TextElement(() => ""), Width: ColDrill),
-    }, Gap: 6f);
-
-    // One source row: AccentRowElement (metric-share stripe) wrapped in a SelectableElement so a body click
-    // toggles the chart line, while the inner ► ButtonElement keeps its own hit area for the drill-in.
-    private HudElement BuildSourceRowSlot(int i)
-    {
-        var idx = i;
-        string F(Func<SourceRow, string> sel) => idx < _sessionRows.Count ? sel(_sessionRows[idx]) : "";
-        var row = new RowElement(new HudElement[]
-        {
-            new CellElement(new ColumnElement(new HudElement[]
+            new SpacerElement(1f, PillHeight),
+            new InputElement(() => _historySearch, _ => { }, HistRunsW - 2f * PanelPadX - 7f, OnChange: s => _historySearch = s)
+                { SingleLine = true, Placeholder = () => _loc.T("history.search") },
+        }, Gap: 6f),
+        new ConditionalElement(() => _history.Count == 0,
+            FixedBox(HistRunsBlockH, MutedLine(() => _loc.T("history.empty.noEncounters"))),
+            FixedBox(HistRunsBlockH, RunList(HistRunRows), new RowElement(new HudElement[]
             {
-                new TextElement(() => idx < _sessionRows.Count ? $"{_sessionRows[idx].Rank} {_sessionRows[idx].Name}" : "", Emphasis: true),
-                new TextElement(() => F(r => r.Class), MutedCol),
-            }, Gap: 0f), Weight: 1f),
-            NumCell(() => F(r => r.Dmg), ColPrimary),
-            NumCell(() => F(r => r.Dps), ColRate),
-            NumCell(() => F(r => r.Pct), ColPct),
-            // Inspect (frozen entity snapshot) — own hit area, shown only when this row is a player WITH a
-            // captured snapshot. The button label/visibility track InspectAvailable so non-player or
-            // no-snapshot rows show nothing (no clobbering the body click-to-chart or the ► drill).
-            // Magnifier icon (procedural, baked once) instead of the old ○/◉ glyph — clearer "inspect" affordance,
-            // matching the Entity Inspector's profile-card action. Active() highlights it while the snapshot is open.
-            new CellElement(new ConditionalElement(() => InspectAvailable(idx),
-                new ButtonElement(() => "", () => InspectRow(idx),
-                    Active: () => InspectOpen(idx), Width: ActionBtnW, Icon: () => _inspectIconPng)), Width: ColInspect),
-            new CellElement(new ButtonElement(() => DrillLabel(idx), () => DrillIn(idx),
-                Active: () => DrillOpen(idx), Width: ActionBtnW), Width: ColDrill),
-        }, Gap: 6f);
-        var accent = new AccentRowElement(row,
-            () => idx < _sessionRows.Count ? _sessionRows[idx].Role : default,
-            () => idx < _sessionRows.Count ? _sessionRows[idx].Share : 0f);
-        return new SelectableElement(accent,
-            OnClick:  () => { if (idx < _sessionRows.Count) ToggleChartSource(_sessionRows[idx].Id); },
-            Selected: () => idx < _sessionRows.Count && _chartedSources.Contains(_sessionRows[idx].Id));
+                new SpacerElement(0f),   // flexible: the pill sits at the right edge
+                DangerButton(() => _loc.T("history.clearAll"), AskClearAll,
+                    EstimateBoldLabelW(_loc.T("history.clearAll"), 13)),
+            }, Gap: 0.01f))));
+
+    private HudElement RunList(int rows)
+    {
+        var pool = new HudElement[Math.Min(HistRunPool, rows + 2)];
+        for (int i = 0; i < pool.Length; i++) pool[i] = RunSlot(i);
+        return new VirtualListElement(
+            Count:     () => _historyView.Count,
+            RowHeight: HistRunPitch, Pool: pool,
+            OnWindow:  i => _runOffset = i, Height: HistRunViewport(rows));
     }
 
-    // Right-aligned fixed-width numeric column cell.
-    private HudElement NumCell(Func<string> text, float width, bool muted = false)
-        => new CellElement(new TextElement(text, muted ? MutedCol : (Func<ColorRgba?>?)null, Align: TextAlign.Right), Width: width);
-
-    private static string FormatSeconds(float s)
+    // One run tile (40 px + 2 px gap): bold time + muted ×N over the muted "map · length · Np [· trigger]" line.
+    // Selected = accent wash + accent ring; hover = Text@0.10 over the tile (round, via the Bare selectable).
+    private HudElement RunSlot(int slot)
     {
-        var total = (int)(s < 0f ? 0f : s);
-        return $"{total / 60}:{total % 60:00}";
+        var hover = new HoverFlag();
+        var tile = new BubbleElement(new SelectableElement(new RowElement(new HudElement[]
+            {
+                new SpacerElement(2f, HistRunTileH),   // height strut + (with the 6 px gap) the 8 px left inset
+                new CellElement(new ColumnElement(new HudElement[]
+                {
+                    new RowElement(new HudElement[]
+                    {
+                        new TextElement(() => RunAt(slot) is { } e ? e.Clock : "", Color: () => TextColor(), NoWrap: true, FontSize: 13)
+                            { Bold = true },
+                        new TextElement(() => RunAt(slot) is { } e ? e.Count : "", Color: () => MutedColor(), NoWrap: true, FontSize: 12)
+                            { Bold = true },
+                    }, Gap: 4f),
+                    new TextElement(() => RunAt(slot) is { } e ? e.Meta : "", Color: () => MutedColor(), NoWrap: true)
+                        { Ellipsize = true },
+                }, Gap: 0.01f), Weight: 1f),
+                new SpacerElement(2f, 1f),             // right inset
+            }, Gap: 6f),
+            OnClick: () => { if (RunAt(slot) is { } e) SelectSession(e.Index); })
+            { Bare = true, OnHover = over => hover.On = over })
+        {
+            FillColorFn = () => Fade(RunTileFill(slot, hover.On)),
+            OutlineColorFn = () => RunSelected(slot) ? Fade(AccentColor() with { A = 0.75f }) : null,
+            CornerRadius = TileRadius, PaddingX = 0f, PaddingY = 0f,
+        };
+        return RingListSlot(tile);
     }
 
-    // Span-aware X tick label: short encounters get sub-second / integer-second precision so the few visible
-    // ticks stay distinct (a short span otherwise collapses every tick to "0:00"); longer ranges fall back to
-    // the m:ss clock. Span is read from the live zoom window so it adapts as the navigator/zoom changes it.
-    private string FormatChartX(float v)
+    // A pooled row for a CLIPPED list whose tiles wear a selection ring: [1 px, tile, 1 px] instead of ListSlot's
+    // [tile, 2 px]. Same pitch and the same 2 px between tiles, but with a viewport of rows × pitch no tile edge lies on
+    // the RectMask2D edge — flush, the scroll content's sub-pixel offset shaved the ring's top/bottom row (2026-11-17).
+    // With a 2 px row gap 1 px is all the room there is; it covers the sub-pixel cut (the ring is drawn INSIDE the tile).
+    private const float RingListPad = ListRowGap / 2f;
+
+    private static HudElement RingListSlot(HudElement tile) => new ColumnElement(new HudElement[]
     {
-        var span = _chartVisibleRange.Max - _chartVisibleRange.Min;
-        if (span < 3f) return $"{v:0.0}s";
-        if (span < 60f) return $"{(int)(v < 0f ? 0f : v)}s";
-        return FormatSeconds(v);
+        new SpacerElement(0f, RingListPad),
+        tile,
+        new SpacerElement(0f, ListRowGap - RingListPad),
+    }, Gap: 0.01f);
+
+    private SessionEntry? RunAt(int slot)
+    {
+        int i = _runOffset + slot;
+        return i >= 0 && i < _historyView.Count ? _historyView[i] : null;
     }
 
-    // Summary line + a right-aligned "Delete this session" affordance for the currently selected session. The
-    // detail-pane button avoids per-row hit-area conflicts with the SelectableElement rows in the session list.
-    private const float DeleteSessionBtnW = 132f;
+    private bool RunSelected(int slot) => RunAt(slot) is { } e && Array.IndexOf(e.Segments, _historyIndex) >= 0;
 
-    private HudElement BuildSessionSummaryRow() => new RowElement(new HudElement[]
+    private ColorRgba RunTileFill(int slot, bool hovered)
     {
-        new CellElement(new TextElement(SessionSummary, Emphasis: true), Weight: 1f),
-        // Fixed width so the row RESERVES the button's space — otherwise the weight-1 summary cell takes the full
-        // width and the button overdraws the wrapped meta text when the window is narrowed (#delete-overlap).
-        new ButtonElement(() => _loc.T("history.deleteSession"), DeleteSelectedSession,
-            Enabled: () => _selectedSession is not null, Width: DeleteSessionBtnW),
-    }, Gap: 6f);
-
-    private void DeleteSelectedSession()
-    {
-        if (_historyIndex >= 0) DeleteSession(_historyIndex);
+        var fill = RunSelected(slot) ? Over(AccentColor() with { A = SelectedWashMix }, TileColor()) : TileColor();
+        return hovered ? HoverFill(fill) : fill;
     }
 
-    // Detail summary as "label: value" fields. Map resolves the raw scene id to a friendly map/dungeon name
-    // (live game table — falls back to "Scene {id}" / the raw token off-line); Scene shows the raw id alongside.
-    private string SessionSummary()
-    {
-        if (_selectedSession is not { } h) return "";
-        return _loc.TFormat("history.detail.map", ResolveSceneName(h.SceneName)) + "   ·   "
-             + _loc.TFormat("history.detail.time", FormatSessionTimestampLong(h.ArchivedAtMs)) + "   ·   "
-             + _loc.TFormat("history.detail.duration", FormatRowDuration(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs, _loc.T("history.duration.detail"))) + "   ·   "
-             + _loc.TFormat("history.detail.players", h.MemberCount) + "   ·   "
-             + _loc.TFormat("history.detail.scene", h.SceneName ?? "—");
-    }
-
-    // Resolve a stored scene token (a raw id string like "7") to a friendly map/dungeon name via the live game
-    // World table. Falls back to "Scene {id}" for an unknown numeric id, or the raw token when non-numeric/empty.
-    private string ResolveSceneName(string? sceneToken)
-    {
-        if (string.IsNullOrEmpty(sceneToken)) return _loc.T("common.unknown");
-        if (!int.TryParse(sceneToken, out var id)) return sceneToken;
-        var name = _services.GameData.World.GetScene(id)?.Name;
-        return string.IsNullOrEmpty(name) ? _loc.TFormat("history.scene.numbered", id) : name;
-    }
-
+    // ── selection ─────────────────────────────────────────────────────────────────────────────────────────────────
     private void SelectSession(int historyIndex)
     {
-        _clearAllArmed = false;   // any other interaction disarms the clear-all confirm
         _historyIndex = historyIndex;
         _selectedSession = historyIndex >= 0 && historyIndex < _history.Count ? _history[historyIndex] : null;
+        // The run's segments NOW (the snapshot tick would only catch up ~100 ms later, showing the old run's cards).
+        foreach (var e in _historyView)
+            if (Array.IndexOf(e.Segments, historyIndex) >= 0) { _selectedSegments = e.Segments; break; }
         // A new session => no carried-over chart lines, and the visible (zoom) window resets to the full span.
         _chartedSources.Clear();
         _chartSourcesVersion++;   // mark the cached chart series stale
-        // Full span = REAL elapsed duration (see ChartExtentSeconds): the series run to the archive
-        // moment, so anchoring the window on the damage span clipped the chart short of its own data.
+        // Full span = REAL elapsed duration (see ChartExtentSeconds): the series run to the archive moment, so anchoring
+        // the window on the damage span clipped the chart short of its own data.
         var durationSeconds = _selectedSession is { } h
             ? ChartExtentSeconds(RealDurationMs(h.EnteredAtMs, h.ArchivedAtMs), h.CombatDurationMs)
             : 0f;
@@ -354,86 +282,56 @@ public sealed partial class Plugin
         RebuildSessionRows();
     }
 
-    // A popup dialog (opened from the ≡ menu): free-drag + ✕ close. EditModeDragOnly defaults false, so it
-    // drags freely (not editor-managed) even though it wears the Party chrome. Shared by the initial
-    // registration (Plugin.cs) and the metric-change rebuild below.
-    private IWindowControl RegisterHistoryWindow() => _services.Windows.Register(new WindowRegistration(
-        new WindowSpec(
-            Id:          "combatmeter.history",
-            Title:       _loc.T("history.window.title"),   // baked at registration; rebuilt on LanguageChanged (see OnLanguageChanged)
-            DefaultRect: new WindowRect(900f, 380f, 780f, 640f),
-            Category:    WindowCategory.Tools,
-            Style:       WindowPanelStyle.GlassMenu)
-        // MinHeight 480 is a secondary guard so the window can't be dragged absurdly short: the detail column's
-        // fixed content (metric + summary rows + the ~256-px chart+legend+navigator block + the table header)
-        // plus a couple of table rows fit at 480, so even at the floor the chart → navigator → table stay
-        // stacked with the table scrolling. The real fix is the Fill:true table scroll + the chart-root minHeight
-        // floor (WindowBuilder.LineChart) — this just stops a degenerate drag-to-nothing.
-        { StartVisible = false, Closable = true, Draggable = true,
-          Resizable = true, MinWidth = 600f, MinHeight = 480f, MaxWidth = 1200f, MaxHeight = 1000f,
-          ShouldRender = () => _services.ClientState.Phase == GamePhase.World
-                            && (_services.ClientState.UiState & GameUIState.Loading) == 0 },
-        BuildHistoryRoot(),
-        OnClose: CloseHistory));
+    // ── drill-in (›) / inspect (⌕) ────────────────────────────────────────────────────────────────────────────────
+    private bool DrillOpen(int row)
+        => row >= 0 && row < _sessionRows.Count && _selectedSession is { } h && _skillBreakdown is { } sb
+           && sb.Source == _sessionRows[row].Id && ReferenceEquals(sb.Session, h);
 
-    // The LineChartElement bakes axis ticks at build time; rebuild the window subtree (preserving rect +
-    // visibility) so a metric change rescales the Y axis. Framework-sanctioned Remove()+Register() pattern.
-    private void RebuildHistoryWindow()
+    private void DrillIn(int row)
     {
-        var rect = _historyWindow.Rect;
-        var wasShown = _historyWindow.IsShown;
-        _historyWindow.Remove();
-        _historyWindow = RegisterHistoryWindow();
-        // Position actually survives via the Draggable window's persisted LayoutStorage rect (restored on the
-        // next mount); this SetRect is belt-and-suspenders (a no-op while Token is null pre-Tick) and the
-        // explicit guard matters only if this window ever becomes non-Draggable/non-persisted.
-        if (rect.Width > 0f) _historyWindow.SetRect(rect);
-        _historyWindow.SetVisible(wasShown);
+        if (row < 0 || row >= _sessionRows.Count || _selectedSession is not { } h) return;
+        OnSkillBreakdownRequested?.Invoke(_sessionRows[row].Id, h);
     }
-
-    // ----- drill-in (►) -----
-
-    private string DrillLabel(int idx) => DrillOpen(idx) ? "◄" : "►";
-
-    private bool DrillOpen(int idx)
-        => idx < _sessionRows.Count && _selectedSession is { } h && _skillBreakdown is { } sb
-           && sb.Source == _sessionRows[idx].Id && ReferenceEquals(sb.Session, h);
-
-    private void DrillIn(int idx)
-    {
-        if (idx >= _sessionRows.Count || _selectedSession is not { } h) return;
-        OnSkillBreakdownRequested?.Invoke(_sessionRows[idx].Id, h);
-    }
-
-    // ----- inspect (frozen entity snapshot, issue #5) -----
 
     // Shown only for a player row whose session captured a snapshot (id.IsPlayer && Entities has the key).
-    private bool InspectAvailable(int idx)
-        => idx < _sessionRows.Count && _selectedSession is { } h
-           && _sessionRows[idx].Id.IsPlayer && h.Entities.ContainsKey(_sessionRows[idx].Id);
+    private bool InspectAvailable(int row)
+        => row >= 0 && row < _sessionRows.Count && _selectedSession is { } h
+           && _sessionRows[row].Id.IsPlayer && h.Entities.ContainsKey(_sessionRows[row].Id);
 
-    private bool InspectOpen(int idx)
-        => idx < _sessionRows.Count && _selectedSession is { } h && _snapshot is { } s
-           && s.Source == _sessionRows[idx].Id && ReferenceEquals(s.Session, h);
+    private bool InspectOpen(int row)
+        => row >= 0 && row < _sessionRows.Count && _selectedSession is { } h && _snapshot is { } s
+           && s.Source == _sessionRows[row].Id && ReferenceEquals(s.Session, h);
 
-    private void InspectRow(int idx)
+    private void InspectRow(int row)
     {
-        if (idx >= _sessionRows.Count || _selectedSession is not { } h) return;
-        OnInspectRequested?.Invoke(_sessionRows[idx].Id, h);
+        if (row < 0 || row >= _sessionRows.Count || _selectedSession is not { } h) return;
+        OnInspectRequested?.Invoke(_sessionRows[row].Id, h);
     }
 
-
     // Auto-archive segments show WHY they ended; manual/scene stay untagged (pre-v10 default).
-    // Finding 5 (review round 2026-07-27): this is a SEPARATE allow-list from ArchiveReasonTag's
-    // switch — a reason can be mapped there and still render with no suffix here if forgotten (as
-    // "bosskill" was), indistinguishable from a manual archive. internal (not private) so
-    // TriggerSuffix_covers_every_auto_reason can pin completeness against every ArchiveReason value.
+    // Finding 5 (review round 2026-07-27): this is a SEPARATE allow-list from ArchiveReasonTag's switch — a reason can
+    // be mapped there and still render with no suffix here if forgotten (as "bosskill" was), indistinguishable from a
+    // manual archive. internal (not private) so TriggerSuffix_covers_every_auto_reason can pin completeness against
+    // every ArchiveReason value. The run tile shows the READABLE name (SegmentLabel) wherever this is non-empty.
     internal static string TriggerSuffix(string trigger)
         => trigger is "wipe" or "boss" or "idle" or "stage" or "bosskill" or "boundary" or "clear" or "prepare" ? $" · {trigger}" : "";
 
+    /// <summary>Player-facing name of a stored trigger tag ("bosskill" → "Boss kill"): the archive-reason catalog
+    /// (<c>archive.reason.*</c>, shared with Settings › Archive) plus the two content tags of a pre-boss cut. An unknown
+    /// tag shows as stored. Called on rebuild only (it builds a key string).</summary>
+    private string SegmentLabel(string? trigger)
+    {
+        var tag = string.IsNullOrEmpty(trigger) ? "manual" : trigger!;
+        var key = "archive.reason." + tag;
+        var label = _loc.T(key);
+        return label == key ? tag : label;
+    }
+
+    // ── player table rows ─────────────────────────────────────────────────────────────────────────────────────────
     private void RebuildSessionRows()
     {
         _sessionRows.Clear();
+        RebuildRunHeader();
         if (_selectedSession is not { } h || h.Stats.Count == 0) return;
 
         var metric = _historyMetric;
@@ -452,157 +350,35 @@ public sealed partial class Plugin
             // "Player#<uid>" and a blank class once the players left AOI / the scene changed. Fall back to live
             // resolution only when the session predates the snapshot (legacy entries) or a source wasn't frozen.
             var frozen = h.Entities.TryGetValue(id, out var es) ? es : null;
+            var name = ArchivedName(frozen, id, self);
+            int prof = ArchivedProfession(frozen, id);
             _sessionRows.Add(new SourceRow
             {
                 Id = id,
-                Rank = $"#{i + 1}",
-                Name = !string.IsNullOrEmpty(frozen?.Name)
-                    ? frozen!.Name!
-                    : EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
-                Class = ResolveArchivedClassLine(frozen, h.EnteredAtMs, h.ArchivedAtMs, id),
+                Label = $"#{i + 1} {name}",
+                Spec = ResolveArchivedClassLine(frozen, h.EnteredAtMs, h.ArchivedAtMs, id),
                 Dmg = FormatAmount(value),                                              // primary = metric value
                 Dps = FormatAmount(ComputeArchivedDps(value, h.CombatDurationMs)),       // rate = metric / sec
                 Pct = FormatPercent(pct),
                 Share = pct,
-                Role = GaugeColorFor(id),
+                Wash = ClassPalette.TryGet(prof, out var cc) ? cc : GaugeColorFor(id),
+                ProfId = prof,
             });
         }
     }
 
-    // Class label for an ARCHIVED row: EVERY class the player actually played in THIS archive, from
-    // the frozen classSpans clamped to the archive's own [EnteredAtMs, ArchivedAtMs] window, joined in
-    // play order (e.g. "Verdant Oracle · Frost Mage"). The single frozen professionId (attr 220 at
-    // bank time) can't express "was Oracle, ended as Frost Mage", so a clear-phase archive banked
-    // after a swap mislabelled the player as the boss class (the LUz6opkvNX bug). A single-class
-    // archive bakes no spans → falls back to the frozen professionId (unchanged for the common case);
-    // an unfrozen/legacy row falls back to the live class line.
-    private string ResolveArchivedClassLine(EntitySnapshot? frozen, long startMs, long endMs, EntityId id)
+    // The crest / wash class of an archived row: the frozen base class (never a Battle Imagine transform), else live.
+    private int ArchivedProfession(EntitySnapshot? frozen, EntityId id)
     {
-        if (frozen != null)
-        {
-            // Battle Imagine transforms are not classes (owner 2026-09-25) — "Shield Knight · Natsu" → "Shield Knight".
-            var profs = PlayableClass.PlayableOnly(ClassesPlayedInWindow(frozen, startMs, endMs));
-            if (profs.Count > 0)
-            {
-                var line = ProfessionDisplayName(profs[0]);
-                for (var i = 1; i < profs.Count; i++) line += " · " + ProfessionDisplayName(profs[i]);
-                return line;
-            }
-            if (ResolveSnapProfession(frozen) is { Length: > 0 } fc) return fc;
-        }
-        return GetClassLine(id);
+        int prof = frozen != null ? PlayableClass.ResolveActorProfession(frozen) : 0;
+        return prof > 0 ? prof : id.IsPlayer ? ResolveProfessionId(id) : 0;
     }
 
-    // ProfessionId → display name (mirrors ResolveSnapProfession's resolution for a single id).
-    private string ProfessionDisplayName(int profId)
-    {
-        var prof = _services.GameData.Combat.GetProfession(profId);
-        return prof is { Name: { Length: > 0 } n } ? n : _loc.TFormat("common.classNumbered", profId);
-    }
-
-    // ----- pure formatting helpers (carried over from the IMGUI build) -----
-
-    private static long ComputeArchivedDps(long totalDamage, long durationMs)
-    {
-        long secs = durationMs / 1000; if (secs < 1) secs = 1; return totalDamage / secs;
-    }
-
-    // Compact session-list clock: "h:mm" + a single lowercase a/p meridiem (e.g. 2:14p, 11:05a).
-    private static string FormatSessionClock(long ms)
-    {
-        if (ms <= 0) return "—";
-        var dt = DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime;
-        int hour12 = dt.Hour % 12; if (hour12 == 0) hour12 = 12;
-        char ap = dt.Hour < 12 ? 'a' : 'p';
-        return $"{hour12}:{dt.Minute:00}{ap}";
-    }
-
-    private static string FormatSessionTimestampLong(long ms)
-        => ms <= 0 ? "—" : DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime.ToString("M/d/yyyy, h:mm:ss tt");
-
-    private static string FormatSessionDurationShort(long durationMs)
-    {
-        long secs = durationMs / 1000; if (secs < 0) secs = 0;
-        long m = secs / 60, s = secs % 60;
-        return m > 0 ? $"{m}m {s}s" : $"{s}s";
-    }
-
-    /// <summary>
-    /// Real elapsed span of an archived segment: archive time minus combat start. Both fields are
-    /// already persisted on every entry, so this is derivable retroactively — no schema change.
-    ///
-    /// This exists because <c>CombatDurationMs</c> is the DAMAGE-HIT SPAN, not elapsed time:
-    /// <c>FirstHitMs</c>/<c>LastHitMs</c> are written only in the damage handler
-    /// (<c>Plugin.Capture.cs</c>), so healing and damage-taken never move them. A heal-only tail has a
-    /// legitimate span of 0 while seconds of wall-clock pass — which is why the owner saw `0s` rows on
-    /// archives that plainly covered real time (report 2026-07-28, run 890357114281656320).
-    ///
-    /// Returns 0 when no combat start was recorded (otherwise <c>arch - 0</c> would report ~56 years)
-    /// and clamps a backwards server clock.
-    /// </summary>
-    internal static long RealDurationMs(long enteredAtMs, long archivedAtMs)
-    {
-        if (enteredAtMs <= 0) return 0;
-        var span = archivedAtMs - enteredAtMs;
-        return span > 0 ? span : 0;
-    }
-
-    /// <summary>
-    /// History-row duration label: real elapsed span, with the combat span in parentheses when the two
-    /// differ — `8.3s (0s combat)`. Format chosen by the owner 2026-07-28. Under a minute it carries one
-    /// decimal (their example was `8.3s`); at a minute and above it uses the existing m/s style. The
-    /// parenthetical is omitted when both render identically, so ordinary fights stay uncluttered.
-    ///
-    /// Display only — <c>CombatDurationMs</c> is reported verbatim and never adjusted, because DPS
-    /// divides by it.
-    /// </summary>
-    // combinedFormat carries the localized "{0} ({1} combat)" template (default = English) so the pinned
-    // RealDurationTests keep asserting the exact English strings while the display path localizes the word.
-    internal static string FormatRowDuration(long realMs, long combatMs, string combinedFormat = "{0} ({1} combat)")
-    {
-        if (realMs < 0) realMs = 0;
-        if (combatMs < 0) combatMs = 0;
-        // Suffix suppressed when both land on the same whole second — otherwise every ordinary fight
-        // would repeat its own number. Compared on the VALUES, not the rendered strings, so the two
-        // formats (tenths vs m/s) can't disagree about equality.
-        if (realMs / 1000 == combatMs / 1000) return FormatDurationWithTenths(realMs);
-        // Combat span uses the same whole-second formatter as the rest of the UI, so a 0 span reads
-        // "0s combat" exactly as the owner specified — not "0.0s".
-        return string.Format(combinedFormat, FormatDurationWithTenths(realMs), FormatSessionDurationShort(combatMs));
-    }
-
-    /// <summary>
-    /// Full x-extent for the session chart, in seconds. Uses the REAL elapsed span, not the damage
-    /// span: the timeline series are bucketed relative to <c>_combatStartMs</c> (= <c>EnteredAtMs</c>,
-    /// see <c>Plugin.Capture.cs</c>'s <c>TimelineFor(...).Add(..., _combatStartMs, ...)</c>), so the
-    /// series domain genuinely runs to the archive moment. Showing only the damage span cut the chart
-    /// short of the data it holds — owner ruling 2026-07-28: if the row reports real duration, the
-    /// graph must cover the whole duration too.
-    ///
-    /// Falls back to the combat span when no combat start was recorded, so the chart is never 0-wide.
-    /// DPS/HPS rates are NOT affected — those divide by <c>CombatDurationMs</c> and are untouched.
-    /// </summary>
-    internal static float ChartExtentSeconds(long realMs, long combatMs)
-    {
-        var ms = realMs > 0 ? realMs : combatMs;
-        return ms > 0 ? ms / 1000f : 0f;
-    }
-
-    // One decimal below a minute, whole seconds in m/s form above it.
-    private static string FormatDurationWithTenths(long ms)
-    {
-        if (ms < 0) ms = 0;
-        if (ms < 60_000) return $"{ms / 1000f:0.0}s";
-        long secs = ms / 1000, m = secs / 60, s = secs % 60;
-        return $"{m}m {s}s";
-    }
-
-    private static long ComputeSessionMetricTotal(EncounterHistoryEntry h, Metric m)
-    {
-        long sum = 0;
-        foreach (var s in h.Stats.Values) sum += MetricValueOf(s, m);
-        return sum;
-    }
-
-    private static string FormatPercent(float fraction) => $"{fraction * 100f:F1}%";
+    // The display name of an archived source: the frozen snapshot's name, else live resolution (legacy entries / a
+    // source that wasn't frozen). Shared by the table rows and the chart legend so both always show the same name —
+    // the legend used to resolve live only and showed "Player#<uid>" for anyone who had left AOI.
+    private string ArchivedName(EntitySnapshot? frozen, EntityId id, EntityId self)
+        => !string.IsNullOrEmpty(frozen?.Name)
+            ? frozen!.Name!
+            : EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members);
 }

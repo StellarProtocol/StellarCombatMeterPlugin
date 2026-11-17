@@ -15,7 +15,7 @@ public enum DebuffTrackMode
 
 /// <summary>
 /// Persisted user selection for the party-focus debuff strip: which debuff base ids the player has
-/// checked, the mode that decides what "checked" means, and whether unnamed (icon-only) debuffs are
+/// checked, the mode that decides what "checked" means, and whether unnamed (game-hidden) debuffs are
 /// also shown. Mirrors <c>CooldownBarSelection</c>'s persisted-set + mode + Load/Save shape, debuff-only.
 /// Unity-free — unit-testable. Stored as an int[] + two scalars in the plugin's config section.
 /// </summary>
@@ -28,7 +28,8 @@ public sealed class DebuffSelection
     /// (<see cref="DebuffTrackMode.ShowOnlySelected"/>) for a fresh install.</summary>
     public DebuffTrackMode Mode { get; set; } = DebuffTrackMode.ShowAllExceptSelected;
 
-    /// <summary>When true, effects with no display name (icon-only rows) are also eligible. Bare-model default
+    /// <summary>When true ("Hidden effects"), effects the game leaves unnamed — internal sub-buffs/procs — are also
+    /// eligible (the plugin decides "unnamed" with IGameText.IsPlaceholderName). Bare-model default
     /// false; <see cref="Load"/> supplies the product default (<see cref="DefaultTrackedEffects.ShowHidden"/>).</summary>
     public bool ShowHidden { get; set; }
 
@@ -44,18 +45,20 @@ public sealed class DebuffSelection
         if (on) _selected.Add(baseId); else _selected.Remove(baseId);
     }
 
+    /// <summary>Unticks every id (Settings › Effects "Untick all"). Mode and show-hidden are kept.</summary>
+    public void Clear() => _selected.Clear();
+
     /// <summary>
     /// The core display predicate shared by <c>DebuffStrip</c>: whether a debuff with the given base id
-    /// should appear in the strip, given whether it has a display name and a display icon.
-    /// 1) Must be renderable in the icon grid — no icon, never shown.
-    /// 2) Unless <see cref="ShowHidden"/>, must have a name — unnamed rows are hidden by default.
-    /// 3) Selection: <see cref="DebuffTrackMode.ShowOnlySelected"/> shows only checked ids;
+    /// should appear in the strip, given whether it has a display name. Every effect is drawable — one with no art of
+    /// its own gets a category placeholder tile (Plugin.EffectIcons.cs, owner 2026-11-17), so there is no icon gate.
+    /// 1) Unless <see cref="ShowHidden"/>, must have a name — unnamed rows are hidden by default.
+    /// 2) Selection: <see cref="DebuffTrackMode.ShowOnlySelected"/> shows only checked ids;
     ///    <see cref="DebuffTrackMode.ShowAllExceptSelected"/> shows every eligible id except checked ones
     ///    (so an empty selection under the default mode shows everything eligible).
     /// </summary>
-    public bool ShouldShow(int baseId, bool hasName, bool hasIcon)
+    public bool ShouldShow(int baseId, bool hasName)
     {
-        if (!hasIcon) return false;
         if (!ShowHidden && !hasName) return false;
         return Mode == DebuffTrackMode.ShowOnlySelected ? IsSelected(baseId) : !IsSelected(baseId);
     }

@@ -20,14 +20,15 @@ public class DebuffStripTests
         => new(uuid, baseId, 1, EntityId.None, stacks, 0, create, dur);
 
     [Fact]
-    public void Keeps_buffs_and_debuffs_with_an_icon_and_tags_the_kind()
+    public void Keeps_buffs_and_debuffs_with_or_without_an_icon_and_tags_the_kind()
     {
-        // The block mixes both kinds now (owner 2026-09-24): a debuff and a buff both list if named + icon'd;
-        // an icon-less row is dropped. Each entry is tagged IsBuff so the renderer colours it (red vs green).
+        // The block mixes both kinds (owner 2026-09-24): a debuff and a buff both list if named. An icon-less row is
+        // kept too — it draws a category placeholder tile (owner 2026-11-17). Each entry is tagged IsBuff so the
+        // renderer colours it (red vs green).
         var buffs = new[] { Buff(10,1,0,1000,1), Buff(20,1,0,1000,2), Buff(30,1,0,1000,3) };
         var t = Table((10,true,true),(20,false,true) /*buff*/,(30,true,false) /*no icon*/);
         var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs:0);
-        Assert.Equal(2, r.Count);
+        Assert.Equal(3, r.Count);
         Assert.Equal(10, r.E0.BaseId); Assert.False(r.E0.IsBuff);   // debuff -> red tile
         Assert.Equal(20, r.E1.BaseId); Assert.True(r.E1.IsBuff);    // buff   -> green tile
     }
@@ -175,5 +176,23 @@ public class DebuffStripTests
         var sel = new DebuffSelection();
 
         Assert.Equal(1, DebuffStrip.Build(buffs, t, sel, sel, nowMs: 1_791_000_000_000).Count);
+    }
+
+    [Fact]
+    public void IsUnnamed_gate_treats_placeholder_names_as_hidden()
+    {
+        // The plugin passes IGameText.IsPlaceholderName: a filler / "Buff <id>" name is game-hidden, like an empty one.
+        var buffs = new[] { Buff(10, 1, 0, 1000, 1), Buff(11, 1, 0, 1000, 2) };
+        System.Func<int, BuffInfo?> t = id => id == 10
+            ? new BuffInfo(10, "Buff 10", "", "path/x", default, true, 0)
+            : new BuffInfo(11, "B11", "", "path/x", default, true, 0);
+        System.Func<string?, bool> isUnnamed = n => string.IsNullOrEmpty(n) || n.StartsWith("Buff ");
+
+        Assert.Equal(2, DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs: 0).Count);
+        var r = DebuffStrip.Build(buffs, t, new DebuffSelection(), new DebuffSelection(), nowMs: 0, isUnnamed: isUnnamed);
+        Assert.Equal(1, r.Count);
+        Assert.Equal(11, r.E0.BaseId);
+        Assert.Equal(2, DebuffStrip.Build(buffs, t, new DebuffSelection { ShowHidden = true }, new DebuffSelection(),
+                                          nowMs: 0, isUnnamed: isUnnamed).Count);
     }
 }

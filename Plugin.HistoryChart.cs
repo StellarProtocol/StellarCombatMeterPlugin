@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Stellar.Abstractions.Domain;
 using Stellar.Abstractions.Services;
@@ -7,7 +8,8 @@ namespace Stellar.CombatMeter;
 /// <summary>
 /// Projects the selected session's frozen per-source <see cref="SourceSeries"/> into <see cref="ChartSeries"/>
 /// for the history timeline chart: always a muted team-total line (summed per bucket at build) plus one
-/// role-coloured line per source toggled onto the chart via <see cref="ToggleChartSource"/>.
+/// line per source toggled onto the chart via <see cref="ToggleChartSource"/>, in its archived gauge colour (class or
+/// role, per Appearance › Bar colour) — or, when that colour is already on the chart, the next unused fallback colour.
 ///
 /// <para><b>Ref-diff caching:</b> the chart's binding re-meshes only when its <c>Series()</c> reference
 /// changes (<c>ReferenceEquals</c>). So <see cref="BuildChartSeries"/> returns a cached list across frames
@@ -19,12 +21,12 @@ namespace Stellar.CombatMeter;
 public sealed partial class Plugin
 {
     private const int MaxChartSources = 8;     // top-N series captured per spec §5.2
-    private readonly HashSet<EntityId> _chartedSources = new();   // rows toggled onto the chart
+    private readonly ChartedSet _chartedSources = new();   // rows toggled onto the chart, in toggle order
     private (float Min, float Max) _chartVisibleRange;
 
     // The always-present team-total line (sits above the role-coloured source lines) uses the active theme's
     // neutral menu-text colour, read at build so it follows the active/custom theme (the chart rebuilds on
-    // metric change and re-skins on a full theme switch). Source lines keep their registry GaugeColorFor.
+    // language change and re-skins on a full theme switch). Source lines keep their registry GaugeColorFor.
     private ColorRgba TeamTotalColor => _services.Theme.Colors.MenuText;
 
     // Stable chart-series buffer + its dirty signature. The cached list INSTANCE is replaced (not mutated in
@@ -71,6 +73,7 @@ public sealed partial class Plugin
         _chartSeriesSession      = _selectedSession;
         _chartSeriesMetric       = _historyMetric;
         _chartSeriesBuiltVersion = _chartSourcesVersion;
+        _chartSeriesBarColor     = ActiveToggles().BarColor;
 
         if (_selectedSession is not { } h) { _chartSeries = series; return _chartSeries; }
 
@@ -80,14 +83,23 @@ public sealed partial class Plugin
             ToFloat(SeriesOrBucketZero(TeamTotalSeries(h, _historyMetric), teamTotalValue)),
             Emphasis: true));
 
+        // Name + colour from the FROZEN snapshot, exactly like the table row (ArchivedName / ArchivedProfession). The live
+        // EntityLabel.Resolve + GaugeColorFor(id) used before gave "Player#<uid>" and — the live class being unknown once
+        // a player left AOI, which RoleClassifier reads as DPS — the same red line for everyone.
         EntityId self = _services.CombatSnapshot.LocalEntityId;
-        foreach (var id in _chartedSources)
+        _chartColors.Clear();
+        _chartUsed.Clear();
+        _chartUsed.Add(TeamTotalColor);   // no source line may look like the team total either
+        foreach (var id in _chartedSources)   // charted order: an earlier line keeps its colour, a later clash moves
             if (h.Series.TryGetValue(id, out var s))
             {
+                var frozen = h.Entities.TryGetValue(id, out var es) ? es : null;
+                var color = DistinctChartColor(ArchivedGaugeColor(ArchivedProfession(frozen, id)));
+                _chartColors[id] = color;
                 long sourceTotal = h.Stats.TryGetValue(id, out var st) ? MetricValueOf(st, _historyMetric) : 0L;
                 series.Add(new ChartSeries(
-                    EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members),
-                    GaugeColorFor(id),
+                    ArchivedName(frozen, id, self),
+                    color,
                     ToFloat(SeriesOrBucketZero(ChannelOf(s, _historyMetric), sourceTotal))));
             }
 
@@ -98,7 +110,67 @@ public sealed partial class Plugin
     private bool ChartSeriesDirty()
         => !ReferenceEquals(_chartSeriesSession, _selectedSession)
            || _chartSeriesMetric != _historyMetric
-           || _chartSeriesBuiltVersion != _chartSourcesVersion;
+           || _chartSeriesBuiltVersion != _chartSourcesVersion
+           || _chartSeriesBarColor != ActiveToggles().BarColor;   // Appearance › Bar colour switched while open
+
+    // ── charted-line colours ─────────────────────────────────────────────────────────────────────────────────────
+    // Per charted source, filled on a series rebuild only; the table's charted-row outline reads it (one dictionary
+    // lookup per poll, no allocation) so a row's ring matches its line.
+    private readonly Dictionary<EntityId, ColorRgba> _chartColors = new();
+    private readonly List<ColorRgba> _chartUsed = new();
+    private BarColorMode _chartSeriesBarColor = (BarColorMode)(-1);
+
+    // Lines that would repeat a colour already on the chart take the next unused one of these instead. Fixed (not
+    // theme colours) and mid-bright, so every one reads on the dark plot and none is near-white (the team total).
+    private static readonly ColorRgba[] ChartFallbackColors =
+    {
+        new(0.31f, 0.76f, 0.97f, 1f),   // sky blue
+        new(1.00f, 0.72f, 0.30f, 1f),   // amber
+        new(0.73f, 0.41f, 0.78f, 1f),   // violet
+        new(0.51f, 0.78f, 0.52f, 1f),   // green
+        new(0.94f, 0.38f, 0.57f, 1f),   // pink
+        new(1.00f, 0.95f, 0.46f, 1f),   // yellow
+        new(0.30f, 0.71f, 0.67f, 1f),   // teal
+        new(0.90f, 0.45f, 0.45f, 1f),   // coral
+        new(0.63f, 0.53f, 0.50f, 1f),   // taupe
+        new(0.56f, 0.64f, 0.98f, 1f),   // periwinkle
+    };
+
+    // The archived row's gauge colour under the active Appearance › Bar colour: the class colour (Class mode, class
+    // known), else the role colour of the ARCHIVED class — same rule as the live GaugeColorFor, minus the live lookup.
+    private ColorRgba ArchivedGaugeColor(int prof)
+    {
+        if (_chartSeriesBarColor == BarColorMode.Class && ClassPalette.TryGet(prof, out var c)) return c;
+        return (RoleClassifier.Classify(prof) switch
+        {
+            Role.Tank   => _roleTankSlot,
+            Role.Healer => _roleHealerSlot,
+            _           => _roleDpsSlot,
+        }).Value;
+    }
+
+    private ColorRgba DistinctChartColor(ColorRgba wanted)
+    {
+        var pick = wanted;
+        if (IsChartColorUsed(pick))
+        {
+            pick = ChartFallbackColors[_chartUsed.Count % ChartFallbackColors.Length];   // all taken → cycle
+            foreach (var f in ChartFallbackColors)
+                if (!IsChartColorUsed(f)) { pick = f; break; }
+        }
+        _chartUsed.Add(pick);
+        return pick;
+    }
+
+    private bool IsChartColorUsed(ColorRgba c)
+    {
+        foreach (var u in _chartUsed)
+            if (MathF.Abs(u.R - c.R) + MathF.Abs(u.G - c.G) + MathF.Abs(u.B - c.B) < 0.15f) return true;
+        return false;
+    }
+
+    /// <summary>The line colour of a charted source (null = not on the chart), for the table row's outline.</summary>
+    private ColorRgba? ChartColorOf(EntityId id) => _chartColors.TryGetValue(id, out var c) ? c : null;
 
     // Sub-bucket encounters never accumulate a bucketed timeline (the encounter ended before the first bucket
     // closed), so the per-bucket channel is empty and the chart would scan an all-zero/empty window → peak 0 →
@@ -125,4 +197,18 @@ public sealed partial class Plugin
         if (!_chartedSources.Remove(id)) _chartedSources.Add(id);
         _chartSourcesVersion++;   // mark the cached series stale
     }
+}
+
+/// <summary>The charted sources in TOGGLE order (a HashSet reuses freed slots, so after a remove its enumeration order
+/// is not the order the lines were added — and the colour de-dupe keeps the EARLIER line's colour). At most a handful
+/// of entries, so a list scan is cheaper than hashing. The struct enumerator keeps <c>foreach</c> allocation-free.</summary>
+internal sealed class ChartedSet
+{
+    private readonly List<EntityId> _ids = new();
+    public int Count => _ids.Count;
+    public bool Contains(EntityId id) => _ids.Contains(id);
+    public void Add(EntityId id) { if (!_ids.Contains(id)) _ids.Add(id); }
+    public bool Remove(EntityId id) => _ids.Remove(id);
+    public void Clear() => _ids.Clear();
+    public List<EntityId>.Enumerator GetEnumerator() => _ids.GetEnumerator();
 }

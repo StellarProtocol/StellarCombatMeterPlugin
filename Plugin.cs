@@ -20,14 +20,11 @@ public sealed partial class Plugin : IStellarPlugin
 
     private const float ListWidth  = 460f;
     private const float ListHeight = 360f;   // seeds ~6 visible rows; user-resizable via the ↘ grip
-    private const float PartyFocusW = 480f;
+    private const float PartyFocusW = 560f;   // = the Party-focus minimum (Plugin.ModeGeometry.cs PartyFocusMinW)
     private const float PartyFocusH = 612f;   // 20-player: header + 4×5 grid (menus closed)
-    private const float PartyFocus5H = 330f;  // 5-player: header + single group of 5 (menus closed) — verify in-game
-    // Party-focus is a fixed grid (no Fill/scroll), so the inline Scope/Pause menu (▾) and the metric
-    // dropdown push the grid past the window bottom → overlap. Grow the window by the open panel's height
-    // instead of squeezing the grid. Heights measured from the rendered panels (main ≈69px); rounded up so
-    // a worst case leaves a tiny bottom gap rather than overlapping. Menus are mutually exclusive.
-    private const float MainMenuPanelH   = 72f;   // Scope/party-size row + separator + Pause/Archive/History row + spacer
+    // 5-player: 12 pad + 28 header + 6 gap + 20 caption + 3 + 5 × 48 rows + 4 × 3 gaps + 12 pad = 333 (redesign §1;
+    // was 330 with the old button header) — verify in-game.
+    private const float PartyFocus5H = 334f;
 
     private readonly IPluginServices _services;
     private readonly ILocalization _loc;   // plugin-scoped UI-text resolver (framework 2.1.0); reads only, never sets the language
@@ -36,8 +33,6 @@ public sealed partial class Plugin : IStellarPlugin
     private IWindowControl _historyWindow = null!;
     private IWindowControl _skillBreakdownWindow = null!;
     private IWindowControl _snapshotWindow = null!;
-    private IWindowControl _settingsWindow = null!;
-    private IWindowControl _debuffConfigWindow = null!;
     private IHotkeyAction _toggleAction = null!;
     private IHotkeyAction _historyAction = null!;
     private IHotkeyAction _resetAction = null!;
@@ -162,7 +157,6 @@ public sealed partial class Plugin : IStellarPlugin
     private Metric     _metric = Metric.Dps;
     private FilterMode _filter = FilterMode.Party;
     private ViewMode   _viewMode = ViewMode.List;
-    private bool       _lastViewWas20;   // tracks party-size view (5↔20) to re-fit the window on a live switch
     private bool       _paused;
 
     // Per-mode window geometry (the framework persists one rect per window id, so the plugin remembers each
@@ -175,14 +169,16 @@ public sealed partial class Plugin : IStellarPlugin
     {
         _services = services;
         _loc = services.Localization;   // i18n P1: plugin-scoped catalog façade (auto-discovers embedded Lang/*.json)
-        _services.Log.Info("[CombatMeter] plugin constructed");
+        _services.Log.Info("[CombatMeter] plugin constructed [diag] " + CmDiag.Summary);   // crash-bisect switches (Plugin.Diag.cs)
 
         _inspectIconPng  = BuildInspectMagnifierPng();   // procedural magnifier for the history Inspect button (main thread)
         _locationPinPng  = BuildLocationPinPng();        // flat-white location pin for the Marking header button
         _checkmarkPng    = BuildCheckmarkPng();          // flat-white checkmark for the Ready Check header button
         _megaphonePng    = BuildMegaphonePng();          // flat-white megaphone for the Convene header button
         _countdownPng    = BuildCountdownPng();          // flat-white stopwatch for the Countdown header button
-        _settingsGearPng = LoadSettingsGearPng();        // embedded gear icon for the header Settings button
+        _resetPng        = CmDiag.NoNewIcons ? null : BuildResetPng(); // flat-white ↺ for the header Reset button (Plugin.HudIcons.cs)
+        _morePng         = CmDiag.NoNewIcons ? null : BuildMorePng();  // flat-white ⋯ for the header More button
+        BuildEncounterIcons();                           // header Pause / Resume / Archive glyphs + divider (Plugin.HudIcons.Encounter.cs)
 
         _prefs = _services.Config.GetSection("combatmeter");
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
@@ -247,7 +243,7 @@ public sealed partial class Plugin : IStellarPlugin
         _listW = _prefs.Get("listW", ListWidth);   _listH = _prefs.Get("listH", ListHeight);
         _listX = _prefs.Get("listX", 2099f);       _listY = _prefs.Get("listY", 664f);
         _partyX = _prefs.Get("partyX", 2072f);     _partyY = _prefs.Get("partyY", 333f);
-        _partyW = _prefs.Get("partyW", PartyFocusW);
+        _partyW = Math.Max(_prefs.Get("partyW", PartyFocusW), PartyFocusMinW);   // a saved narrower width grows once
 
         var startRect = _viewMode == ViewMode.PartyFocus
             ? new WindowRect(_partyX, _partyY, _partyW > 0 ? _partyW : PartyFocusW, PartyFocusHeight())
@@ -260,8 +256,12 @@ public sealed partial class Plugin : IStellarPlugin
                 Category:    WindowCategory.HUD,
                 Style:       WindowPanelStyle.Borderless)
             { Draggable = true, EditModeDragOnly = true,
-              Resizable = true, MinWidth = 500f, MinHeight = 160f, MaxWidth = 760f, MaxHeight = 1000f,
+              // The List view's limits; the Party view swaps in its own at runtime (ApplyViewSizeLimits, Plugin.ModeGeometry.cs).
+              Resizable = true, MinWidth = ListMinW, MinHeight = ListMinH, MaxWidth = MeterMaxW, MaxHeight = ListMaxH,
               ZOrder = -100,   // background layer: every other Stellar window draws over the meter
+              // "Background": rounded theme Panel behind the whole meter (Plugin.Header.cs); "Foreground": fades the content
+              // above it, the panel stays outside the faded group (Plugin.Settings.cs). Delegates built once here.
+              BackgroundColor = MeterBackdropColor, BackgroundCornerRadius = 6, ContentOpacity = MeterForegroundFn,
               // In-world meter HUD: draw only in the World phase, and hide behind blocking overlays (old
               // AutoHideBehindGameMenus == Blocking) and behind any menu incl. the line-selector (AnyMenu).
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World
@@ -271,25 +271,26 @@ public sealed partial class Plugin : IStellarPlugin
               // skips a hidden window, so the fill reads the empty row caches; the body Conditionals prebuild their rows.
               Prebuild = true },
             BuildMainRoot()));
+        ApplyViewSizeLimits();   // pre-mount is fine: the framework applies them at mount, before the saved-layout restore
 
         _historyWindow = RegisterHistoryWindow();
         _skillBreakdownWindow = RegisterSkillBreakdownWindow();
         _snapshotWindow = RegisterSnapshotWindow();
 
-        _settingsWindow = BuildAndRegisterSettings();
-        _archiveSettingsWindow = BuildAndRegisterArchiveSettings();
-        _debuffConfigWindow = BuildAndRegisterDebuffConfig();
+        _helpWindow = RegisterHelpWindow();             // Plugin.Style.Help.cs — the shared "?" popover
+        _settingsWindow = BuildAndRegisterSettings();   // Plugin.SettingsWindow.cs — the merged tabbed settings window
         _debuffTip = BuildAndRegisterDebuffTip();   // Plugin.DebuffTooltip.cs — click a debuff cell -> name+desc popup
         _rowMenuWindow = RegisterRowMenuWindow();
         RegisterHotkeys();
         RegisterLauncher();
+        _moreWindow = RegisterMorePopover();   // Plugin.MorePopover.cs — the header ⋯ popover
     }
 
     private void RegisterHotkeys()
     {
         _toggleAction = _services.Hotkeys.DeclareAction(
             new HotkeyAction("combatmeter.toggle", _loc.T("hotkey.toggle"), new KeyBinding(StellarKeyCode.F9)),
-            callback: () => _mainWindow.SetVisible(!_mainWindow.IsShown));
+            callback: ToggleMeterShown);   // Plugin.Hub.cs — the hub's Meter card does the same
 
         _historyAction = _services.Hotkeys.DeclareAction(
             new HotkeyAction("combatmeter.history-toggle", _loc.T("hotkey.history"),
@@ -327,6 +328,8 @@ public sealed partial class Plugin : IStellarPlugin
         UnwireSocialCapture();
         _services.Loadout.LiveStateChanged         -= OnLoadoutLiveStateChanged;
         OnSkillBreakdownRequested -= HandleSkillBreakdownRequested;
+        UnhookGameText();      // IGameText.Ready (Plugin.SkillBreakdown.Names.cs)
+        DestroyEffectPlaceholders();   // decoded placeholder tiles (Plugin.EffectIcons.cs)
         OnInspectRequested -= HandleInspectRequested;
 
         _roleDpsSlot.Dispose();
@@ -349,8 +352,11 @@ public sealed partial class Plugin : IStellarPlugin
         _toggleAction.Dispose();
         DisposeLauncher();
         _rowMenuWindow.Remove();
-        _debuffConfigWindow.Remove();
+        _moreWindow.Remove();
+        _historyWinCenterer?.Stop();
+        _settingsCenterer?.Stop();
         _settingsWindow.Remove();
+        _helpWindow.Remove();
         _snapshotWindow.Remove();
         _skillBreakdownWindow.Remove();
         _historyWindow.Remove();

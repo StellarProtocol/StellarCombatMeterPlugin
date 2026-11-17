@@ -153,42 +153,9 @@ public sealed partial class Plugin
             : "[CombatMeter] upload target set to PRODUCTION — takes effect after relaunch");
     }
 
-    // The Settings-window section (Plugin.SettingsArchive.cs's BuildAutoArchiveSettingsRoot places it
-    // between the Uploads section and the Discord webhook). Pure builder over explicit Func delegates — no `_loc`/
-    // `_prefs`/`_services` reads inside it — so BuildUploadTargetSection is testable standalone with
-    // the gate, labels and toggle state all supplied by the caller.
-    private HudElement UploadTargetSection()
-        => BuildUploadTargetSection(
-            _isTestingBuildGate,
-            () => _loc.T("settings.section.uploadTarget"),
-            () => _loc.T("settings.toggle.uploadTesting"),
-            () => UploadTargetIsTesting,
-            v => SetUploadTargetTesting(v),
-            () => _loc.T(_uploadTargetPendingRelaunch ? "settings.uploadTarget.relaunch" : "settings.uploadTarget.hint"));
-
-    /// <summary>Builds the ConditionalElement gating the whole upload-target section on
-    /// <paramref name="isTestingBuild"/>. <c>Then</c> = separator + emphasised section header (the
-    /// Settings window's section idiom) + toggle row + hint/relaunch text; <c>Else</c> = a zero-height
-    /// spacer, so a stable build renders nothing here (not even the separator).</summary>
-    internal static HudElement BuildUploadTargetSection(
-        Func<bool> isTestingBuild, Func<string> sectionLabel, Func<string> toggleLabel,
-        Func<bool> getToggle, Action<bool> setToggle, Func<string> hintText)
-        => new ConditionalElement(
-            isTestingBuild,
-            new ColumnElement(new HudElement[]
-            {
-                new SeparatorElement(),
-                new TextElement(sectionLabel, Emphasis: true),
-                new RowElement(new HudElement[]
-                {
-                    new ToggleElement(() => "", getToggle, setToggle),
-                    new TextElement(toggleLabel),
-                }, Gap: 8f),
-                new TextElement(hintText, MutedColStatic),
-            }, Gap: 3f),
-            new SpacerElement(Height: 0f));
-
-    // Static twin of the instance MutedCol() (Plugin.Header.cs) — BuildUploadTargetSection is static
-    // so it cannot reference the instance method as a Func group.
-    private static ColorRgba? MutedColStatic() => new ColorRgba(0.66f, 0.70f, 0.73f, 1f);
+    /// <summary>Gates the Settings › Uploads "Testing server" panel (built by Plugin.SettingsUploads.cs's
+    /// UploadTargetSection) on <paramref name="isTestingBuild"/>: <c>Then</c> = the panel, <c>Else</c> = a zero-height
+    /// spacer, so a stable build renders nothing here. Pure — the gate is injectable, so it is testable standalone.</summary>
+    internal static HudElement BuildUploadTargetSection(Func<bool> isTestingBuild, HudElement panel)
+        => new ConditionalElement(isTestingBuild, panel, new SpacerElement(Height: 0f));
 }

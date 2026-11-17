@@ -13,7 +13,8 @@ public sealed partial class Plugin
 {
     private Texture2D? _micTex, _headTex, _mutedTex;
 
-    private static readonly ColorRgba TalkBorderCol = new(0.36f, 0.85f, 0.46f, 1f); // green
+    // Speaking ring #5CD975 (approved redesign §1; the rounded row draws RowBorder as a rounded outline).
+    private static readonly ColorRgba TalkBorderCol = new(0x5C / 255f, 0xD9 / 255f, 0x75 / 255f, 1f);
 
     // Name-line voice icon for a row: party members get a mic/headphone/muted glyph by mic state;
     // non-party rows and the toggle-off state get none (null → the cell stays hidden).
