@@ -88,7 +88,7 @@ public sealed partial class Plugin
     // ── window ────────────────────────────────────────────────────────────────────────────────────────────────────
     private WindowCenterer? _historyWinCenterer;
 
-    // A popup dialog: free-drag + ✕ close. Shared by the initial registration (Plugin.cs), the metric-change rebuild and
+    // A popup dialog: free-drag + ✕ close. Shared by the initial registration (Plugin.cs) and
     // the language rebuild. A NEW id: the old "combatmeter.history" carries a persisted 780-wide resizable rect.
     private IWindowControl RegisterHistoryWindow()
     {
@@ -125,18 +125,6 @@ public sealed partial class Plugin
         if (_historyWindow.IsShown) { _historyWindow.BringToFront(); return; }
         RebuildHistorySnapshots();   // fill the list now, not on the first ~10 Hz tick after the show
         _historyWinCenterer?.OpenCentred(opener);
-    }
-
-    // The LineChartElement bakes axis ticks at build time; rebuild the window subtree (preserving rect + visibility) so a
-    // metric change rescales the Y axis. Framework-sanctioned Remove()+Register() pattern.
-    private void RebuildHistoryWindow()
-    {
-        var rect = _historyWindow.Rect;
-        var wasShown = _historyWindow.IsShown;
-        _historyWindow.Remove();
-        _historyWindow = RegisterHistoryWindow();
-        if (rect.Width > 0f) _historyWindow.SetRect(rect);
-        _historyWindow.SetVisible(wasShown);
     }
 
     // ── layout ────────────────────────────────────────────────────────────────────────────────────────────────────

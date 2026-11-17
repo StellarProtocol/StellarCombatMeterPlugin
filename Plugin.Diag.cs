@@ -13,12 +13,13 @@ namespace Stellar.CombatMeter;
 //   nohistchart        build History WITHOUT the LineChart (a fixed spacer instead) — isolates the chart itself
 //   nosettingsprebuild no WindowSpec.Prebuild / tab Prebuild on the merged settings window (combatmeter.config)
 //   nonewicons         skip the new drawn header glyphs (↺ ⋯ ‖ ▶ archive divider) — header buttons draw blank
+//   histperf           log the Combat History metric-switch recompute time ([HistPerf], Plugin.HistoryMetric.cs)
 // Static and read-only after the first read: zero per-frame cost.
 internal static class CmDiag
 {
     public const string FileName = "stellar.combatmeter.diag.txt";
 
-    public static readonly bool HistPrebuild, NoHistChart, NoSettingsPrebuild, NoNewIcons;
+    public static readonly bool HistPrebuild, NoHistChart, NoSettingsPrebuild, NoNewIcons, HistPerf;
     public static readonly string Summary;
 
     static CmDiag()
@@ -40,9 +41,10 @@ internal static class CmDiag
                 case "nohistchart":        NoHistChart = true; break;
                 case "nosettingsprebuild": NoSettingsPrebuild = true; break;
                 case "nonewicons":         NoNewIcons = true; break;
+                case "histperf":           HistPerf = true; break;
             }
         }
         Summary = $"histprebuild={HistPrebuild} nohistchart={NoHistChart} nosettingsprebuild={NoSettingsPrebuild} "
-                + $"nonewicons={NoNewIcons}";
+                + $"nonewicons={NoNewIcons} histperf={HistPerf}";
     }
 }

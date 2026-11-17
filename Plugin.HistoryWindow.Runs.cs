@@ -14,12 +14,11 @@ public sealed partial class Plugin
     // ----- snapshots -----
 
     // Dirty key of the last view rebuild. The window ticks this at ~10 Hz while shown, but the history only changes on an
-    // archive / delete / search / selection / metric / language change — so the grouping + every row string are rebuilt
+    // archive / delete / search / selection / language change — so the grouping + every row string are rebuilt
     // only then, never per tick (Plugin-Performance-Rules §2: no per-poll allocation).
     private int _hvCount = -1, _hvIndex = -2;
     private EncounterHistoryEntry? _hvFirst, _hvLast;
     private string? _hvSearch, _hvLang;
-    private Metric _hvMetric = (Metric)(-1);
 
     private void RebuildHistorySnapshots()
     {
@@ -29,7 +28,7 @@ public sealed partial class Plugin
         string lang = _loc.Language;
         if (_history.Count == _hvCount && ReferenceEquals(first, _hvFirst) && ReferenceEquals(last, _hvLast)
             && ReferenceEquals(_historySearch, _hvSearch) && _historyIndex == _hvIndex
-            && ReferenceEquals(lang, _hvLang) && _historyMetric == _hvMetric)
+            && ReferenceEquals(lang, _hvLang))   // the metric is NOT a key: no run-list string depends on it (SelectHistoryMetric)
             return;
 
         _historyView.Clear();
@@ -82,7 +81,7 @@ public sealed partial class Plugin
         else RebuildSessionRows();
 
         _hvCount = _history.Count; _hvFirst = first; _hvLast = last; _hvSearch = _historySearch;
-        _hvIndex = _historyIndex; _hvLang = lang; _hvMetric = _historyMetric;
+        _hvIndex = _historyIndex; _hvLang = lang;
     }
 
     // Live history search (owner 2026-08-15): filters the grouped run rows by map/verdict/clock as-you-type (the next
