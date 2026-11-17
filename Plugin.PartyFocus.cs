@@ -12,6 +12,9 @@ public sealed partial class Plugin
     private static readonly int GridSize = MeterAggregator.Groups * MeterAggregator.SlotsPerGroup;
     private readonly MeterRowData[] _gridRows = new MeterRowData[GridSize];
     private int _gridOccupied;   // occupied slots in the last snapshot (the header status "20 players")
+    // Per-slot "hide this slot" (solo AND empty) + the solo flag itself, both refreshed in RebuildPartyFocusRows.
+    private readonly bool[] _gridSlotHidden = new bool[GridSize];
+    private bool _partyFocusSolo;
     private readonly List<PartyMember> _focusRoster = new();
 
     // The grid auto-follows the live party size: a 20-player raid renders the 2×2 four-group grid; a 5-player
@@ -54,7 +57,10 @@ public sealed partial class Plugin
         for (var slot = 0; slot < MeterAggregator.SlotsPerGroup; slot++)
         {
             var idx = group * MeterAggregator.SlotsPerGroup + slot;
-            children[slot + 1] = new DragSlotElement(
+            // Solo (no party): an empty slot is hidden outright — only the self row shows (owner 2026-11-17). The flag is
+            // computed at ~10 Hz in RebuildPartyFocusRows, so the per-frame predicate is one array read. The window keeps
+            // its fixed PartyFocusHeight(), so the freed area just stays blank (no resize/jump).
+            children[slot + 1] = new ConditionalElement(() => !_gridSlotHidden[idx], new DragSlotElement(
                 // fw 2.33.0 opt-in house-style row; empty slots render as recessed tiles (MeterRowData.IsEmptySlot).
                 new MeterRowElement(() => _gridRows[idx], OnRightClick: () => OnGridSlotRightClick(idx))
                     { Style = MeterRowStyle.Rounded },
@@ -62,7 +68,7 @@ public sealed partial class Plugin
                 OnDrop: OnGridDrop,
                 // Leader-only, Raid20-only, and only an OCCUPIED slot is a drag source (an empty "—" slot
                 // would otherwise spawn a ghost of a blank card). Empty slots remain valid drop TARGETS.
-                CanDrag: () => IsRaid20View && _services.PartySnapshot.IsLeader && _gridRows[idx].Id.IsPlayer);
+                CanDrag: () => IsRaid20View && _services.PartySnapshot.IsLeader && _gridRows[idx].Id.IsPlayer));
         }
         return new ColumnElement(children, Gap: MeterRowGap);
     }
@@ -77,12 +83,14 @@ public sealed partial class Plugin
         // Empty-slot labels: catalog lookups (cached strings); the invite hint only for the leader of an existing party
         // (the right-click invite is leader-only, OnGridSlotRightClick).
         string emptyName = _loc.T("hud.slot.empty");
-        string? emptyHint = PartyExists && _services.PartySnapshot.IsLeader ? _loc.T("hud.slot.inviteHint") : null;
+        bool solo = !PartyExists;
+        _partyFocusSolo = solo;
+        string? emptyHint = !solo && _services.PartySnapshot.IsLeader ? _loc.T("hud.slot.inviteHint") : null;
         int occupied = 0;
         for (var i = 0; i < GridSize; i++)
         {
-            if (grid[i] is { } row) { _gridRows[i] = BuildRowData(row, i + 1, elapsed, collapse: false); occupied++; }
-            else _gridRows[i] = EmptySlot(i + 1, tilePx, emptyName, emptyHint);
+            if (grid[i] is { } row) { _gridRows[i] = BuildRowData(row, i + 1, elapsed, collapse: false); occupied++; _gridSlotHidden[i] = false; }
+            else { _gridRows[i] = EmptySlot(i + 1, tilePx, emptyName, emptyHint); _gridSlotHidden[i] = solo; }
         }
         _gridOccupied = occupied;
         CountGroups();

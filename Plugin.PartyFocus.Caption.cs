@@ -66,6 +66,8 @@ public sealed partial class Plugin
 
     private string GroupHint(int group)
     {
+        // Solo: no "1 / 5" count — there are no slots to fill (empty slots are hidden, Plugin.PartyFocus.cs).
+        if (_partyFocusSolo) return "";
         int occ = _groupOccupied[group], ready = _groupReady[group];
         bool check = _readyCheckInProgress && occ > 0;
         int key = occ | ready << 8 | (check ? 1 << 16 : 0);
