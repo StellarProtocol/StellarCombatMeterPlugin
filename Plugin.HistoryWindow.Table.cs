@@ -10,8 +10,8 @@ namespace Stellar.CombatMeter;
 // columns never shift) and a round › drill-in (‹ while its breakdown is open). A click on the tile toggles that
 // player's chart line; a charted row wears the accent ring.
 //
-// ⚠️ The share wash is the framework AccentRowElement (12 % wash + a 3 px stripe, square-cornered) inside the rounded
-// tile: there is no rounded, stripe-less share wash in the toolkit (SDK 2.30) — a fw opt-in is needed for the exact look.
+// The share wash is the framework AccentRowElement in its fw 2.33.0 rounded mode (CornerRadius = the tile radius → no
+// stripe, left corners follow the tile, straight right cut) at the approved 22 % wash.
 public sealed partial class Plugin
 {
     private const float TblTileH   = 34f;
@@ -20,6 +20,7 @@ public sealed partial class Plugin
     private const float TblColAmt  = 64f, TblColRate = 56f, TblColPct = 48f;
     private const float TblBtn     = IconButtonSize;             // 28 px round buttons
     private const float TblCrest   = 18f;
+    private const float TblWashAlpha = 0.22f;                    // approved mockup `.trow .sh` opacity
     private const float AccentRowPadX = 6f, AccentRowPadY = 3f;  // AccentRowElement's own padding (WindowBuilder.MeterRow)
 
     private int _srcOffset;   // first table row shown by the virtual list
@@ -101,7 +102,8 @@ public sealed partial class Plugin
         }, Gap: 6f);
         var wash = new AccentRowElement(row,
             () => TblRow(slot) is var i and >= 0 ? _sessionRows[i].Wash : default,
-            () => TblRow(slot) is var i and >= 0 ? _sessionRows[i].Share : 0f);
+            () => TblRow(slot) is var i and >= 0 ? _sessionRows[i].Share : 0f)
+            { CornerRadius = TileRadius, WashAlpha = TblWashAlpha };
         var tile = new BubbleElement(new SelectableElement(wash,
             OnClick: () => { if (TblRow(slot) is var i and >= 0) ToggleChartSource(_sessionRows[i].Id); })
             { Bare = true, OnHover = over => hover.On = over })

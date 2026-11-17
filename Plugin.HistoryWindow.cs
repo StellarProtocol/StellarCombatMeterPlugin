@@ -113,7 +113,8 @@ public sealed partial class Plugin
     }
 
     /// <summary>Opens History centred on <paramref name="opener"/> (null = the screen centre) and in front; already open →
-    /// just fronts it. The HUD's ⋯ › History card should call this with the meter window.</summary>
+    /// just fronts it. Every entry point goes through here: the HUD ⋯ › History card (opener = the meter), Shift+F9 and the
+    /// launcher tile (null).</summary>
     internal void OpenHistory(IWindowControl? opener)
     {
         if (_historyWindow.IsShown) { _historyWindow.BringToFront(); return; }

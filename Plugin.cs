@@ -350,7 +350,7 @@ public sealed partial class Plugin : IStellarPlugin
         DisposeLauncher();
         _rowMenuWindow.Remove();
         _moreWindow.Remove();
-        _historyCenterer?.Stop();
+        _historyWinCenterer?.Stop();
         _settingsCenterer?.Stop();
         _settingsWindow.Remove();
         _helpWindow.Remove();

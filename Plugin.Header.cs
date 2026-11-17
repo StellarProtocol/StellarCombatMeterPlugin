@@ -163,10 +163,12 @@ public sealed partial class Plugin
         NoteArchivedFeedback(durationMs);
     }
 
+    // Shift+F9 and the launcher tile. Opening goes through OpenHistory (centred on the screen + list filled at once) like
+    // every other entry point.
     private void ToggleHistory()
     {
         if (_historyWindow.IsShown) CloseHistory();
-        else _historyWindow.SetVisible(true);
+        else OpenHistory(null);
     }
 
     private void CloseHistory()

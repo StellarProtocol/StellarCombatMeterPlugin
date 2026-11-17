@@ -204,21 +204,11 @@ public sealed partial class Plugin
 
     // Cards: close the popover, then open the window centred on the meter and in front (SDL §5). Already open → front
     // it only (CLAUDE.md Rule 5 exception: re-opening an already-visible child from its parent).
-    private WindowCenterer? _historyCenterer;
-    private IWindowControl? _historyCentererWin;
-
+    // History's centerer lives with the window (Plugin.HistoryWindow.cs) and is re-bound on every re-registration.
     private void OpenHistoryFromHud()
     {
         CloseMorePopover();
-        if (_historyWindow.IsShown) { _historyWindow.BringToFront(); return; }
-        // The history window is re-registered on a language change (Plugin.Localization.cs) → bind a fresh centerer.
-        if (_historyCenterer == null || !ReferenceEquals(_historyCentererWin, _historyWindow))
-        {
-            _historyCenterer?.Stop();
-            _historyCenterer = new WindowCenterer(_services.Framework, _historyWindow);
-            _historyCentererWin = _historyWindow;
-        }
-        _historyCenterer.OpenCentred(_mainWindow);
+        OpenHistory(_mainWindow);
     }
 
     private void OpenSettingsFromHud()

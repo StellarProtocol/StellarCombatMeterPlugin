@@ -116,7 +116,11 @@ public sealed partial class Plugin
             {
                 new SpacerElement(SkillIconSize, 4f),
                 new CellElement(new BarElement(() => SkillRowAt(slot) is var i and >= 0 ? _skillRows[i].Share : 0f, default)
-                    { Height = 4f, FillWidth = true, FillColorFn = () => Fade(_sbGauge) }, Weight: 1f),
+                    {
+                        Height = 4f, FillWidth = true, FillColorFn = () => Fade(_sbGauge),
+                        // fw 2.33.0 opt-ins: rounded track + fill (a 4 px capsule), theme-live recessed track
+                        CornerRadius = 2f, TrackColorFn = () => Fade(TrackColor()),
+                    }, Weight: 1f),
             }, Gap: SkillIconGap),
         }, Gap: 3f))
         {
