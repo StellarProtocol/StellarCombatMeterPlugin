@@ -7,9 +7,10 @@ namespace Stellar.CombatMeter;
 /// <summary>
 /// Main meter window root + its 28 px header (approved redesign 2026-11-17 §1,
 /// _scratch\prototypes\combatmeter-redesign-APPROVED.md): metric pill dropdown · List | Party segmented control · live
-/// muted status · flexible gap · leader tools (Party-focus leader only) · ↺ Reset · ⋯ More. The old ▾ inline menu is
-/// GONE — it grew the HUD by 72 px; its contents (scope / party size / pause / archive / history / settings) live in the
-/// ⋯ popover (Plugin.MorePopover.cs), so the HUD never changes height. Metric/scope/mode changes persist via PersistPrefs().
+/// muted status (flexible, ellipsizes first) · leader tools + divider (Party-focus leader only) · Pause · Archive ·
+/// ↺ Reset · ⋯ More. The old ▾ inline menu is GONE — it grew the HUD by 72 px; scope / party size / history / settings
+/// live in the ⋯ popover (Plugin.MorePopover.cs), Pause / Archive in the header (Plugin.HudEncounter.cs), so the HUD
+/// never changes height. Metric/scope/mode changes persist via PersistPrefs().
 /// </summary>
 public sealed partial class Plugin
 {
@@ -81,13 +82,15 @@ public sealed partial class Plugin
         new CellElement(new TextElement(HudStatusText, Color: HudStatusColor, NoWrap: true, FontSize: 12)
             { RichEmoji = true, Ellipsize = true }, Weight: 1f),
         new ConditionalElement(() => ShowLeaderTools, BuildLeaderTools()),
+        BuildPauseButton(),     // Plugin.HudEncounter.cs (addendum: Pause + Archive header icons)
+        BuildArchiveButton(),
         HudIconButton(() => _resetPng, Clear),
         HudIconButton(() => _morePng, static () => { }, ToggleMorePopover),
     }, Gap: 6f);
 
     // Party-focus + in a party + leader — exactly the old header gate. Mark / ready check / convene / countdown as round
-    // 28 px icon buttons; while the ready-check cooldown runs, that button is RECESSED and shows the seconds left. The
-    // trailing 6 px spacer is the extra gap before ↺ (prototype 1b).
+    // 28 px icon buttons; while the ready-check cooldown runs, that button is RECESSED and shows the seconds left. A 1 px
+    // MenuText@14 % divider, 18 px tall, separates them from Pause / Archive / ↺ / ⋯ (addendum 2026-11-17).
     private bool ShowLeaderTools => _viewMode == ViewMode.PartyFocus
                                     && _services.PartySnapshot.IsInParty && _services.PartySnapshot.IsLeader;
 
@@ -99,7 +102,7 @@ public sealed partial class Plugin
             HudRecessedLabel(ReadyCheckLabel)),
         HudIconButton(() => _megaphonePng, LeaderConvene),
         HudIconButton(() => _countdownPng, LeaderCountdown),
-        new SpacerElement(6f, 1f),
+        new ImageElement(() => _dividerPng, 1, 18) { Tint = () => Fade(TextColor() with { A = 0.14f }) },
     }, Gap: 6f);
 
     // DPS / HPS / Taken captions, rebuilt only when the language changes (the dropdown polls this every refresh).
@@ -154,8 +157,8 @@ public sealed partial class Plugin
         ManualArchive();
     }
 
-    // Visible acknowledgment that a MANUAL archive landed (banked) — a success toast on the meter, plus the ⋯ popover's
-    // inline "✓ Archived (102 s) · History 37" line (Plugin.MorePopover.cs). Called from ManualArchive only when
+    // Visible acknowledgment that a MANUAL archive landed (banked) — a success toast on the meter, plus the header's green
+    // ✓ flash on Archive and "✓ Archived (102 s) · History 37" status line (Plugin.HudEncounter.cs). Called from ManualArchive only when
     // reason == Manual, so auto archives (scene/stage/boss/idle) don't spam the toast surface.
     private void NotifyManualArchived(long durationMs)
     {

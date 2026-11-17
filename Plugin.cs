@@ -20,7 +20,7 @@ public sealed partial class Plugin : IStellarPlugin
 
     private const float ListWidth  = 460f;
     private const float ListHeight = 360f;   // seeds ~6 visible rows; user-resizable via the ↘ grip
-    private const float PartyFocusW = 480f;
+    private const float PartyFocusW = 560f;   // = the Party-focus minimum (Plugin.ModeGeometry.cs PartyFocusMinW)
     private const float PartyFocusH = 612f;   // 20-player: header + 4×5 grid (menus closed)
     // 5-player: 12 pad + 28 header + 6 gap + 20 caption + 3 + 5 × 48 rows + 4 × 3 gaps + 12 pad = 333 (redesign §1;
     // was 330 with the old button header) — verify in-game.
@@ -180,6 +180,7 @@ public sealed partial class Plugin : IStellarPlugin
         _settingsGearPng = LoadSettingsGearPng();        // embedded gear icon for the ⋯ popover's Settings card + launcher tile
         _resetPng        = BuildResetPng();              // flat-white ↺ for the header Reset button (Plugin.HudIcons.cs)
         _morePng         = BuildMorePng();               // flat-white ⋯ for the header More button
+        BuildEncounterIcons();                           // header Pause / Resume / Archive glyphs + divider (Plugin.HudIcons.Encounter.cs)
 
         _prefs = _services.Config.GetSection("combatmeter");
         _metric   = (Metric)     _prefs.Get("metric", (int)Metric.Dps);
@@ -244,7 +245,7 @@ public sealed partial class Plugin : IStellarPlugin
         _listW = _prefs.Get("listW", ListWidth);   _listH = _prefs.Get("listH", ListHeight);
         _listX = _prefs.Get("listX", 2099f);       _listY = _prefs.Get("listY", 664f);
         _partyX = _prefs.Get("partyX", 2072f);     _partyY = _prefs.Get("partyY", 333f);
-        _partyW = _prefs.Get("partyW", PartyFocusW);
+        _partyW = Math.Max(_prefs.Get("partyW", PartyFocusW), PartyFocusMinW);   // a saved narrower width grows once
 
         var startRect = _viewMode == ViewMode.PartyFocus
             ? new WindowRect(_partyX, _partyY, _partyW > 0 ? _partyW : PartyFocusW, PartyFocusHeight())

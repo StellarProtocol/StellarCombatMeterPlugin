@@ -28,16 +28,25 @@ public sealed partial class Plugin
     // ── round 28 × 28 icon button with a flat-white PNG glyph (tinted muted / text on hover) ─────────────────────────
     // `onRect` (optional) receives the button's SCREEN-pixel rect on click, for anchoring a popover under it.
     private HudElement HudIconButton(Func<byte[]?> png, Action onClick, Action<WindowRect>? onRect = null)
+        => HudStateIconButton(png, static (p, hover) => hover ? p.HudHoverFill() : p.HudRestFill(),
+            static (p, hover) => hover ? p.TextColor() : p.MutedColor(), onClick, onRect, live: false);
+
+    // The same button with a STATE-driven look (Pause ↔ Resume amber, Archive ↔ flash green / recessed): `fill` and
+    // `tint` get the hover flag and return the un-faded fill / glyph colour; `live` makes the glyph follow `png` (the
+    // framework's byte[]-reference poll — return cached arrays only, so a state flip only repaints). The delegates are
+    // static (this passed in) so no closure beyond the hover flag is created, and only at build time.
+    private HudElement HudStateIconButton(Func<byte[]?> png, Func<Plugin, bool, ColorRgba> fill,
+        Func<Plugin, bool, ColorRgba> tint, Action onClick, Action<WindowRect>? onRect = null, bool live = true)
     {
         var hover = new HoverFlag();
         return new CellElement(new BubbleElement(new SelectableElement(new RowElement(new HudElement[]
             {
                 new SpacerElement(0f, HudControlH),
-                new ImageElement(png, (int)HudIconPx, (int)HudIconPx) { Tint = () => hover.On ? TextColor() : MutedColor() },
+                new ImageElement(png, (int)HudIconPx, (int)HudIconPx) { Tint = () => tint(this, hover.On), Live = live },
             }, Gap: 0.01f, Justify: RowJustify.Center),
             OnClick: onClick) { Bare = true, OnHover = over => hover.On = over, OnClickWithRect = onRect })
         {
-            FillColorFn = () => Fade(hover.On ? HudHoverFill() : HudRestFill()),
+            FillColorFn = () => Fade(fill(this, hover.On)),
             CornerRadius = RoundRadius(HudControlH), PaddingX = (HudControlH - HudIconPx) / 2f, PaddingY = 0f,
             MaxWidth = HudControlH,
         }, Width: HudControlH);

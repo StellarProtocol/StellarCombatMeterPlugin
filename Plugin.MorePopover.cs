@@ -9,16 +9,17 @@ namespace Stellar.CombatMeter;
 // aligned to it, so it opens over the meter):
 //   List view                 → SHOW panel (chips Self / Party / All, hint "who is listed")
 //   Party-focus + leader      → PARTY SIZE panel (chips 5 / 20, hint "leader only")
-//   always                    → ENCOUNTER panel (hint "1:42 recorded" / amber "● Paused"): Pause|Resume + Archive pills,
-//                               then "✓ Archived (102 s) · History 37" for ~3 s after a manual archive
 //   always                    → two nav cards: History ("37 runs saved") and Settings ("Look, archive, uploads")
+// The ENCOUNTER panel (Pause / Archive pills) is GONE (addendum 2026-11-17): both are round header buttons now
+// (Plugin.HudEncounter.cs), so the popover holds no duplicates.
 // Esc / an outside click closes it (framework DismissOnOutsideClick → OnClose), like the row menu. A card closes the
 // popover and opens its window centred on the meter and in front.
 public sealed partial class Plugin
 {
     private const float MoreW = 300f;            // the visible popover (the shell bubble)
-    private const float MoreEstimateH = 330f;    // rough full height, only to decide "below / above the button"
-    private const double ArchivedFeedbackS = 3.0;
+    // Rough full height (12 margins + 10 pads + SHOW panel ~62 + 2 × 44 cards + gaps), only to decide "below / above
+    // the button". The window height itself is 0 = hug content, so it shrank with the ENCOUNTER panel's removal.
+    private const float MoreEstimateH = 230f;
 
     private IWindowControl _moreWindow = null!;
     private bool _moreOpen, _morePlaced;
@@ -56,60 +57,9 @@ public sealed partial class Plugin
                 FixedChip("5",  () => _services.PartySnapshot.PartyType == PartyType.Regular5, () => RequestPartySize(PartyType.Regular5)),
                 FixedChip("20", () => _services.PartySnapshot.PartyType == PartyType.Raid20,   () => RequestPartySize(PartyType.Raid20)),
             }, Gap: 6f))),
-        BuildEncounterPanel(),
         NavCard(() => _historyIconPng, () => _loc.T("history.window.title"), HistoryCardStatus, OpenHistoryFromHud),
         NavCard(() => _settingsGearPng, () => _loc.T("hud.more.settings"), () => _loc.T("hud.more.settingsStatus"), OpenSettingsFromHud),
     });
-
-    // ── ENCOUNTER ───────────────────────────────────────────────────────────────────────────────────────────────────
-    private const float EncounterPillLabelW = 76f;   // longest Pause / Resume / Archive in any shipped locale (R10)
-
-    private HudElement BuildEncounterPanel() => SectionPanelWithTrailing(() => _loc.T("hud.more.encounter"), null,
-        new RowElement(new HudElement[]
-        {
-            new ConditionalElement(() => _paused, StatusDot(CautionColor)),
-            new TextElement(EncounterHint, Color: () => _paused ? CautionTextOnPanel() : MutedColor(), NoWrap: true),
-        }, Gap: 6f),
-        new RowElement(new HudElement[]
-        {
-            // Resume is the main action while paused (Primary); Pause and Archive are Neutral (severity ladder R8).
-            new ConditionalElement(() => _paused,
-                PrimaryButton(() => _loc.T("common.resume"), TogglePause, EncounterPillLabelW),
-                NeutralButton(() => _loc.T("common.pause"), TogglePause, EncounterPillLabelW)),
-            NeutralButton(() => _loc.T("common.archive"), ManualArchiveFromMenu, EncounterPillLabelW),
-            new SpacerElement(0f),
-        }, Gap: 8f),
-        new ConditionalElement(() => _services.Framework.TimeNow < _archivedFbUntil,
-            new TextElement(() => _archivedFbText, Color: () => SuccessText(), NoWrap: true) { Ellipsize = true }));
-
-    // "1:42 recorded" (re-formatted only when the shown second or the language changes) / "Paused" / nothing when idle.
-    private int _encHintSecs = -1;
-    private string? _encHintLang;
-    private string _encHintText = "";
-
-    private string EncounterHint()
-    {
-        if (_paused) return _loc.T("hud.more.paused");
-        int secs = (int)EncounterElapsedSeconds();
-        if (secs <= 0) return "";
-        string lang = _loc.Language;
-        if (secs != _encHintSecs || !ReferenceEquals(lang, _encHintLang))
-        {
-            _encHintSecs = secs; _encHintLang = lang;
-            _encHintText = _loc.TFormat("hud.more.recorded", Clock(secs));
-        }
-        return _encHintText;
-    }
-
-    // Inline archive feedback where you clicked (R13), formatted once per archive (Plugin.Header.cs NotifyManualArchived).
-    private string _archivedFbText = "";
-    private double _archivedFbUntil = double.NegativeInfinity;
-
-    private void NoteArchivedFeedback(long durationMs)
-    {
-        _archivedFbText = _loc.TFormat("hud.more.archived", durationMs / 1000, _history.Count);
-        _archivedFbUntil = _services.Framework.TimeNow + ArchivedFeedbackS;
-    }
 
     private readonly FmtCache _runsSavedFmt = new();
     private string HistoryCardStatus() => _runsSavedFmt.Get(_loc.T("hud.more.runsSaved"), _history.Count);

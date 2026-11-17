@@ -5,12 +5,23 @@ namespace Stellar.CombatMeter;
 // Main-window per-mode geometry (List vs Party-focus rects). Split out of Plugin.cs (500-LoC cap); behaviour unchanged.
 public sealed partial class Plugin
 {
+    // Party-focus minimum width (addendum 2026-11-17): the header gained Pause + Archive, so with the four leader tools
+    // it needs 560 px before the status ellipsizes to nothing. The window spec's MinWidth stays 500 for the List view
+    // (IWindowControl has no runtime min-size), so the Party view enforces its own floor here and at load (Plugin.cs).
+    private const float PartyFocusMinW = 560f;
+
     // Capture the live window rect into the active view's remembered geometry (so a mode switch can restore it)
-    // + track the current width for the List collapse breakpoints.
+    // + track the current width for the List collapse breakpoints. Runs at ~10 Hz while shown (Plugin.Tick.cs), so it
+    // also snaps a Party-focus window the user resized below PartyFocusMinW back to the floor (one SetRect, only then).
     private void CaptureModeGeometry()
     {
         var r = _mainWindow.Rect;
         if (r.Width <= 0f) return;
+        if (_viewMode == ViewMode.PartyFocus && r.Width < PartyFocusMinW)
+        {
+            r = new WindowRect(r.X, r.Y, PartyFocusMinW, r.Height);
+            _mainWindow.SetRect(r);
+        }
         _listWidthNow = r.Width;
         if (_viewMode == ViewMode.PartyFocus) { _partyX = r.X; _partyY = r.Y; _partyW = r.Width; }
         else { _listW = r.Width; _listH = r.Height; _listX = r.X; _listY = r.Y; }
@@ -21,7 +32,7 @@ public sealed partial class Plugin
     private void ApplyModeSize()
     {
         var rect = _viewMode == ViewMode.PartyFocus
-            ? new WindowRect(_partyX, _partyY, _partyW > 0 ? _partyW : PartyFocusW, PartyFocusHeight())
+            ? new WindowRect(_partyX, _partyY, System.Math.Max(_partyW, PartyFocusMinW), PartyFocusHeight())
             : new WindowRect(_listX, _listY, _listW > 0 ? _listW : ListWidth, _listH > 0 ? _listH : ListHeight);
         _mainWindow.SetRect(rect);
     }

@@ -4,6 +4,7 @@ namespace Stellar.CombatMeter;
 
 // The meter header's live muted status line (approved redesign §1):
 //   in combat   → "● 1:42 in combat · 4 players"   (green dot; "● 1:42 in combat" when only you are listed)
+//   archived    → "✓ Archived (102 s) · History 38" (green, ~3 s after a manual archive; wins over the rest)
 //   paused      → "● Paused · 1:42"                (amber dot + amber text)
 //   20-raid     → "20 players"                     (Party-focus on a raid; the occupied slot count)
 //   idle        → nothing
@@ -11,7 +12,8 @@ namespace Stellar.CombatMeter;
 // second, player count) plus the language — so it allocates once a second at most (Plugin-Performance-Rules §2).
 public sealed partial class Plugin
 {
-    private enum HudStatusKind { None = 0, Combat = 1, Paused = 2, Raid = 3 }
+    // Archived is NOT in the packed key: it shows the per-archive text formatted once in Plugin.HudEncounter.cs.
+    private enum HudStatusKind { None = 0, Combat = 1, Paused = 2, Raid = 3, Archived = 4 }
 
     private int _hudStatusKey = int.MinValue;
     private string? _hudStatusLang;
@@ -29,6 +31,12 @@ public sealed partial class Plugin
 
     private string HudStatusText()
     {
+        if (ArchivedFeedbackShown)
+        {
+            // Invalidate the key so the live status re-formats the moment the feedback ends.
+            _hudStatusKind = HudStatusKind.Archived; _hudStatusKey = int.MinValue;
+            return _archivedFbText;
+        }
         var kind = CurrentHudStatusKind();
         int secs = kind is HudStatusKind.Combat or HudStatusKind.Paused ? (int)EncounterElapsedSeconds() : 0;
         int players = kind is HudStatusKind.Combat or HudStatusKind.Raid ? HudPlayerCount() : 0;
@@ -54,5 +62,10 @@ public sealed partial class Plugin
     // The dot shows for the two "live" states and takes their colour; Paused also tints the text amber.
     private bool HudStatusHasDot() => _hudStatusKind is HudStatusKind.Combat or HudStatusKind.Paused;
     private ColorRgba HudStatusDotColor() => _hudStatusKind == HudStatusKind.Paused ? CautionColor() : SuccessColor();
-    private ColorRgba? HudStatusColor() => _hudStatusKind == HudStatusKind.Paused ? CautionColor() : MutedColor();
+    private ColorRgba? HudStatusColor() => _hudStatusKind switch
+    {
+        HudStatusKind.Paused   => CautionColor(),
+        HudStatusKind.Archived => SuccessText(),
+        _                      => MutedColor(),
+    };
 }
