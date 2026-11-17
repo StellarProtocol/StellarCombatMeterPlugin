@@ -259,6 +259,8 @@ public sealed partial class Plugin : IStellarPlugin
             { Draggable = true, EditModeDragOnly = true,
               Resizable = true, MinWidth = 500f, MinHeight = 160f, MaxWidth = 760f, MaxHeight = 1000f,
               ZOrder = -100,   // background layer: every other Stellar window draws over the meter
+              // "Background" setting: rounded theme Panel behind the whole meter (Plugin.Header.cs). Delegate built once here.
+              BackgroundColor = MeterBackdropColor, BackgroundCornerRadius = 6,
               // In-world meter HUD: draw only in the World phase, and hide behind blocking overlays (old
               // AutoHideBehindGameMenus == Blocking) and behind any menu incl. the line-selector (AnyMenu).
               ShouldRender = () => _services.ClientState.Phase == GamePhase.World

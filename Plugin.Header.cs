@@ -29,10 +29,18 @@ public sealed partial class Plugin
     // Legacy muted colour, still used by the History / Skill Breakdown / Snapshot windows.
     private ColorRgba? MutedCol() => new ColorRgba(0.66f, 0.70f, 0.73f, 1f);
 
-    // NOTE: the approved "Background" panel behind the whole meter (Settings → Look → Meter window, MeterBackgroundOpacity)
-    // is NOT drawn yet: the framework has no rounded, theme-coloured full-window backdrop (BackdropElement is black and
-    // square; a root BubbleElement would re-measure the whole meter on every list/status change). Needs an additive
-    // framework opt-in — see the redesign report.
+    // The approved "Background" panel behind the whole meter (Settings → Look → Meter window): the radius-6 theme Panel
+    // faded by MeterBackgroundOpacity × theme window opacity. Drawn by the framework's WindowSpec.BackgroundColor backdrop
+    // (fw 2.33.0) — a non-layout Image, NOT a root BubbleElement, which would re-measure the whole meter on every
+    // list/status change. Polled at the window refresh rate; struct maths only (no allocation). 0 % → alpha 0 → the
+    // framework disables the Image, so the default look (no panel) costs nothing.
+    private ColorRgba MeterBackdropColor()
+    {
+        var a = MeterBackgroundOpacity;
+        if (a <= 0f) return Transparent;
+        var c = PanelColor();
+        return c with { A = c.A * a * WindowOpacity() };
+    }
     private HudElement BuildMainRoot() => new ColumnElement(new HudElement[]
     {
         // Persistent "update the plugin" banner — shown while this build is below the server upload floor and not
