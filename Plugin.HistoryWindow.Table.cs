@@ -8,7 +8,7 @@ namespace Stellar.CombatMeter;
 // then 34 px rounded tiles in a virtual list: class-colour share wash, 18 px crest, bold "#1 Name" + muted spec, the
 // three metric numbers, a round ⌕ inspect button (only when a snapshot exists — the slot is kept otherwise, so the
 // columns never shift) and a round › drill-in (‹ while its breakdown is open). A click on the tile toggles that
-// player's chart line; a charted row wears the accent ring.
+// player's chart line; a charted row wears a ring in its line colour.
 //
 // The share wash is the framework AccentRowElement in its fw 2.33.0 rounded mode (CornerRadius = the tile radius → no
 // stripe, left corners follow the tile, straight right cut) at the approved 22 % wash.
@@ -109,13 +109,22 @@ public sealed partial class Plugin
             { Bare = true, OnHover = over => hover.On = over })
         {
             FillColorFn = () => Fade(hover.On ? HoverFill(TileColor()) : TileColor()),
-            OutlineColorFn = () => TblCharted(slot) ? Fade(AccentColor() with { A = 0.75f }) : null,
+            OutlineColorFn = () => TblOutline(slot),
             CornerRadius = TileRadius, PaddingX = 0f, PaddingY = 0f,
         };
         return ListSlot(tile);
     }
 
     private bool TblCharted(int slot) => TblRow(slot) is var i and >= 0 && _chartedSources.Contains(_sessionRows[i].Id);
+
+    // A charted row wears its LINE colour as the ring (so the row ↔ line pairing reads at a glance); accent only until
+    // the chart has rebuilt its series with this row in it.
+    private ColorRgba? TblOutline(int slot)
+    {
+        if (!TblCharted(slot)) return null;
+        var line = ChartColorOf(_sessionRows[TblRow(slot)].Id) ?? AccentColor();
+        return Fade(line with { A = 0.75f });
+    }
 
     private object? TblCrestTex(int slot)
     {

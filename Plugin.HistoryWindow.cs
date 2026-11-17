@@ -334,9 +334,7 @@ public sealed partial class Plugin
             // "Player#<uid>" and a blank class once the players left AOI / the scene changed. Fall back to live
             // resolution only when the session predates the snapshot (legacy entries) or a source wasn't frozen.
             var frozen = h.Entities.TryGetValue(id, out var es) ? es : null;
-            var name = !string.IsNullOrEmpty(frozen?.Name)
-                ? frozen!.Name!
-                : EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members);
+            var name = ArchivedName(frozen, id, self);
             int prof = ArchivedProfession(frozen, id);
             _sessionRows.Add(new SourceRow
             {
@@ -359,4 +357,12 @@ public sealed partial class Plugin
         int prof = frozen != null ? PlayableClass.ResolveActorProfession(frozen) : 0;
         return prof > 0 ? prof : id.IsPlayer ? ResolveProfessionId(id) : 0;
     }
+
+    // The display name of an archived source: the frozen snapshot's name, else live resolution (legacy entries / a
+    // source that wasn't frozen). Shared by the table rows and the chart legend so both always show the same name —
+    // the legend used to resolve live only and showed "Player#<uid>" for anyone who had left AOI.
+    private string ArchivedName(EntitySnapshot? frozen, EntityId id, EntityId self)
+        => !string.IsNullOrEmpty(frozen?.Name)
+            ? frozen!.Name!
+            : EntityLabel.Resolve(id, self, _services.PlayerState, _services.CombatLookup, _services.PartyRoster.Members);
 }
