@@ -52,6 +52,7 @@ public sealed class MeterElementToggles
     public TileSize TileSize;
     public int DebuffMax;   // max buff/debuff cells shown (4/6/8 → 2/3/4 columns × 2 rows)
     public ImaginePosition ImaginePosition;
+    public MeterRowDensity RowSize;   // Look › Row › "Row size" (fw MeterRowElement.Density): Normal (default) / Compact / Mini
 
     private const float SpecTotalMinW = 230f;
     private const float ShareMinW     = 180f;
@@ -153,6 +154,8 @@ public sealed class MeterElementToggles
         d.TileSize        = (TileSize)cfg.Get($"{prefix}.debuff.size",          (int)defaults.TileSize);
         d.DebuffMax       = cfg.Get($"{prefix}.debuff.max",                     defaults.DebuffMax);
         d.ImaginePosition = (ImaginePosition)cfg.Get($"{prefix}.imagine.position", (int)defaults.ImaginePosition);
+        // Absent key → Normal (the look before Row size existed); older builds never read "row.size" (rollback-safe).
+        d.RowSize         = (MeterRowDensity)cfg.Get($"{prefix}.row.size",       (int)defaults.RowSize);
         return d;
     }
 
@@ -191,5 +194,6 @@ public sealed class MeterElementToggles
         cfg.Set($"{prefix}.debuff.size",          (int)TileSize);   // key kept for continuity — now the player-tile size
         cfg.Set($"{prefix}.debuff.max",           DebuffMax);
         cfg.Set($"{prefix}.imagine.position",     (int)ImaginePosition);
+        cfg.Set($"{prefix}.row.size",             (int)RowSize);
     }
 }

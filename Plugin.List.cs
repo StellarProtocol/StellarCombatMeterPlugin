@@ -38,16 +38,6 @@ public sealed partial class Plugin
 
     private HudElement BuildListBody()
     {
-        var slots = new HudElement[MaxListRows];
-        for (var i = 0; i < MaxListRows; i++)
-        {
-            var idx = i;
-            // fw 2.33.0 opt-in house-style row (rounded tile, accent self ring, rounded spine / bar / effect cells).
-            slots[i] = new MeterRowElement(
-                () => idx < _listRows.Count ? _listRows[idx] : default,
-                OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default))
-                { Style = MeterRowStyle.Rounded, BackingOpacity = MeterRowBackingFn };
-        }
         // Empty → ONE row-sized slot at the top of the list area (EmptyStateSlot), else the rows. The slot sits in a scroll of
         // the SAME height as the rows' scroll, so both branches have identical geometry — same top edge, same 9 px
         // scrollbar inset on the right, same flexible height — and switching empty ↔ rows never moves or resizes anything.
@@ -56,9 +46,42 @@ public sealed partial class Plugin
         // pre-build's fill, or an open before combat), so the first combat tick doesn't build 20 meter rows in one frame.
         return new ConditionalElement(() => _listEmpty,
             new ScrollElement(EmptyStateSlot(() => _loc.T(_listEmptyCaptionKey), ListEmptyLine), ListScrollHeight),
-            new ScrollElement(new ListElement(() => _listRows.Count, slots) { Gap = MeterRowGap }, ListScrollHeight),
+            new ScrollElement(RowSizeSwitch(() => ListToggles.RowSize, BuildListRows), ListScrollHeight),
             Fill: true) { Prebuild = true, PrebuildName = "cm.listRows" };
     }
+
+    // The 24 List rows at one Row size. MeterRowElement.Density is chosen when a row is BUILT, so each size is its own row
+    // set behind RowSizeSwitch; only the size in use is ever built.
+    private HudElement BuildListRows(MeterRowDensity density)
+    {
+        var slots = new HudElement[MaxListRows];
+        for (var i = 0; i < MaxListRows; i++)
+        {
+            var idx = i;
+            // fw 2.33.0 opt-in house-style row (rounded tile, accent self ring, rounded spine / bar / effect cells).
+            slots[i] = new MeterRowElement(
+                () => idx < _listRows.Count ? _listRows[idx] : default,
+                OnRightClick: () => OpenRowMenu(idx < _listRows.Count ? _listRows[idx].Id : default))
+                { Style = MeterRowStyle.Rounded, BackingOpacity = MeterRowBackingFn, Density = density };
+        }
+        return new ListElement(() => _listRows.Count, slots) { Gap = RowGapFor(density) };
+    }
+
+    // Normal / Compact / Mini row sets behind nested Conditionals. Conditional branches build LAZILY (first show), so a
+    // size nobody picks costs nothing, and switching Row size in Settings builds the new set once (that view only). The
+    // predicates are one field read + compare per refresh.
+    private static HudElement RowSizeSwitch(System.Func<MeterRowDensity> size, System.Func<MeterRowDensity, HudElement> build)
+        => new ConditionalElement(() => size() == MeterRowDensity.Normal, build(MeterRowDensity.Normal),
+            new ConditionalElement(() => size() == MeterRowDensity.Compact, build(MeterRowDensity.Compact), build(MeterRowDensity.Mini)));
+
+    // Gap between meter rows: 3 px for Normal (prototype), 2 px for Compact / Mini (approved mockup: 24 + 2 / 17 + 2).
+    private static float RowGapFor(MeterRowDensity d) => d == MeterRowDensity.Normal ? MeterRowGap : CompactRowGap;
+    private const float CompactRowGap = 2f;
+
+    // Compact rows draw ONE row of up to 3 effect tiles at 16 px (fw MeterRowElement.Density) — so the strip keeps 3 cells,
+    // the "+N" counted against 3, and the placeholder art is picked for 16 px.
+    private const int CompactEffectCells = 3;
+    private const float CompactEffectPx = 16f;
 
     // Only "Waiting for combat" carries a second line, shown after the title as "· The meter starts on the first hit.".
     // The composite is rebuilt only when the localized line changes (a language switch) — never per refresh.
@@ -123,8 +146,11 @@ public sealed partial class Plugin
         // height (its TileSize control isn't exposed, so it stays Small → 48px), but the block still renders
         // when its Debuffs toggle is on (owner 2026-09-24: buffs & debuffs supported in List too).
         // Set BEFORE ResolveDebuffs: an icon-less effect's placeholder tile is picked for this exact cell size.
-        rowData.DebuffCellSize = MeterElementToggles.TileSizePx(toggles.TileSize);
-        ResolveDebuffs(id, vis.Debuffs, MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
+        // Compact: one row of 3 × 16 px tiles whatever the tile size / effect count (those two settings are Normal only).
+        bool compact = toggles.RowSize == MeterRowDensity.Compact;
+        rowData.DebuffCellSize = compact ? CompactEffectPx : MeterElementToggles.TileSizePx(toggles.TileSize);
+        ResolveDebuffs(id, vis.Debuffs && toggles.RowSize != MeterRowDensity.Mini,
+            compact ? CompactEffectCells : MeterElementToggles.DebuffMaxCells(toggles.DebuffMax), ref rowData);
         return rowData;
     }
 

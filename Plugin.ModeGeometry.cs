@@ -59,12 +59,29 @@ public sealed partial class Plugin
     // auto-fits — owner 2026-09-24: a resized party window "wasn't remembered" because this height was a fixed
     // constant that ignored the tile size, so every mode switch / menu toggle snapped it back and clipped the
     // enlarged grid. Vertical rows: 20-player stacks two 5-slot quadrants (10), 5-player is one group (5).
+    // Row heights of fw MeterRowElement (Normal 48, Density Compact 24 / Mini 17 — fixed in the framework).
+    private const float NormalRowH = 48f, CompactRowH = 24f, MiniRowH = 17f;
+
     private float PartyFocusHeight()
     {
         int rows = IsRaid20View ? MeterAggregator.SlotsPerGroup * 2 : MeterAggregator.SlotsPerGroup;
-        float tilePx = MeterElementToggles.TileSizePx((IsRaid20View ? Party20Toggles : Party5Toggles).TileSize);
-        float extraPerRow = tilePx * 2f + 8f - 48f;   // 0 at Small (48px rows), +12 Medium, +24 Large
-        if (extraPerRow < 0f) extraPerRow = 0f;
+        var toggles = IsRaid20View ? Party20Toggles : Party5Toggles;
+        // Row size (fw MeterRowElement.Density): Compact 24 / Mini 17 px rows with a 2 px gap instead of 48 + 3. Every group
+        // column has 5 gaps (caption→row 1 + 4 between rows), so a stacked group also saves 5 × (3 − 2). The player-tile
+        // size grows only Normal rows (Compact / Mini have a fixed height).
+        float extraPerRow;
+        if (toggles.RowSize != MeterRowDensity.Normal)
+        {
+            float rowH = toggles.RowSize == MeterRowDensity.Compact ? CompactRowH : MiniRowH;
+            int stackedGroups = rows / MeterAggregator.SlotsPerGroup;
+            extraPerRow = rowH - NormalRowH - stackedGroups * MeterAggregator.SlotsPerGroup * (MeterRowGap - CompactRowGap) / rows;
+        }
+        else
+        {
+            float tilePx = MeterElementToggles.TileSizePx(toggles.TileSize);
+            extraPerRow = tilePx * 2f + 8f - NormalRowH;   // 0 at Small (48px rows), +12 Medium, +24 Large
+            if (extraPerRow < 0f) extraPerRow = 0f;
+        }
         // No menu term any more: the old ▾ inline menu grew the HUD by 72 px; its contents now live in the ⋯ popover, so
         // the HUD height depends only on the party size and tile size (approved redesign §1).
         // + the RESERVED LEADER-line slot (28 + the 6 px Column gap), always — leader or not (Plugin.LeaderLine.cs), so the

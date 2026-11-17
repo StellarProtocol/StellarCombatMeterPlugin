@@ -22,13 +22,15 @@ public sealed partial class Plugin
     // branch visibility per poll; the window height follows via Plugin.PartyFocusHeight(). Prebuild (fw 2.30.0): the
     // other size's grid is built in the background, so a 5↔20 switch (joining a raid) doesn't build it in one frame.
     private HudElement BuildPartyFocusBody()
-        => new ConditionalElement(() => IsRaid20View, BuildFourGroupGrid(), BuildGroupColumn(0))
+        => new ConditionalElement(() => IsRaid20View,
+                RowSizeSwitch(() => Party20Toggles.RowSize, BuildFourGroupGrid),   // each party size keeps its own Row size
+                RowSizeSwitch(() => Party5Toggles.RowSize, d => BuildGroupColumn(0, d)))
             { Prebuild = true, PrebuildName = "cm.partyGrid" };
 
-    private HudElement BuildFourGroupGrid() => new ColumnElement(new HudElement[]
+    private HudElement BuildFourGroupGrid(MeterRowDensity d) => new ColumnElement(new HudElement[]
     {
-        new RowElement(new HudElement[] { BuildQuadrant(0), new SpacerElement(8f), BuildQuadrant(1) }, Gap: 4f),
-        new RowElement(new HudElement[] { BuildQuadrant(2), new SpacerElement(8f), BuildQuadrant(3) }, Gap: 4f),
+        new RowElement(new HudElement[] { BuildQuadrant(0, d), new SpacerElement(8f), BuildQuadrant(1, d) }, Gap: 4f),
+        new RowElement(new HudElement[] { BuildQuadrant(2, d), new SpacerElement(8f), BuildQuadrant(3, d) }, Gap: 4f),
     }, Gap: 4f);
 
     // True when the live party is a 20-player raid; 5-player AND solo fall through to the single 5-slot group.
@@ -45,12 +47,12 @@ public sealed partial class Plugin
         => _viewMode == ViewMode.PartyFocus && PartyExists && _services.PartySnapshot.IsLeader;
 
     // One group as a weighted cell (used in the 2×2 four-group grid where two cells share a row's width).
-    private HudElement BuildQuadrant(int group) => new CellElement(BuildGroupColumn(group), Weight: 1f);
+    private HudElement BuildQuadrant(int group, MeterRowDensity d) => new CellElement(BuildGroupColumn(group, d), Weight: 1f);
 
     // Every slot is a full-height MeterRowElement (occupied rows + faint placeholders), so all four quadrants
     // keep an equal 5-row height and the 2×2 grid stays proportional — the IMGUI build drew empty slots as a
     // full-height faint box; bare text collapsed them, skewing the grid.
-    private HudElement BuildGroupColumn(int group)
+    private HudElement BuildGroupColumn(int group, MeterRowDensity density)
     {
         var children = new HudElement[1 + MeterAggregator.SlotsPerGroup];
         children[0] = BuildGroupCaption(group);
@@ -63,14 +65,14 @@ public sealed partial class Plugin
             children[slot + 1] = new ConditionalElement(() => !_gridSlotHidden[idx], new DragSlotElement(
                 // fw 2.33.0 opt-in house-style row; empty slots render as recessed tiles (MeterRowData.IsEmptySlot).
                 new MeterRowElement(() => _gridRows[idx], OnRightClick: () => OnGridSlotRightClick(idx))
-                    { Style = MeterRowStyle.Rounded, BackingOpacity = MeterRowBackingFn },
+                    { Style = MeterRowStyle.Rounded, BackingOpacity = MeterRowBackingFn, Density = density },
                 Key: idx,
                 OnDrop: OnGridDrop,
                 // Leader-only, Raid20-only, and only an OCCUPIED slot is a drag source (an empty "—" slot
                 // would otherwise spawn a ghost of a blank card). Empty slots remain valid drop TARGETS.
                 CanDrag: () => IsRaid20View && _services.PartySnapshot.IsLeader && _gridRows[idx].Id.IsPlayer));
         }
-        return new ColumnElement(children, Gap: MeterRowGap);
+        return new ColumnElement(children, Gap: RowGapFor(density));
     }
 
     private void RebuildPartyFocusRows()

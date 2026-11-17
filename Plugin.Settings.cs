@@ -68,56 +68,63 @@ public sealed partial class Plugin
     }
 
     // ── ROW ───────────────────────────────────────────────────────────────────────────────────────────────────────
+    // Row size (approved 2026-11-17) leads the panel. Rows the chosen size doesn't draw go RECESSED (rule 22: disabled,
+    // not clickable, values kept) with a muted inline hint — see SizeRow / Plugin.Settings.RowSize.cs.
     private HudElement LookRowPanel() => SectionPanel(() => _loc.T("cfg.look.row"), () => _loc.T("cfg.look.row.hint"),
+        LookRowSizeRow(),
         LookToggleRow("rank", "settings.toggle.rank", () => LookT.Rank, v => LookT.Rank = v),
-        LookToggleRow("crest", "settings.toggle.crest", () => LookT.Crest, v => LookT.Crest = v),
+        LookToggleRow("crest", "settings.toggle.crest", () => LookT.Crest, v => LookT.Crest = v, DrawnNotMini),
         // "Class/Spec" merges the two old toggles (Spec name, Class name) — no config migration: Off = neither,
         // Spec = spec only, Class = class only, Both = both, so every saved combination lights exactly one chip.
         // Four chips + label + "?" crowd the 323 px column (id/fil/th at the SDL 7.5/12.5/8 px budget), so the group
         // uses a 6 px chip pad instead of 9; the chips still hug their (per-language, rebuild-stable) labels.
-        SettingRow(() => _loc.T("cfg.look.nameLine"), false,
-            ChoiceChip(() => _loc.T("cfg.look.nameLine.off"),   () => !LookT.Spec && !LookT.ClassName, () => SetNameLine(false, false), padX: NameLineChipPad),
-            ChoiceChip(() => _loc.T("cfg.look.nameLine.spec"),  () => LookT.Spec && !LookT.ClassName,  () => SetNameLine(true, false),  padX: NameLineChipPad),
-            ChoiceChip(() => _loc.T("cfg.look.nameLine.class"), () => !LookT.Spec && LookT.ClassName,  () => SetNameLine(false, true),  padX: NameLineChipPad),
-            ChoiceChip(() => _loc.T("cfg.look.nameLine.both"),  () => LookT.Spec && LookT.ClassName,   () => SetNameLine(true, true),   padX: NameLineChipPad),
+        SizeRow(() => _loc.T("cfg.look.nameLine"), false, DrawnNormalOnly,
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.off"),   () => !LookT.Spec && !LookT.ClassName, () => SetNameLine(false, false), IsNormalSize, padX: NameLineChipPad),
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.spec"),  () => LookT.Spec && !LookT.ClassName,  () => SetNameLine(true, false),  IsNormalSize, padX: NameLineChipPad),
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.class"), () => !LookT.Spec && LookT.ClassName,  () => SetNameLine(false, true),  IsNormalSize, padX: NameLineChipPad),
+            ChoiceChip(() => _loc.T("cfg.look.nameLine.both"),  () => LookT.Spec && LookT.ClassName,   () => SetNameLine(true, true),   IsNormalSize, padX: NameLineChipPad),
             LookHelp("nameLine", "cfg.look.nameLine")),
-        LookToggleRow("abilityScore", "settings.toggle.abilityScore", () => LookT.AbilityScore, v => LookT.AbilityScore = v),
+        LookToggleRow("abilityScore", "settings.toggle.abilityScore", () => LookT.AbilityScore, v => LookT.AbilityScore = v, DrawnNormalOnly),
         // Indented under Ability score as in the prototype, but NOT recessed when it is off: the row shows Illusion-Break
         // on its own too (Plugin.List.cs ShowAbilityScore = AbilityScore || IllusionBreak), so gating it would change
-        // behaviour for anyone using it alone.
-        SettingRow(() => _loc.T("cfg.look.illusionBreak"), true,
-            ToggleChip(() => LookT.IllusionBreak, v => { LookT.IllusionBreak = v; PersistToggles(); }),
+        // behaviour for anyone using it alone. Recessed only by Row size (the score isn't drawn outside Normal).
+        SizeRow(() => _loc.T("cfg.look.illusionBreak"), true, DrawnNormalOnly,
+            ToggleChip(() => LookT.IllusionBreak, v => { LookT.IllusionBreak = v; PersistToggles(); }, IsNormalSize),
             LookHelp("illusionBreak", "cfg.look.illusionBreak")),
-        LookToggleRow("leaderFlag", "settings.toggle.leaderFlag", () => LookT.LeaderFlag, v => LookT.LeaderFlag = v),
-        LookToggleRow("voiceIcon", "settings.toggle.voiceIcon", () => LookT.VoiceIcon, v => LookT.VoiceIcon = v),
+        LookToggleRow("leaderFlag", "settings.toggle.leaderFlag", () => LookT.LeaderFlag, v => LookT.LeaderFlag = v, DrawnNotMini),
+        LookToggleRow("voiceIcon", "settings.toggle.voiceIcon", () => LookT.VoiceIcon, v => LookT.VoiceIcon = v, DrawnNormalOnly),
         // Party grids only (List rows are single-height): shown on the List view too, RECESSED, so switching the
-        // EDITING view never changes the panel's height (rule 14).
-        SettingRow(() => _loc.T("settings.tile.size"), false,
-            LookChoice("common.small",  () => LookT.TileSize == TileSize.Small,  () => LookT.TileSize = TileSize.Small,  () => _lookView != 0),
-            LookChoice("common.medium", () => LookT.TileSize == TileSize.Medium, () => LookT.TileSize = TileSize.Medium, () => _lookView != 0),
-            LookChoice("common.large",  () => LookT.TileSize == TileSize.Large,  () => LookT.TileSize = TileSize.Large,  () => _lookView != 0),
+        // EDITING view never changes the panel's height (rule 14). Normal only: it sizes the 2-row effect block and with it
+        // the row height; Compact / Mini rows have a fixed height and Compact's effect tiles are a fixed 16 px.
+        SizeRow(() => _loc.T("settings.tile.size"), false, DrawnNormalOnly,
+            LookChoice("common.small",  () => LookT.TileSize == TileSize.Small,  () => LookT.TileSize = TileSize.Small,  TileSizeEnabled),
+            LookChoice("common.medium", () => LookT.TileSize == TileSize.Medium, () => LookT.TileSize = TileSize.Medium, TileSizeEnabled),
+            LookChoice("common.large",  () => LookT.TileSize == TileSize.Large,  () => LookT.TileSize = TileSize.Large,  TileSizeEnabled),
             LookHelp("tileSize", "settings.tile.size")));
+
+    private bool TileSizeEnabled() => _lookView != 0 && IsNormalSize();
 
     private const float NameLineChipPad = 6f;
 
     private void SetNameLine(bool spec, bool cls) { LookT.Spec = spec; LookT.ClassName = cls; PersistToggles(); }
 
     // ── BATTLE IMAGINE ────────────────────────────────────────────────────────────────────────────────────────────
+    // Imagines are drawn by Normal rows only → the whole section recesses for Compact / Mini.
     private HudElement LookImaginePanel() => SectionPanel(() => _loc.T("settings.section.battleImagine"), null,
-        SettingRow(() => _loc.T("settings.imagine.show"), false,
-            ToggleChip(() => LookT.Imagine, v => { LookT.Imagine = v; PersistToggles(); }),
+        SizeRow(() => _loc.T("settings.imagine.show"), false, DrawnNormalOnly,
+            ToggleChip(() => LookT.Imagine, v => { LookT.Imagine = v; PersistToggles(); }, IsNormalSize),
             ImagineHelp("show", "settings.imagine.show")),
-        SettingRow(() => _loc.T("settings.imagine.cooldown"), false,
-            ToggleChip(() => LookT.ImagineCooldown, v => { LookT.ImagineCooldown = v; PersistToggles(); }, () => LookT.Imagine),
+        SizeRow(() => _loc.T("settings.imagine.cooldown"), false, DrawnNormalOnly,
+            ToggleChip(() => LookT.ImagineCooldown, v => { LookT.ImagineCooldown = v; PersistToggles(); }, () => LookT.Imagine && IsNormalSize()),
             ImagineHelp("cooldown", "settings.imagine.cooldown")),
-        SettingRow(() => _loc.T("settings.imagine.size"), false,
-            LookChoice("common.small", () => LookT.ImagineSize == ImagineSize.Small, () => LookT.ImagineSize = ImagineSize.Small),
-            LookChoice("common.large", () => LookT.ImagineSize == ImagineSize.Large, () => LookT.ImagineSize = ImagineSize.Large),
+        SizeRow(() => _loc.T("settings.imagine.size"), false, DrawnNormalOnly,
+            LookChoice("common.small", () => LookT.ImagineSize == ImagineSize.Small, () => LookT.ImagineSize = ImagineSize.Small, IsNormalSize),
+            LookChoice("common.large", () => LookT.ImagineSize == ImagineSize.Large, () => LookT.ImagineSize = ImagineSize.Large, IsNormalSize),
             ImagineHelp("size", "settings.imagine.size")),
-        SettingRow(() => _loc.T("settings.imagine.position"), false,
-            LookChoice("settings.pos.topRight", () => LookT.ImaginePosition == ImaginePosition.TopRight,    () => LookT.ImaginePosition = ImaginePosition.TopRight),
-            LookChoice("settings.pos.right",    () => LookT.ImaginePosition == ImaginePosition.RightColumn, () => LookT.ImaginePosition = ImaginePosition.RightColumn),
-            LookChoice("settings.pos.left",     () => LookT.ImaginePosition == ImaginePosition.Left,        () => LookT.ImaginePosition = ImaginePosition.Left),
+        SizeRow(() => _loc.T("settings.imagine.position"), false, DrawnNormalOnly,
+            LookChoice("settings.pos.topRight", () => LookT.ImaginePosition == ImaginePosition.TopRight,    () => LookT.ImaginePosition = ImaginePosition.TopRight, IsNormalSize),
+            LookChoice("settings.pos.right",    () => LookT.ImaginePosition == ImaginePosition.RightColumn, () => LookT.ImaginePosition = ImaginePosition.RightColumn, IsNormalSize),
+            LookChoice("settings.pos.left",     () => LookT.ImaginePosition == ImaginePosition.Left,        () => LookT.ImaginePosition = ImaginePosition.Left, IsNormalSize),
             ImagineHelp("position", "settings.imagine.position")));
 
     // ── BARS ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -139,25 +146,25 @@ public sealed partial class Plugin
             BarsHelp("labelStyle", "settings.bar.labelStyle")),
         // The soft light sweeping the main bar (framework sheen, MeterRowData.HideSheen). Per view like the rest of
         // Look; default on. Off also skips the per-frame sweep + its clip for every row of that view.
-        SettingRow(() => _loc.T("settings.bar.shine"), false,
-            ToggleChip(() => LookT.BarShine, v => { LookT.BarShine = v; PersistToggles(); }),
+        SizeRow(() => _loc.T("settings.bar.shine"), false, DrawnNotMini,
+            ToggleChip(() => LookT.BarShine, v => { LookT.BarShine = v; PersistToggles(); }, IsNotMini),
             BarsHelp("shine", "settings.bar.shine")),
-        SettingRow(() => _loc.T("settings.bar.spineBar"), false,
-            BarsChoice("common.off",      () => LookT.VerticalBar == VerticalBarMode.Off, () => LookT.VerticalBar = VerticalBarMode.Off),
-            BarsChoice("list.metric.dps", () => LookT.VerticalBar == VerticalBarMode.Dps, () => LookT.VerticalBar = VerticalBarMode.Dps),
-            BarsChoice("common.hp",       () => LookT.VerticalBar == VerticalBarMode.Hp,  () => LookT.VerticalBar = VerticalBarMode.Hp),
+        SizeRow(() => _loc.T("settings.bar.spineBar"), false, DrawnNotMini,
+            LookChoice("common.off",      () => LookT.VerticalBar == VerticalBarMode.Off, () => LookT.VerticalBar = VerticalBarMode.Off, IsNotMini),
+            LookChoice("list.metric.dps", () => LookT.VerticalBar == VerticalBarMode.Dps, () => LookT.VerticalBar = VerticalBarMode.Dps, IsNotMini),
+            LookChoice("common.hp",       () => LookT.VerticalBar == VerticalBarMode.Hp,  () => LookT.VerticalBar = VerticalBarMode.Hp, IsNotMini),
             BarsHelp("spineBar", "settings.bar.spineBar")),
-        SettingRow(() => _loc.T("settings.bar.spineWidth"), false,
-            BarsChoice("settings.width.thin",   () => LookT.SpineWidth <= 3f,            () => LookT.SpineWidth = 3f),
-            BarsChoice("settings.width.normal", () => LookT.SpineWidth is > 3f and <= 5f, () => LookT.SpineWidth = 5f),
-            BarsChoice("settings.width.wide",   () => LookT.SpineWidth > 5f,             () => LookT.SpineWidth = 8f),
+        SizeRow(() => _loc.T("settings.bar.spineWidth"), false, DrawnNormalOnly,
+            LookChoice("settings.width.thin",   () => LookT.SpineWidth <= 3f,            () => LookT.SpineWidth = 3f, IsNormalSize),
+            LookChoice("settings.width.normal", () => LookT.SpineWidth is > 3f and <= 5f, () => LookT.SpineWidth = 5f, IsNormalSize),
+            LookChoice("settings.width.wide",   () => LookT.SpineWidth > 5f,             () => LookT.SpineWidth = 8f, IsNormalSize),
             BarsHelp("spineWidth", "settings.bar.spineWidth")));
 
     // ── NUMBERS ───────────────────────────────────────────────────────────────────────────────────────────────────
     private HudElement LookNumbersPanel() => SectionPanel(() => _loc.T("cfg.look.numbers"), null,
         NumbersToggleRow("perSecond", "cfg.look.perSecond", () => LookT.Primary, v => LookT.Primary = v),
         NumbersToggleRow("total",     "settings.toggle.total", () => LookT.Total, v => LookT.Total = v),
-        NumbersToggleRow("share",     "settings.toggle.sharePct", () => LookT.Share, v => LookT.Share = v));
+        NumbersToggleRow("share",     "settings.toggle.sharePct", () => LookT.Share, v => LookT.Share = v, DrawnNormalOnly));
 
     // ── METER WINDOW ──────────────────────────────────────────────────────────────────────────────────────────────
     // NEW (D3): "Background" 0–100 %, default 0 — a rounded theme panel behind the meter (drawn by the meter HUD, which
@@ -195,11 +202,12 @@ public sealed partial class Plugin
             HelpDot("look.foreground", "cfg.look.meterWindow", "cfg.look.foreground", "help.look.foreground")));
 
     // ── row helpers ───────────────────────────────────────────────────────────────────────────────────────────────
-    private HudElement LookToggleRow(string id, string labelKey, Func<bool> get, Action<bool> set)
-        => SettingRow(() => _loc.T(labelKey), false, ToggleChip(get, v => { set(v); PersistToggles(); }), LookHelp(id, labelKey));
+    private HudElement LookToggleRow(string id, string labelKey, Func<bool> get, Action<bool> set, SizeNeed need = SizeNeed.Any)
+        => SizeRow(() => _loc.T(labelKey), false, need, ToggleChip(get, v => { set(v); PersistToggles(); }, NeedFn(need)),
+            LookHelp(id, labelKey));
 
-    private HudElement NumbersToggleRow(string id, string labelKey, Func<bool> get, Action<bool> set)
-        => SettingRow(() => _loc.T(labelKey), false, ToggleChip(get, v => { set(v); PersistToggles(); }),
+    private HudElement NumbersToggleRow(string id, string labelKey, Func<bool> get, Action<bool> set, SizeNeed need = SizeNeed.Any)
+        => SizeRow(() => _loc.T(labelKey), false, need, ToggleChip(get, v => { set(v); PersistToggles(); }, NeedFn(need)),
             HelpDot("look." + id, "cfg.look.numbers", labelKey, "help.look." + id));
 
     private HudElement LookChoice(string labelKey, Func<bool> active, Action set, Func<bool>? enabled = null)

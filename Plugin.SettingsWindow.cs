@@ -30,7 +30,7 @@ public sealed partial class Plugin
     // The window is sized for the Look tab, the tallest tab (the only one with a footer under its columns). Every Look
     // panel is SectionPanel rows → its height follows from the row counts (Plugin.Settings.cs, keep them in step):
     // padding + caption + rows × (28 px row + 6 px gap), panels 8 px apart in the column.
-    private const int LookLeftPanels = 2, LookLeftRows = 8 + 4;           // ROW 8 · BATTLE IMAGINE 4
+    private const int LookLeftPanels = 2, LookLeftRows = 9 + 4;           // ROW 9 (Row size + 8) · BATTLE IMAGINE 4
     private const int LookRightPanels = 3, LookRightRows = 6 + 3 + 3;     // BARS 6 · NUMBERS 3 · METER WINDOW 3
     private const float LookPanelChromeH = 2f * PanelPadY + CaptionHeight;
     private const float LookColLeftH  = LookLeftPanels  * LookPanelChromeH + LookLeftRows  * (SettingRowH + PanelGap) + (LookLeftPanels  - 1) * SettingsGap;
