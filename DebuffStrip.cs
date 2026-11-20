@@ -105,7 +105,7 @@ public static class DebuffStrip
         isBuff = !bi.IsDebuff;
         var sel = isBuff ? buffSel : debuffSel;
         bool named = isUnnamed != null ? !isUnnamed(bi.Name) : !string.IsNullOrEmpty(bi.Name);
-        return sel.ShouldShow(baseId, named);
+        return sel.ShouldShow(baseId, named, bi.Name, getBuff);
     }
 
     // In-place insertion sort by CreateTimeMs: stable (only shifts on strictly-greater, so equal-time
