@@ -26,8 +26,12 @@ public static class DefaultTrackedEffects
     /// <summary>Debuffs tab: the four Battle-Imagine lockout debuffs (BuffType 0).</summary>
     public static int[] Debuffs => (int[])DebuffIds.Clone();
 
-    /// <summary>Buffs tab: every Potion and Cuisine buff (BuffType 1) — the two name groups the owner checked.</summary>
+    /// <summary>Buffs tab: every Potion and Cuisine buff (BuffType 1) — the two name groups the owner checked. The groups
+    /// are ALSO ticked as whole groups (<see cref="BuffGroupRepIds"/>), so later seasons' Potion/Cuisine follow.</summary>
     public static int[] Buffs => (int[])BuffIds.Clone();
+
+    /// <summary>Representative ids of the name groups the Buffs tab ticks as a whole by default (Potion, Cuisine).</summary>
+    public static int[] BuffGroupRepIds => (int[])BuffGroupReps.Clone();
 
     /// <summary>Loads the Debuffs-tab selection, falling back to these defaults for absent keys.</summary>
     public static DebuffSelection LoadDebuffs(Stellar.Abstractions.Services.IConfigSection cfg)
@@ -35,7 +39,7 @@ public static class DefaultTrackedEffects
 
     /// <summary>Loads the Buffs-tab selection, falling back to these defaults for absent keys.</summary>
     public static DebuffSelection LoadBuffs(Stellar.Abstractions.Services.IConfigSection cfg)
-        => DebuffSelection.Load(cfg, BuffPrefix, BuffIds, Mode, ShowHidden);
+        => DebuffSelection.Load(cfg, BuffPrefix, BuffIds, Mode, ShowHidden, BuffGroupReps, KnownBuffGroups);
 
     private static readonly int[] DebuffIds =
     {
@@ -45,7 +49,7 @@ public static class DefaultTrackedEffects
         2110057, // Weakened: Wish Sealed
     };
 
-    private static readonly int[] BuffIds =
+    private static readonly int[] PotionIds =
     {
         // "Potion" — 156 ids (every iconed BuffTable row named "Potion" in the StarResonanceData dump checked 2026-09-29).
         2033011, 2033012, 2033013, 2033014, 2033015, 2033016, 2033017, 2033018, 2033019, 2033021,
@@ -64,6 +68,10 @@ public static class DefaultTrackedEffects
         2033155, 2033156, 2033157, 2033158, 2033159, 2033161, 2033162, 2033163, 2033164, 2033165,
         2033166, 2033167, 2033168, 2033169, 2033174, 2033175, 2033176, 2033177, 2033178, 2033179,
         2033184, 2033185, 2033186, 2033187, 2033188, 2033189,
+    };
+
+    private static readonly int[] CuisineIds =
+    {
         // "Cuisine" — 136 ids (every iconed BuffTable row named "Cuisine" in the StarResonanceData dump checked 2026-09-29).
         2032011, 2032012, 2032013, 2032014, 2032015, 2032016, 2032017, 2032018, 2032021, 2032022,
         2032023, 2032024, 2032025, 2032026, 2032027, 2032028, 2032031, 2032032, 2032033, 2032034,
@@ -80,4 +88,25 @@ public static class DefaultTrackedEffects
         2032253, 2032254, 2032255, 2032256, 2032261, 2032262, 2032263, 2032264, 2032271, 2032272,
         2032273, 2032274, 2032281, 2032282, 2032283, 2032284,
     };
+
+    private static readonly int[] BuffIds = Concat(PotionIds, CuisineIds);
+
+    // Name groups the Buffs tab ticks by default, each as a REPRESENTATIVE id (its game name identifies the group in
+    // any client language). They keep every Potion/Cuisine the game adds later — Season 4 added 54 Potion + 24 Cuisine
+    // buff ids the id list above never had (owner report 2026-11-20).
+    private const int PotionRep  = 2033011;
+    private const int CuisineRep = 2032011;
+    private static readonly int[] BuffGroupReps = { PotionRep, CuisineRep };
+
+    /// <summary>The exact Season-3 memberships a saved (pre-group) Buffs config was ticked against — a save holding
+    /// every one of a group's ids is migrated to that group ticked (DebuffSelection.Load).</summary>
+    private static readonly (int Rep, int[] Members)[] KnownBuffGroups = { (PotionRep, PotionIds), (CuisineRep, CuisineIds) };
+
+    private static int[] Concat(int[] a, int[] b)
+    {
+        var r = new int[a.Length + b.Length];
+        a.CopyTo(r, 0);
+        b.CopyTo(r, a.Length);
+        return r;
+    }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Stellar.Abstractions.Domain.GameData;
 using Stellar.Abstractions.Services;
 
 namespace Stellar.CombatMeter;
@@ -22,6 +23,38 @@ public enum DebuffTrackMode
 public sealed class DebuffSelection
 {
     private readonly HashSet<int> _selected = new();
+
+    // GROUP intent (owner 2026-11-20: Season-4 Potion/Cuisine buffs missing from the party strip). Settings tick buffs
+    // by NAME group ("Cuisine ×136"), but only the member ids that existed at the time were saved — a new season's
+    // Potion/Cuisine (new buff ids) never matched. A ticked group is now ALSO recorded as one representative buff id;
+    // any buff whose game name equals that representative's name counts as ticked, so the group keeps every member
+    // the game adds later. A REPRESENTATIVE id, not the name string: names are the client's language (the JP client
+    // names Cuisine differently), the id is not.
+    private readonly HashSet<int> _groupReps = new();
+
+    /// <summary>Representative buff ids of the name groups ticked as a whole.</summary>
+    public IReadOnlyCollection<int> GroupReps => _groupReps;
+
+    /// <summary>True when <paramref name="name"/> is the game name of a ticked group's representative.</summary>
+    public bool InGroup(string? name, Func<int, BuffInfo?> getBuff)
+    {
+        if (string.IsNullOrEmpty(name) || _groupReps.Count == 0) return false;
+        foreach (var rep in _groupReps)
+            if (string.Equals(getBuff(rep)?.Name, name, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>Ticked by id OR by its name group.</summary>
+    public bool IsTracked(int baseId, string? name, Func<int, BuffInfo?> getBuff)
+        => IsSelected(baseId) || InGroup(name, getBuff);
+
+    /// <summary>Ticks/unticks a whole name group: on records <paramref name="repId"/>; off drops EVERY representative
+    /// whose game name is <paramref name="name"/> (a group may have been recorded through another member).</summary>
+    public void SetGroup(int repId, string name, bool on, Func<int, BuffInfo?> getBuff)
+    {
+        if (on) { _groupReps.Add(repId); return; }
+        _groupReps.RemoveWhere(rep => rep == repId || string.Equals(getBuff(rep)?.Name, name, StringComparison.Ordinal));
+    }
 
     /// <summary>How <see cref="_selected"/> is interpreted. A bare model defaults to
     /// <see cref="DebuffTrackMode.ShowAllExceptSelected"/>; <see cref="Load"/> supplies the product default
@@ -57,10 +90,11 @@ public sealed class DebuffSelection
     ///    <see cref="DebuffTrackMode.ShowAllExceptSelected"/> shows every eligible id except checked ones
     ///    (so an empty selection under the default mode shows everything eligible).
     /// </summary>
-    public bool ShouldShow(int baseId, bool hasName)
+    public bool ShouldShow(int baseId, bool hasName, string? name = null, Func<int, BuffInfo?>? getBuff = null)
     {
         if (!ShowHidden && !hasName) return false;
-        return Mode == DebuffTrackMode.ShowOnlySelected ? IsSelected(baseId) : !IsSelected(baseId);
+        bool sel = IsSelected(baseId) || (getBuff != null && InGroup(name, getBuff));
+        return Mode == DebuffTrackMode.ShowOnlySelected ? sel : !sel;
     }
 
     /// <summary>Populates a new <see cref="DebuffSelection"/> from a persisted config section under a per-tab key
@@ -68,11 +102,24 @@ public sealed class DebuffSelection
     /// when a key is absent. The Debuffs and Buffs tabs each own an independent selection (owner 2026-09-24):
     /// their own mode + checked set + show-hidden, so "show only checked" on one tab does not affect the other.</summary>
     public static DebuffSelection Load(
-        IConfigSection cfg, string prefix, int[] defaultChecked, DebuffTrackMode defaultMode, bool defaultShowHidden)
+        IConfigSection cfg, string prefix, int[] defaultChecked, DebuffTrackMode defaultMode, bool defaultShowHidden,
+        int[]? defaultGroupReps = null, (int Rep, int[] Members)[]? knownGroups = null)
     {
         var sel = new DebuffSelection();
-        foreach (var id in cfg.Get($"{prefix}.track", defaultChecked) ?? defaultChecked)
+        var saved = cfg.Get<int[]?>($"{prefix}.track", null);
+        foreach (var id in saved ?? defaultChecked)
             sel._selected.Add(id);
+        var groups = cfg.Get<int[]?>($"{prefix}.groups", null);
+        if (groups != null)
+            foreach (var rep in groups) sel._groupReps.Add(rep);
+        else if (saved == null)
+            foreach (var rep in defaultGroupReps ?? Array.Empty<int>()) sel._groupReps.Add(rep);   // new install: the defaults' groups
+        else
+            // A config saved before group intent existed: a group whose EVERY known member is ticked was ticked as a
+            // whole (Settings only toggles whole groups), so it is migrated to a ticked group. Partial groups stay as
+            // they are. `knownGroups` = the exact memberships those saves were made against (DefaultTrackedEffects).
+            foreach (var (rep, members) in knownGroups ?? Array.Empty<(int, int[])>())
+                if (members.Length > 0 && Array.TrueForAll(members, sel._selected.Contains)) sel._groupReps.Add(rep);
         sel.Mode = (DebuffTrackMode)cfg.Get($"{prefix}.mode", (int)defaultMode);
         sel.ShowHidden = cfg.Get($"{prefix}.showHidden", defaultShowHidden);
         return sel;
@@ -83,6 +130,9 @@ public sealed class DebuffSelection
     public void Save(IConfigSection cfg, string prefix)
     {
         cfg.Set($"{prefix}.track", ToArray());
+        var reps = new int[_groupReps.Count];
+        _groupReps.CopyTo(reps);
+        cfg.Set($"{prefix}.groups", reps);
         cfg.Set($"{prefix}.mode", (int)Mode);
         cfg.Set($"{prefix}.showHidden", ShowHidden);
         cfg.Save();

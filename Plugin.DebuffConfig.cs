@@ -84,7 +84,7 @@ public sealed partial class Plugin
         _dcOffset = 0;
         _dcScrollReset = true;
         if (_effCatReady)
-            FilterSeenEffects(_effectCatalog, text, ActiveSel.ShowHidden, wantBuff: _dcTab == 1, ActiveSel.IsSelected,
+            FilterSeenEffects(_effectCatalog, text, ActiveSel.ShowHidden, wantBuff: _dcTab == 1, _dcIsTrackedFn ??= DcIsTracked,
                               out _dcGroups, out _dcFiltCount, out _dcTotal);
         else { _dcGroups = Array.Empty<EffectGroup>(); _dcFiltCount = 0; _dcTotal = 0; }   // still loading
         _dcSelVer++;
@@ -176,11 +176,22 @@ public sealed partial class Plugin
 
     // Toggles the WHOLE name group in pool slot `idx` (a group is "checked" only when every member id is selected, so a
     // partial group reads off and one click selects all of it); selection stays per-id.
+    // Ticked state for the Settings list: by id or by name group (DebuffSelection.IsTracked). Name from the catalog row
+    // (the same label the list groups by); cached delegate — the filter runs per keystroke.
+    private Func<int, bool>? _dcIsTrackedFn;
+    private bool DcIsTracked(int id)
+        => ActiveSel.IsTracked(id, _effectCatalog.TryGetValue(id, out var e) && !e.hidden ? e.name : null,
+                               _getBuffFn ??= _services.GameData.Combat.GetBuff);
+
     private void SetDcTracked(int idx, bool on)
     {
         int i = _dcOffset + idx;
         if (i >= _dcFiltCount) return;
         foreach (var id in _dcGroups[i].Ids) ActiveSel.SetSelected(id, on);
+        // A NAMED group is also ticked as a whole, so members the game adds later (a new season's Potion/Cuisine)
+        // follow it; a game-hidden single row stays a plain per-id tick.
+        if (!_dcGroups[i].Hidden)
+            ActiveSel.SetGroup(_dcGroups[i].RepId, _dcGroups[i].Name, on, _getBuffFn ??= _services.GameData.Combat.GetBuff);
         ActiveSel.Save(_prefs, ActiveSelPrefix);
         _dcSelVer++;
     }
